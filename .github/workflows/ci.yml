@@ -37,6 +37,7 @@ jobs:
         with:
           working-directory: backend
           version: v2.6
+          install-mode: goinstall
       - name: vet
         run: go vet ./...
       - name: build
