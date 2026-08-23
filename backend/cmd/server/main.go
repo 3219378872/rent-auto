@@ -122,6 +122,16 @@ func run() error {
 		return nil
 	}
 
+	channels.AuditFn = func(ctx context.Context, e domain.AuditEntry) {
+		_ = st.InsertAudit(ctx, e)
+	}
+	ecoDeliveryFn := func(ctx context.Context) error {
+		if err := registry.EcoOneClickResolve(ctx); err != nil && err != platform.ErrUnsupported {
+			log.Warn("eco delivery", "err", err)
+		}
+		return nil
+	}
+
 	reconcileFn := func(ctx context.Context) error {
 		ads := map[domain.Channel]platform.Adapter{}
 		for _, a := range registry.All() {
@@ -137,7 +147,7 @@ func run() error {
 		return nil
 	}
 
-	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, uuDeliveryFn, steamOffersFn, log) {
+	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, uuDeliveryFn, steamOffersFn, ecoDeliveryFn, log) {
 		if err := sch.Register(job); err != nil {
 			return err
 		}

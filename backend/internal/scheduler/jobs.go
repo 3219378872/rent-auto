@@ -13,7 +13,7 @@ import (
 )
 
 // Jobs builds the standard job set bound to live dependencies.
-func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile, uuDelivery, steamOffers func(ctx context.Context) error, log *slog.Logger) []Job {
+func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile, uuDelivery, steamOffers, ecoDelivery func(ctx context.Context) error, log *slog.Logger) []Job {
 	return []Job{
 		{Name: "reprice", Kind: KindInterval, Every: 31 * time.Minute, Jitter: 90 * time.Second,
 			Fn: func(ctx context.Context) error { return d.RunReprice(ctx, adapters()) }},
@@ -77,6 +77,8 @@ func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.
 			Fn: uuDelivery},
 		{Name: "steam_offers", Kind: KindInterval, Every: 5 * time.Minute, Jitter: 45 * time.Second,
 			Fn: steamOffers},
+		{Name: "eco_delivery", Kind: KindInterval, Every: 5 * time.Minute, Jitter: 45 * time.Second,
+			Fn: ecoDelivery},
 		{Name: "zero_cd", Kind: KindDaily, At: "23:30",
 			Fn: func(ctx context.Context) error {
 				if zeroCD == nil {

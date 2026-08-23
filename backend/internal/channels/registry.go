@@ -279,3 +279,47 @@ func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent, gifts int, 
 	}
 	return c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
 }
+
+// AuditFn receives write-operation audit entries (wired to store by main).
+var AuditFn func(ctx context.Context, e domain.AuditEntry)
+
+// EcoOneClickResolve runs the platform batch send/accept for order fulfilment.
+func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
+	r.mu.RLock()
+	c := r.ecoClient
+	r.mu.RUnlock()
+	if c == nil {
+		return platform.ErrUnsupported
+	}
+	out, err := c.OneClickResolveOffer(ctx)
+	if err != nil {
+		return err
+	}
+	for _, so := range out.SendOffers {
+		if so.Error != "" || so.NeedsMobileConfirmation || so.NeedsEmailConfirmation {
+			logWarnDelivery(r.log, "eco send offer failed", so.OrderNum, so.Error)
+			if AuditFn != nil {
+				AuditFn(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+					Action: "order.send_offer_failed", Channel: "eco", Target: so.OrderNum,
+					Detail: map[string]any{"error": so.Error}})
+			}
+		}
+	}
+	for _, ao := range out.AcceptOffers {
+		if ao.ErrorCode != 1 || ao.Error != "" { // ErrorCode OK=1
+			logWarnDelivery(r.log, "eco accept offer failed", ao.OrderNum, ao.Error)
+			if AuditFn != nil {
+				AuditFn(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+					Action: "order.accept_offer_failed", Channel: "eco", Target: ao.OrderNum,
+					Detail: map[string]any{"error": ao.Error, "code": ao.ErrorCode}})
+			}
+		}
+	}
+	return nil
+}
+
+func logWarnDelivery(log interface{ Warn(string, ...any) }, msg, orderNum, errMsg string) {
+	if log != nil {
+		log.Warn(msg, "order", orderNum, "err", errMsg)
+	}
+}
