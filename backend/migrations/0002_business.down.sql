@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS daily_stats;
+DROP TABLE IF EXISTS fund_flows;
+DROP TABLE IF EXISTS price_actions;
+DROP TABLE IF EXISTS strategies;
+DROP TABLE IF EXISTS lease_orders;
+DROP TABLE IF EXISTS market_snapshots;
+DROP TABLE IF EXISTS listings;
+DROP TABLE IF EXISTS inventory_items;
+DROP TABLE IF EXISTS templates CASCADE;

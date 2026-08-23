@@ -36,6 +36,10 @@ func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *s
 func (s *Server) Routes() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /api/v1/auth/me", s.handleMe)
+	protected.HandleFunc("GET /api/v1/inventory", s.handleInventory)
+	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
+	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
+	protected.HandleFunc("GET /api/v1/templates", s.handleTemplates)
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/v1/health", s.handleHealth)

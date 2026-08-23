@@ -71,7 +71,9 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ### 门控定义（make gate）
 1. 后端：`gofmt -l` 无输出、`golangci-lint run` 零告警、`go vet` 通过、`go build ./...`、
-   `go test ./... -race` 全绿、核心包覆盖率 ≥70%
+   `go test ./... -race` 全绿（本地有 Postgres 时自动含 `-tags=integration` 集成测试）、
+   **纯逻辑域**包覆盖率 ≥70%（pricing / platform/* / recon / analytics / auth / secrets / config）；
+   编排层（store / api / bench / scheduler）由集成测试套件验证，不设行配额
 2. 前端：`tsc --noEmit`、`eslint`、`vitest run`、`vite build`
 3. 迁移可升降级（有迁移变更时）：`make migrate-check`
 4. 提交信息符合 Conventional Commits；不包含任何密钥/token/私钥
