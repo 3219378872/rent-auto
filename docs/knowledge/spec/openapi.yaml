@@ -1,0 +1,82 @@
+openapi: "3.0.3"
+info:
+  title: rent-auto API
+  version: "0.2.0"
+  description: |
+    UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
+    约定：
+    - 前缀 /api/v1；除 health/login 外全部需要 Bearer JWT
+    - 分页：query page(1-based) & page_size(<=100)；响应 {items,total}
+    - 错误体：{code,message}；金额两位小数
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      summary: 健康检查（公开）
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+  /auth/login:
+    post:
+      summary: 登录获取 JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Err401" }
+  /auth/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: 当前会话信息
+      responses:
+        "200":
+          description: 当前用户
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Err401:
+      description: 未认证
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Err400:
+      description: 参数错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }

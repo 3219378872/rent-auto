@@ -33,7 +33,15 @@ build:
 	cd $(BACKEND) && go build ./...
 
 test:
-	cd $(BACKEND) && go test ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/... . ./internal/... && go tool cover -func=coverage.out | tail -1
+	cd $(BACKEND) && if [ -n "$$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/15432) 2>/dev/null; then \
+		echo ">> unit + integration tests"; \
+		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:15432/rentauto?sslmode=disable} \
+			go test -tags=integration ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
+	else \
+		echo ">> unit tests only (no database detected)"; \
+		go test ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
+	fi
+	cd $(BACKEND) && go tool cover -func=coverage.out | tail -1
 
 test-integration:
 	cd $(BACKEND) && go test -tags=integration ./... -count=1
