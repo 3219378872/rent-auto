@@ -12,7 +12,7 @@ import (
 )
 
 // Jobs builds the standard job set bound to live dependencies.
-func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, log *slog.Logger) []Job {
+func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile func(ctx context.Context) error, log *slog.Logger) []Job {
 	return []Job{
 		{Name: "reprice", Kind: KindInterval, Every: 31 * time.Minute, Jitter: 90 * time.Second,
 			Fn: func(ctx context.Context) error { return d.RunReprice(ctx, adapters()) }},
@@ -61,6 +61,13 @@ func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.
 				n, err := bench.RecomputeAnchors(ctx, d.Store)
 				log.Info("anchors recomputed", "rows", n, "err", err)
 				return err
+			}},
+		{Name: "reconcile", Kind: KindInterval, Every: 10 * time.Minute, Jitter: 60 * time.Second,
+			Fn: func(ctx context.Context) error {
+				if reconcile == nil {
+					return nil
+				}
+				return reconcile(ctx)
 			}},
 		{Name: "zero_cd", Kind: KindDaily, At: "23:30",
 			Fn: func(ctx context.Context) error {

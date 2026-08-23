@@ -19,6 +19,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/ratelimit"
+	"github.com/3219378872/rent-auto/backend/internal/recon"
 	"github.com/3219378872/rent-auto/backend/internal/scheduler"
 	"github.com/3219378872/rent-auto/backend/internal/secrets"
 	"github.com/3219378872/rent-auto/backend/internal/store"
@@ -95,7 +96,27 @@ func run() error {
 
 	deps := scheduler.Deps{Store: st, Log: log, DryRun: cfg.DryRunDefault}
 	sch := scheduler.New(log)
-	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, log) {
+
+	// Reconcile pipeline: plan desired-vs-actual shelf state, then execute.
+	planner := &recon.Planner{Store: st, Log: log, Health: registry.Health}
+	executor := &recon.Executor{DryRun: cfg.DryRunDefault, Log: log,
+		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) }}
+	reconcileFn := func(ctx context.Context) error {
+		ads := map[domain.Channel]platform.Adapter{}
+		for _, a := range registry.All() {
+			ads[a.Channel()] = a
+		}
+		executor.Adapters = ads
+		plan, err := planner.Plan(ctx)
+		if err != nil {
+			return err
+		}
+		applied, failed := executor.Execute(ctx, plan)
+		log.Info("reconcile done", "plan", len(plan), "applied", applied, "failed", failed)
+		return nil
+	}
+
+	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, log) {
 		if err := sch.Register(job); err != nil {
 			return err
 		}
