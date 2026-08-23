@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: rentauto
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rentauto}
       POSTGRES_DB: rentauto
+    ports:
+      - "${PG_HOST_PORT:-15432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
