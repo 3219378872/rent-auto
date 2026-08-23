@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"time"
 )
 
@@ -104,4 +105,15 @@ func (j *JSONB) Scan(src any) error {
 		return fmt.Errorf("jsonb scan: unsupported type %T", src)
 	}
 	return nil
+}
+
+const sessionAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// RandomSessionID generates the UU SMS-login session identifier.
+func RandomSessionID() string {
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = sessionAlphabet[rand.Intn(len(sessionAlphabet))]
+	}
+	return string(b)
 }

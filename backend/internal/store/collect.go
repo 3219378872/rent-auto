@@ -148,11 +148,16 @@ func (s *Store) InsertSnapshots(ctx context.Context, snaps []Snapshot) error {
 		return nil
 	}
 	batch := &pgx.Batch{}
+	now := time.Now().UTC()
 	for _, sn := range snaps {
+		ts := sn.CapturedAt
+		if ts.IsZero() {
+			ts = now
+		}
 		batch.Queue(
 			`INSERT INTO market_snapshots(hash_name, source, kind, rank, price, captured_at)
 			 VALUES($1,$2,$3,$4,$5,$6)`,
-			sn.HashName, sn.Source, sn.Kind, sn.Rank, sn.Price, sn.CapturedAt)
+			sn.HashName, sn.Source, sn.Kind, sn.Rank, sn.Price, ts)
 	}
 	if err := s.Pool.SendBatch(ctx, batch).Close(); err != nil {
 		return fmt.Errorf("insert snapshots: %w", err)

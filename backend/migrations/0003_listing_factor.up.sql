@@ -1,0 +1,1 @@
+ALTER TABLE listings ADD COLUMN factor numeric NOT NULL DEFAULT 1.0;

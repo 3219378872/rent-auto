@@ -42,14 +42,17 @@ func LoadMigrations() ([]Migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", base, err)
 		}
-		if _, ok := ups[ver]; !ok && direction == "up" {
-			versions = append(versions, ver)
-		}
 		if direction == "up" {
+			if _, dup := ups[ver]; !dup {
+				versions = append(versions, ver)
+			}
 			ups[ver] = string(b)
 		} else {
 			downs[ver] = string(b)
 		}
+	}
+	if err := validatePairMap(ups, downs); err != nil {
+		return nil, err
 	}
 	sort.Strings(versions)
 	out := make([]Migration, 0, len(versions))
@@ -57,4 +60,13 @@ func LoadMigrations() ([]Migration, error) {
 		out = append(out, Migration{Version: v, UpSQL: ups[v], DownSQL: downs[v]})
 	}
 	return out, nil
+}
+
+func validatePairMap(ups, downs map[string]string) error {
+	for v := range downs {
+		if _, ok := ups[v]; !ok {
+			return fmt.Errorf("migration %s has a down file but no up file (corrupted pair)", v)
+		}
+	}
+	return nil
 }

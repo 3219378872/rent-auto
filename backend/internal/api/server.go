@@ -22,8 +22,17 @@ type Server struct {
 	AdminUser string
 	Version   string
 	Log       *slog.Logger
+	Jobs      JobController   // nil-safe: endpoints degrade when nil
+	Channels  ChannelsService // nil-safe
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
 	PasswordHash func(ctx context.Context) (string, error)
+}
+
+type ChannelsService interface {
+	Health(ctx context.Context) map[string]string
+	SendLoginSmsCode(ctx context.Context, phone, sessionID string) error
+	VerifyUUSms(ctx context.Context, phone, code, sessionID string) error
+	SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error
 }
 
 func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *slog.Logger) *Server {
@@ -40,6 +49,12 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
 	protected.HandleFunc("GET /api/v1/templates", s.handleTemplates)
+	protected.HandleFunc("GET /api/v1/jobs", s.handleJobsList)
+	protected.HandleFunc("POST /api/v1/jobs/{name}/run", s.handleJobTrigger)
+	protected.HandleFunc("GET /api/v1/channels", s.handleChannelsStatus)
+	protected.HandleFunc("POST /api/v1/channels/uu/sms", s.handleUUSms)
+	protected.HandleFunc("POST /api/v1/channels/uu/sms-verify", s.handleUUSmsVerify)
+	protected.HandleFunc("PUT /api/v1/channels/eco", s.handleECOCreds)
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/v1/health", s.handleHealth)
