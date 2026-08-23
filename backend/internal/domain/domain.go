@@ -20,6 +20,56 @@ func (c Channel) Valid() bool {
 	return c == ChannelUU || c == ChannelECO
 }
 
+// ---- unified business records (channel-neutral) ----
+
+// InventoryItem is one Steam asset owned by us on some channel.
+type InventoryItem struct {
+	Channel     Channel `json:"channel"`
+	AssetID     string  `json:"asset_id"`
+	HashName    string  `json:"hash_name"`
+	DisplayName string  `json:"display_name"`
+	TemplateID  int64   `json:"template_id,omitempty"` // UU template id
+	MarkPrice   float64 `json:"mark_price"`
+	Tradable    bool    `json:"tradable"`
+	Status      string  `json:"status"` // in_stock|listed|leased|locked|sold
+	Abrade      float64 `json:"abrade,omitempty"`
+}
+
+// ShelfListing is one item currently on our lease shelf.
+type ShelfListing struct {
+	Channel       Channel   `json:"channel"`
+	GoodsRef      string    `json:"goods_ref"` // commodityId(UU) / GoodsNum(ECO)
+	AssetID       string    `json:"asset_id"`
+	HashName      string    `json:"hash_name"`
+	DisplayName   string    `json:"display_name"`
+	TemplateID    int64     `json:"template_id,omitempty"`
+	RentPrice     float64   `json:"rent_price"`
+	LongRentPrice float64   `json:"long_rent_price,omitempty"`
+	MaxDays       int       `json:"max_days"`
+	Deposit       float64   `json:"deposit"`
+	MarkPrice     float64   `json:"mark_price"`
+	Leased        bool      `json:"leased"`
+	ListedAt      time.Time `json:"listed_at,omitempty"`
+}
+
+// LeaseOrder is a rental order in unified state-machine terms (data-model.md).
+type LeaseOrder struct {
+	Channel   Channel   `json:"channel"`
+	OrderRef  string    `json:"order_ref"`
+	AssetID   string    `json:"asset_id,omitempty"`
+	HashName  string    `json:"hash_name"`
+	OrderType string    `json:"order_type"` // short|long|buyout
+	Status    string    `json:"status"`
+	RentDays  int       `json:"rent_days"`
+	RentPrice float64   `json:"rent_price"`
+	Amount    float64   `json:"order_amount"`
+	Deposits  float64   `json:"deposits"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+	DueAt     time.Time `json:"due_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	Raw       JSONB     `json:"-"`
+}
+
 // Money amounts are float64 in business logic and rounded to 2 decimals via Round2
 // before persistence or display (see pricing.Round2).
 

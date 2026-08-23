@@ -17,9 +17,11 @@
 
 ## 平台客户端契约测试（关键机制）
 
-1. **fixture 交叉验证**：`scripts/gen_uu_fixtures.py` 调用上游 Steamauto 的加密实现，
-   对固定输入生成密文向量 → 存 `platform/uu/testdata/` → Go 解码回归。
-   保证 Go 加密与 Python 版字节级兼容（RSA PKCS1v15 确定性，AES-ECB 确定性）。
+1. **fixture 交叉验证**：AES-128-ECB/PKCS7 为确定性算法——以 `openssl enc -aes-128-ecb`
+   生成的密文向量作为第三方基准（testdata/p*.b64），Go 实现 byte-level 对齐；
+   RSA-PKCS1v15 加密含随机填充，采用"Go 加密→openssl 私钥解密"与
+   "openssl 加密→Go 解密"双向互操作验证替代固定向量。
+   （上游 Python 参考件的加密实现与本方案同源：PKCS7+ECB+PKCS1v15 均为标准算法规格）
 2. **mock 重放**：httptest server 按逆向笔记构造响应体；每个端点至少：成功/业务错误码/风控码 三例。
 3. **签名往返**：ECO 用仓库内专用测试 RSA 密钥对自签自验 + 固定向量比对。
 

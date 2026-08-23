@@ -37,7 +37,20 @@
 
 1. LeaseDeposit 在上架/改价请求中是 **字符串** 类型
 2. `lease_max_days ≤ 8` 时不得传 LongLeaseUnitPrice
-3. 行情接口价格区间参数 min/max 影响返回集；Steamauto 用 [模板价, 模板价×2]
-4. 改价前必须调 pre-change init 接口，否则部分商品改价失败
+3. 行情接口价格区间参数 min/max 影响返回集；Steamauto 用 [模板价, 模板价×2]（过滤条件为押金落在区间）
+4. 改价前必须调 pre-change init 接口（change/price/v3/init/info），否则部分商品改价失败
 5. 风控：连续高频调用触发 84104；全局限频默认 3rps + 任务间 sleep 抖动
 6. compensation_type：0=非会员 7=V1（默认7）
+
+## Go 实现补充约定（M2a 落地结论）
+
+7. 信封字段大小写混乱：库存接口用小写 `code/data`，行情用大写 `Code/Data` ——
+   解码层做大小写无关归一（`decodeEnvelope`），业务代码只面对统一信封
+8. 租赁货架空列表返回 `code=9004001`（非错误），zeroCD 货架同理
+9. 上架结果数组与请求 ItemInfos **按位置对应**（无回传 AssetId 匹配保证）——
+   适配器按 index 映射结果
+10. 登录失效统一码 84101；HTTP 405 表示 uk 校验失败（上游 sleep 60s 重试，
+    Go 版翻译为 ErrUKExpired 由调度器决定退避策略）
+11. deviceW2 换取 uk 的流程已实现（GetUUUK）；当前版本每次请求随机 uk 即可通过，
+    uk_verify 留作风控升级后的开关
+
