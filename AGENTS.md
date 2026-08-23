@@ -98,5 +98,12 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
-- 里程碑进度见 [docs/knowledge/evidence/README.md](docs/knowledge/evidence/README.md)
-- 已知限制与待办见各 spec 文档末尾「Open Questions」小节
+**M0–M8 全部交付（2026-08-23）**，纯逻辑域覆盖率达标：
+pricing 90.5% / analytics 83.0% / recon 78.9% / eco 77.8% / secrets 79.2% / config 76.2% / uu 73.7% / auth 90.9%
+
+- 系统可运行：`make dev-up && make server && make web`；首次启动日志打印一次性管理员密码
+- 待真机校订项（见各 api-notes「待办」）：UU 订单状态码映射、QuerySteamStock 字段、
+  ECO 订单时间窗上限、ECO 改价边界
+- 后续迭代入口：模板级策略 UI、ECO 回调/WebSocket、出售域适配器、因子事件自动化
+- 里程碑进度与证据索引见 [docs/knowledge/evidence/README.md](docs/knowledge/evidence/README.md)
+- 事故复盘归档于 [evidence/incidents/](docs/knowledge/evidence/incidents/)
