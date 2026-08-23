@@ -8,11 +8,15 @@
 ## 首次启动
 
 ```bash
-make dev-up                    # 起 docker-compose: postgres:16 (端口15432)
+make dev-up                    # 起 docker-compose: postgres:16（宿主机端口 PG_HOST_PORT，默认 15432）
 cp backend/.env.example backend/.env   # 填 JWT_SECRET/APP_MASTER_KEY(32B hex)
-make server                    # 后端 :8080（启动自动跑迁移）
+DATABASE_URL=postgres://rentauto:rentauto@localhost:$PG_HOST_PORT/rentauto?sslmode=disable make server
 make web                       # 前端 :5173（代理 /api → 8080）
 ```
+
+宿主机 15432 被占用时：在 `deploy/.env` 设 `PG_HOST_PORT=25432` 后重新 `make dev-up`，
+并让门控/集成测试使用同一端口：`make gate PG_HOST_PORT=25432`
+（或 `export TEST_DATABASE_URL=postgres://rentauto:rentauto@localhost:25432/rentauto?sslmode=disable`）。
 
 ## 环境变量（backend）
 

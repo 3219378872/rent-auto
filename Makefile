@@ -6,6 +6,8 @@
 BACKEND := backend
 FRONTEND := frontend
 
+PG_HOST_PORT ?= 15432
+
 HAS_BACKEND := $(shell test -f $(BACKEND)/go.mod && echo yes || echo no)
 HAS_FRONTEND := $(shell test -f $(FRONTEND)/package.json && echo yes || echo no)
 
@@ -33,9 +35,9 @@ build:
 	cd $(BACKEND) && go build ./...
 
 test:
-	cd $(BACKEND) && if [ -n "$$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/15432) 2>/dev/null; then \
+	cd $(BACKEND) && if [ -n "$$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/$(PG_HOST_PORT)) 2>/dev/null; then \
 		echo ">> unit + integration tests"; \
-		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:15432/rentauto?sslmode=disable} \
+		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:$(PG_HOST_PORT)/rentauto?sslmode=disable} \
 			go test -tags=integration -p 1 ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
 	else \
 		echo ">> unit tests only (no database detected)"; \
