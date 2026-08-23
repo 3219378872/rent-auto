@@ -1,0 +1,26 @@
+# --- 本地参考项目（上游 Python 实现，仅作行为规格参考，不纳入版本管理） ---
+/Steamauto/
+
+# --- Go ---
+backend/bin/
+backend/coverage.out
+*.test
+
+# --- 前端 ---
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# --- 运行时与密钥 ---
+.env
+.env.*
+!.env.example
+*.pem
+!**/testdata/*.pem
+rsakey.txt
+config/*.json5
+
+# --- 工具产物 ---
+/tmp/
+*.log
+.DS_Store
