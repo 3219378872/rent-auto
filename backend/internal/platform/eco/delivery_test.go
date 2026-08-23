@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOneClickResolveOffer(t *testing.T) {
@@ -73,3 +74,42 @@ func TestSellerSendOfferPayload(t *testing.T) {
 }
 
 var _ = strings.Contains
+
+func TestSellerOrderListAndDetail(t *testing.T) {
+	var listBody map[string]any
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		switch r.URL.Path {
+		case "/Api/open/order/SellerOrderList":
+			listBody = body
+			if body["DetailsState"] != float64(8) || body["PageSize"] != float64(100) {
+				t.Errorf("list payload: %v", body)
+			}
+			return okEnv(`{"TotalRecord":1,"PageResult":[{"OrderNum":"ZH1","OrderStateCode":1,"GoodsName":"AK","OrderAmount":99.5}]}`)
+		case "/Api/open/order/SellerOrderDetail":
+			if body["OrderNum"] == "ZH1" {
+				return okEnv(`{"TradeOfferId":"3000000009","GoodsName":"AK","TotalMoney":99.5,"BuyerNickname":"买家甲"}`)
+			}
+			return okEnv(`{}`)
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+			return okEnv(`null`)
+		}
+	})
+	state := 8
+	orders, err := c.SellerOrderList(context.Background(),
+		time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC), &state, "")
+	if err != nil || len(orders) != 1 || orders[0].OrderStateCode != 1 {
+		t.Fatalf("orders: %v %+v", err, orders)
+	}
+	if listBody == nil {
+		t.Fatal("list body not captured")
+	}
+	d, err := c.Detail(context.Background(), "ZH1")
+	if err != nil || d.TradeOfferID != "3000000009" || d.BuyerNickname != "买家甲" {
+		t.Fatalf("detail: %v %+v", err, d)
+	}
+	if _, err := c.Detail(context.Background(), "EMPTY"); err != nil {
+		t.Fatalf("empty-offer detail must not error: %v", err)
+	}
+}

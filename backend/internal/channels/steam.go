@@ -204,3 +204,16 @@ func (s *SteamSession) AcceptZeroCostOffers(ctx context.Context, log interface{ 
 	}
 	return accepted, skipped, nil
 }
+
+// AcceptTradeOffer accepts one offer with full mobile confirmation.
+func (s *SteamSession) AcceptTradeOffer(ctx context.Context, offerID string) (bool, error) {
+	sess, err := s.EnsureSession(ctx)
+	if err != nil {
+		return false, err
+	}
+	partner, err := sess.ResolvePartnerID(ctx, offerID)
+	if err != nil {
+		return false, err
+	}
+	return sess.AcceptOfferWithPartner(ctx, offerID, partner)
+}

@@ -323,3 +323,18 @@ func logWarnDelivery(log interface{ Warn(string, ...any) }, msg, orderNum, errMs
 		log.Warn(msg, "order", orderNum, "err", errMsg)
 	}
 }
+
+// EcoOrderClient exposes the eco client for the delivery loop.
+func (r *Registry) EcoOrderClient() interface {
+	SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
+	SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error)
+	Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error)
+} {
+	r.mu.RLock()
+	c := r.ecoClient
+	r.mu.RUnlock()
+	if c == nil {
+		return nil
+	}
+	return c
+}

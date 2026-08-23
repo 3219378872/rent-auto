@@ -125,9 +125,19 @@ func run() error {
 	channels.AuditFn = func(ctx context.Context, e domain.AuditEntry) {
 		_ = st.InsertAudit(ctx, e)
 	}
+	ecoDeps := &scheduler.EcoDeliveryDeps{
+		Eco:   registry.EcoOrderClient(),
+		Steam: steamSess,
+		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) },
+		Log:   log,
+	}
 	ecoDeliveryFn := func(ctx context.Context) error {
-		if err := registry.EcoOneClickResolve(ctx); err != nil && err != platform.ErrUnsupported {
+		if err := ecoDeps.RunECODelivery(ctx); err != nil {
 			log.Warn("eco delivery", "err", err)
+		}
+		// 平台批量兜底（归还方向等），失败不阻塞主链路
+		if err := registry.EcoOneClickResolve(ctx); err != nil && err != platform.ErrUnsupported {
+			log.Warn("eco oneclick resolve", "err", err)
 		}
 		return nil
 	}
