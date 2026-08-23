@@ -5,6 +5,10 @@
 | 凭证 | 存储位置 | 加密 | 展示规则 |
 |---|---|---|---|
 | UU token | app_settings.value_enc | AES-256-GCM(APP_MASTER_KEY) | 仅尾8位 |
+| Steam 账号+Guard密钥 / tokens | app_settings.value_enc | AES-256-GCM | 不可见 |
+
+> 存量迁移：0005 之前 UU token 曾明文存于 value_plain；Registry.Refresh 启动时
+> 自动惰性迁移为 value_enc 并清除明文（UpsertSettingEnc 重写时强制置空 value_plain）。
 | ECO partnerId | app_settings.value_plain | —（非密） | 明文 |
 | ECO RSA 私钥(PKCS8) | app_settings.value_enc | AES-256-GCM | 仅显示指纹(SHA256前12位) |
 | 面板管理员密码 | app_settings（bcrypt cost≥10） | bcrypt | 不可见 |
@@ -16,19 +20,23 @@
 
 ## 传输与部署
 
-- 面板仅监听内网/本机或置于反代(TLS)之后；后端不做 TLS 终结（部署层负责）
+- 生产部署必须 TLS：deploy/Caddyfile 设置 `SITE_ADDRESS=<域名>` 后由 Caddy 自动
+  ACME 签证书并 80→443 跳转，附 CSP/X-Frame-Options/nosniff/HSTS 安全响应头；
+  未设置 SITE_ADDRESS 退化为 :80 明文——仅限内网调试（runbook 有告警说明）
 - docker-compose 中数据库不暴露公网端口；连接串经环境变量注入
+- 登录防爆破：IP+用户名固定窗口锁定（5 次失败/10 分钟 → 429），成功登录即重置
 
 ## 审计
 
-- 写操作白名单强制过 AuditMiddleware：publish/reprice/delist/zerocd/
-  strategy.update/channel.credential.update/job.trigger/login.*
+- 写操作白名单强制过审计：publish/reprice/delist/zerocd/offer_sent/order.delivered/
+  order.accepted/factor_reset/strategy.update/channel.credential.update/job.trigger/login.*
 - price_actions 表本身即定价域的细粒度审计（含决策 jsonb）
+- handler 500 响应一律脱敏为通用文案，内部错误细节只进服务端日志
 
 ## 供应链
 
-- Go 依赖锁定 go.sum；CI 中 `govulncheck ./...`（软门控，报告不阻断）
-- 前端 pnpm lockfile 锁定；仅使用 npm registry 官方源
+- Go 依赖锁定 go.sum；CI 中 `govulncheck ./...`（软门控，continue-on-error，报告不阻断）
+- 前端 pnpm lockfile 锁定 + package.json `packageManager` 字段钉死 pnpm 版本；仅使用 npm registry 官方源
 
 ## 测试数据红线
 

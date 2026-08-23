@@ -95,7 +95,8 @@ func run() error {
 	}
 	log.Info("global strategy ready", "id", strategyID)
 
-	deps := scheduler.Deps{Store: st, Log: log, DryRun: cfg.DryRunDefault}
+	deps := scheduler.Deps{Store: st, Log: log, DryRun: cfg.DryRunDefault,
+		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) }}
 	sch := scheduler.New(log)
 
 	// Reconcile pipeline: plan desired-vs-actual shelf state, then execute.

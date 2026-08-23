@@ -19,6 +19,8 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 	return []Job{
 		{Name: "reprice", Kind: KindInterval, Every: 31 * time.Minute, Jitter: 90 * time.Second,
 			Fn: func(ctx context.Context) error { return d.RunReprice(ctx, adapters()) }},
+		{Name: "factor_events", Kind: KindInterval, Every: 17 * time.Minute, Jitter: 60 * time.Second,
+			Fn: func(ctx context.Context) error { return d.RunFactorEvents(ctx) }},
 		{Name: "inventory_sync", Kind: KindInterval, Every: 30 * time.Minute, Jitter: 60 * time.Second,
 			Fn: func(ctx context.Context) error {
 				var errs []error

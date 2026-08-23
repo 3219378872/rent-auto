@@ -99,12 +99,18 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
-**M0–M8 全部交付（2026-08-23）**，纯逻辑域覆盖率达标：
-pricing 90.5% / analytics 83.0% / recon 78.9% / eco 77.8% / secrets 79.2% / config 76.2% / uu 73.7% / auth 90.9%
+**M0–M11 全部交付；综合审查修复轮完成（2026-08-23）**。纯逻辑域逐包覆盖率
+（make gate 数值卡点 ≥70%）：pricing 91% / platform 100% / uu 77% / eco 77% /
+steam 75% / recon 75% / analytics 81% / auth 90% / secrets 79% / config 76%
 
 - 系统可运行：`make dev-up && make server && make web`；首次启动日志打印一次性管理员密码
+- 生产部署：deploy/.env 设 `SITE_ADDRESS=<域名>` 启用 Caddy 自动 HTTPS + 安全响应头
+- 反馈控制器已接线（factor_events 任务）：订单/stale 事件折算 listings.factor，
+  f_min 回归 1.00 并审计告警——见 pricing-spec §3「已接线」
 - 待真机校订项（见各 api-notes「待办」）：UU 订单状态码映射、QuerySteamStock 字段、
-  ECO 订单时间窗上限、ECO 改价边界
-- 后续迭代入口：模板级策略 UI、ECO 回调/WebSocket、出售域适配器、因子事件自动化
+  ECO 订单时间窗上限、ECO 改价边界、CSP 下 TCaptcha 域白名单核对
+- 后续迭代入口：模板级策略 UI、ECO 回调/WebSocket、出售域适配器、因子参数面板化
 - 里程碑进度与证据索引见 [docs/knowledge/evidence/README.md](docs/knowledge/evidence/README.md)
+  （含 2026-08-23 综合审查修复轮归档）
 - 事故复盘归档于 [evidence/incidents/](docs/knowledge/evidence/incidents/)
+  （最新：dryrun-bypass——写操作必须在执行入口短路 dry-run）

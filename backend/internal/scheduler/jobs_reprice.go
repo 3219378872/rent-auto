@@ -21,6 +21,8 @@ type Deps struct {
 	Store  *store.Store
 	Log    *slog.Logger
 	DryRun bool // global default; effective = DryRun || !strategy.RealEnabled
+	// Audit receives controller events worth operator attention (factor resets).
+	Audit func(context.Context, domain.AuditEntry)
 
 	mu        sync.Mutex
 	cooldowns map[domain.Channel]time.Time // risk-control backoff per channel

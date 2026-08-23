@@ -23,11 +23,14 @@ created_at/updated_at
 ```
 id PK; channel; asset_id        -- UNIQUE(channel, asset_id)
 hash_name FK→templates
+template_id int64               -- UU 模板 id（行情采集定位，0002）
 market_hash_name                -- 冗余展示
+mark_price numeric              -- 平台标记价（锚点候选，0002）
 status                          -- in_stock|listed|leased|locked|sold
 tradable bool; abrade numeric
 cost_basis numeric              -- 成本价（录入来源手工/平台）
 cost_source                     -- manual|uu_sync|eco_sync|import
+cost_updated_at                 -- 最早成本录入时间=年化观测起点（0004）
 last_synced_at; raw jsonb       -- 平台原始载荷（排障用）
 ```
 
@@ -38,7 +41,9 @@ goods_ref               -- 渠道内商品标识(UU commodityId / ECO GoodsNum)
 desired_state           -- none|active|delisted
 actual_state            -- unknown|none|active|leased|stale
 rent_price, long_rent_price, max_days, deposit numeric
-strategy_id FK; last_action_id FK→price_actions
+factor numeric DEFAULT 1.0        -- 反馈控制器状态（pricing-spec §3，0003+）
+last_factor_event_at timestamptz  -- 因子事件锚点（stale 阶梯计时起点，0005）
+strategy_id FK
 listed_at, last_reprice_at, actual_synced_at
 UNIQUE(channel, goods_ref)
 ```
@@ -50,8 +55,9 @@ asset_id, hash_name FK
 order_type                      -- short|long|buyout
 status                          -- 平台原始状态映射到统一状态机(见§状态映射)
 rent_days int; rent_price; order_amount; deposits numeric
-started_at, due_at, finished_at; raw jsonb
+started_at, due_at, finished_at, updated_at; raw jsonb
 income_recorded bool            -- 终态且已计入收益
+factor_applied bool             -- 是否已折算进 listing 因子（0005，防重复折算）
 ```
 
 **统一状态机**：pending_payment → delivering → leasing → returning → done | bought_out | cancelled | arbitrating | breach
@@ -113,6 +119,7 @@ id bigserial PK; ts; actor(system|user:<name>); channel?; action; target?; detai
 ## 口径定义
 
 - **总资产** = Σ inventory(在库+在架+在租) × value_anchor + Σ 在租订单 deposits(在外押金) + Σ 渠道钱包余额(fund_flows 末态)
-- **总收入** = Σ lease_orders(done|bought_out).order_amount − 已售出库存成本（口径 A：毛租金收入；面板同时给出口径 B：净=收入−成本）
-- **年化收益率** = (Σ净收益 / Σ成本基准) × (365d / 观测天数)；观测起点=最早成本录入日
-- **分类收益率** = 该品类 Σ(订单收入−成本) / Σ成本
+- **总收入** = Σ lease_orders(done|bought_out).order_amount − 已售出库存成本（口径 A：毛租金收入；口径 B：净=收入−已售成本，面板展示口径 B）
+- **年化收益率** = (Σ净收益 / Σ全量成本基准) × (365d / 观测天数)；观测起点=最早成本录入日(cost_updated_at)；无起点时不外推（显示 0）
+- **分类收益率** = 该品类 Σ(订单收入−已售成本) / Σ该品类全量成本基准
+- **日界口径**：daily_stats 一律按 UTC 日切分，读写两端一致

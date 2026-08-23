@@ -129,8 +129,12 @@ func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.Rou
 	base, hasBase := pricing.Baseline(quotes, params.Baseline, *it.V)
 	in := pricing.Input{
 		Channel: ch, HasV: true, V: *it.V,
-		Base: base, HasBase: hasBase, Factor: 1.0,
-		P: params, Now: p.Now,
+		Base: base, HasBase: hasBase,
+		// Cold start (spec §3): publish targets assets with no listing row yet,
+		// so the controller starts neutral at 1.00; reprice reads the stored
+		// listings.factor afterwards.
+		Factor: 1.0,
+		P:      params, Now: p.Now,
 		RentMaxDayMin: rentDayMin(ch), RentMaxDayMax: rentDayMax(ch),
 	}
 	d := pricing.Decide(in)

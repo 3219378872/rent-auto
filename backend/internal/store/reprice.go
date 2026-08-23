@@ -64,8 +64,11 @@ func (s *Store) UpdateListingDecision(ctx context.Context, listingID int64, d st
 	return err
 }
 
+// SetListingFactor persists a controller factor and stamps the stale-anchor
+// so stepped listings wait another full window before stepping again.
 func (s *Store) SetListingFactor(ctx context.Context, listingID int64, factor float64) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE listings SET factor=$2 WHERE id=$1`, listingID, factor)
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE listings SET factor=$2, last_factor_event_at=now() WHERE id=$1`, listingID, factor)
 	return err
 }
 

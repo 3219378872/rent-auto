@@ -1,4 +1,6 @@
-.PHONY: gate fmt fmt-check lint vet build test test-integration cover \
+SHELL := /bin/bash   # test 目标的 /dev/tcp 端口探测是 bash 特性，dash 下会静默退化为纯单测
+
+.PHONY: gate fmt fmt-check lint vet build test test-integration cover cover-gate \
 	frontend-install frontend-typecheck frontend-lint frontend-test frontend-build \
 	dev-up dev-down server web migrate-up migrate-down migrate-check migrate-new \
 	worktree-new release clean
@@ -7,12 +9,13 @@ BACKEND := backend
 FRONTEND := frontend
 
 PG_HOST_PORT ?= 15432
+COV_MIN ?= 70
 
 HAS_BACKEND := $(shell test -f $(BACKEND)/go.mod && echo yes || echo no)
 HAS_FRONTEND := $(shell test -f $(FRONTEND)/package.json && echo yes || echo no)
 
 ifeq ($(HAS_BACKEND),yes)
-gate: fmt-check lint vet build test migrate-check
+gate: fmt-check lint vet build test cover-gate migrate-check
 else
 gate:
 endif
@@ -51,6 +54,11 @@ test-integration:
 cover:
 	cd $(BACKEND) && go tool cover -html=coverage.out -o coverage.html
 
+# cover-gate enforces the AGENTS.md quantified gate: per-package statement
+# coverage of every pure-logic domain must reach COV_MIN percent.
+cover-gate:
+	@$(BACKEND)/../scripts/coverage-gate.sh $(BACKEND) $(COV_MIN)
+
 # ---- frontend ----
 frontend-install:
 	cd $(FRONTEND) && pnpm install --frozen-lockfile
@@ -88,14 +96,16 @@ migrate-down:
 	cd $(BACKEND) && go run ./cmd/migrate down 1
 
 migrate-check:
-	@if [ "$(HAS_BACKEND)" = "yes" ]; then cd $(BACKEND) && TEST_MIGRATE_CHECK=1 go test ./internal/store -run TestMigrationsUpDown -count=1; fi
+	@if [ "$(HAS_BACKEND)" = "yes" ]; then cd $(BACKEND) && go test ./internal/store -run TestMigrationsUpDown -count=1; fi
 
 migrate-new:
 	@test -n "$(NAME)" || { echo "usage: make migrate-new NAME=add_xxx"; exit 1; }
-	@ts=$$(date +%Y%m%d%H%M%S); \
-	printf '-- +migrate Up\n\n' > $(BACKEND)/migrations/$${ts}_$(NAME).up.sql; \
-	printf '-- +migrate Down\n\n' > $(BACKEND)/migrations/$${ts}_$(NAME).down.sql; \
-	echo "created $(BACKEND)/migrations/$${ts}_$(NAME).{up,down}.sql"
+	@last=$$(ls $(BACKEND)/migrations 2>/dev/null | grep -E '^[0-9]{4}_.*\.up\.sql$$' | sort | tail -1 | cut -d_ -f1); \
+	if [ -n "$$last" ]; then seqn=$$(expr $$last + 1); else seqn=1; fi; \
+	ver=$$(printf '%04d' $$seqn); \
+	{ echo '-- +migrate Up'; echo; } > $(BACKEND)/migrations/$${ver}_$(NAME).up.sql; \
+	{ echo '-- +migrate Down'; echo; } > $(BACKEND)/migrations/$${ver}_$(NAME).down.sql; \
+	echo "created $(BACKEND)/migrations/$${ver}_$(NAME).{up,down}.sql"
 
 # ---- git workflow helpers ----
 worktree-new:

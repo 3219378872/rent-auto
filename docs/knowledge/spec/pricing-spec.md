@@ -14,7 +14,9 @@ V = median(候选集中非空值)
 
 ## 2. UU 行情基线（移植自 Steamauto get_lease_price，参数化）
 
-对模板拉取租赁行情 topN（默认15，按 LEASE_DEFAULT 排序）：
+对模板拉取租赁行情 topN（默认15，按 LEASE_DEFAULT 排序）。**实现语义**：快照按
+(rank, kind) 取窗口内最新价合并为"每商品一条报价"（`RecentMergedQuotes`），
+重叠采集批次不重复计数；topN=前 15 个商品位，shorts=其中前 min(10,n) 个商品：
 
 ```
 shorts   = 前 min(10,n) 条 LeaseUnitPrice
@@ -29,7 +31,7 @@ base_dep    = deposits 空 ? 0 : max(mean(deposits)×k3, min(deposits)) k3 默�
 缓存        : 模板级 20 分钟 TTL
 ```
 
-## 3. 反馈控制器（收益最大化核心）
+## 3. 反馈控制器（收益最大化核心）——已接线
 
 每 (channel, hash_name) 维护控制状态：
 
@@ -42,7 +44,10 @@ factor ∈ [f_min, f_max]（默认 [0.85, 1.25]，初始 1.00）
 最终报价 = base × factor，再过护栏与边界
 ```
 
-- 因子持久化于 listings/decision 历史；重置条件：连续 stale 降价至 f_min 后仍无转化 → 回归 1.00 并告警"建议人工检查"
+- **实现**：scheduler `factor_events` 任务（17min 周期）——终态订单经
+  `factor_applied` 幂等标记折算；stale 扫描锚点为 `last_factor_event_at →
+  last_reprice_at → listed_at`；冷启动（recon 发布路径）恒从 1.00 起
+- 因子持久化于 listings.factor；重置条件：连续 stale 降价至 f_min 后仍无转化 → 回归 1.00 并审计告警 `pricing.factor_reset`
 - 冷启动：新上架商品 factor=1.00，前 cooldown 内不改价
 
 ## 4. 渠道分化决策

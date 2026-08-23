@@ -1,7 +1,7 @@
 # 证据索引（Evidence）
 
 > 每个里程碑完成时归档验证证据于此。规则：无证据不合并。
-> 状态：**M0–M8 全部归档完毕（2026-08-23）**。
+> 状态：**M0–M11 全部归档完毕；综合审查修复轮已归档（2026-08-23）**。
 
 | 里程碑 | 证据文档 | 结论 |
 |---|---|---|
@@ -16,7 +16,10 @@
 | M7 统计分析 | [m7-analytics.md](m7-analytics.md) | 年化公式/记账幂等/dashboard 数值断言，83.0% |
 | M8 前端 | [m8-frontend.md](m8-frontend.md) | tsc/eslint/vitest/build 四绿 |
 | M9 发货+Steam | [m9-auto-delivery.md](m9-auto-delivery.md) | guard 向量交叉验证+protobuf 黄金+全链路 mock，74% |
+| M10 ECO 发货报价 | [m10-eco-delivery.md](m10-eco-delivery.md) | OneClickResolve+定向重试，逐单失败审计 |
+| M11 报价接受闭环 | [m11-offer-accept.md](m11-offer-accept.md) | SellerOrder 端点+四步交付编排+幂等 |
 | 2026-08-23 UU 图形校验 | [2026-08-23-uu-captcha.md](2026-08-23-uu-captcha.md) | HAR 协议基线+mock 三模式覆盖；4 项 App 网关待真机校订 |
+| 2026-08-23 综合审查与修复轮 | [2026-08-23-comprehensive-audit.md](2026-08-23-comprehensive-audit.md) | P0×7/P1×9 全修复+控制器接线；逐包覆盖率门控落地 |
 
 ## 事故复盘
 
@@ -25,6 +28,7 @@
 | 2026-08-23 | [incidents/2026-08-23-lost-migration.md](incidents/2026-08-23-lost-migration.md) | 迁移 up 文件丢失造成假绿；加载器 orphan-down 熔断加固 |
 | 2026-08-23 | [incidents/2026-08-23-uu-sms-uplink.md](incidents/2026-08-23-uu-sms-uplink.md) | 短信上行模式被吞致"假发送成功"；模式判定+GetSmsUpSignInConfig 落地 |
 | 2026-08-23 | [incidents/2026-08-23-panel-logout-401.md](incidents/2026-08-23-panel-logout-401.md) | UU验证失败401踢飞面板会话+gzip解压禁用+图形校验误分类 |
+| 2026-08-23 | [incidents/2026-08-23-dryrun-bypass.md](incidents/2026-08-23-dryrun-bypass.md) | recon Executor 无视 dry-run 真实上下架；门禁语义重构+测试固化 |
 
 ## 归档格式
 
