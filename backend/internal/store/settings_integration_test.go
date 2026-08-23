@@ -73,6 +73,30 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// Rewriting a key with encrypted storage must clear any stale plaintext twin.
+func TestUpsertSettingEncClearsPlainTwin(t *testing.T) {
+	st, done := openTestDB(t)
+	defer done()
+	ctx := context.Background()
+
+	if err := st.UpsertSettingPlain(ctx, "dual", map[string]any{"secret": "legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSettingEnc(ctx, "dual", []byte("\x01cipher")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.GetSetting(ctx, "dual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ValuePlain != nil {
+		t.Fatalf("stale plaintext survived enc rewrite: %s", *s.ValuePlain)
+	}
+	if string(s.ValueEnc) != "\x01cipher" {
+		t.Fatalf("enc = %x", s.ValueEnc)
+	}
+}
+
 func TestAuditInsertAndList(t *testing.T) {
 	st, done := openTestDB(t)
 	defer done()

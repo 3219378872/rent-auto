@@ -59,10 +59,17 @@ const (
 
 // SendDeliveryOffer asks the platform to emit the Steam trade offer for an order.
 func (c *Client) SendDeliveryOffer(ctx context.Context, orderNo string) error {
-	_, err := c.do(ctx, "PUT", "/api/youpin/bff/trade/v1/order/sell/delivery/send-offer", map[string]any{
+	data, err := c.do(ctx, "PUT", "/api/youpin/bff/trade/v1/order/sell/delivery/send-offer", map[string]any{
 		"orderNo": orderNo, "Sessionid": c.device,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	env, err := decodeEnvelope(data)
+	if err != nil {
+		return err
+	}
+	return checkEnv(env, "send-offer")
 }
 
 // GetDeliveryOfferStatus returns the raw delivery-offer status int

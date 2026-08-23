@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	keyUUToken  = "uu_token"     // value_plain: {"token":"..."}
+	keyUUToken  = "uu_token"     // value_enc: {"token":"..."} (legacy rows may still hold value_plain)
 	keyECOCreds = "eco_creds"    // value_enc: {"partner_id":"...","private_key_pem":"..."}
 	keyECOSteam = "eco_steam_id" // value_plain: {"steam_id":"..."}
 )
@@ -35,6 +36,7 @@ type Registry struct {
 	uuClient   *uu.Client
 	ecoClient  *eco.Client
 	ecoSteamID string
+	uuHTTP     *http.Client // test seam: overrides UU API transport
 }
 
 func NewRegistry(st *store.Store, box *secrets.Box, log *slog.Logger) *Registry {
@@ -54,34 +56,42 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// UU
-	if setting, err := r.st.GetSetting(ctx, keyUUToken); err == nil && setting.ValuePlain != nil {
+	// UU — token is stored encrypted; legacy plaintext rows are migrated lazily.
+	setting, err := r.st.GetSetting(ctx, keyUUToken)
+	if err != nil && err != store.ErrNotFound {
+		return err
+	}
+	if err == nil {
 		var payload struct {
 			Token string `json:"token"`
 		}
-		if json.Unmarshal([]byte(*setting.ValuePlain), &payload) == nil && payload.Token != "" {
-			opts := []uu.Option{}
-			if l, ok := r.lim[domain.ChannelUU]; ok {
-				opts = append(opts, uu.WithLimiter(l))
+		switch {
+		case setting.ValueEnc != nil && r.box != nil:
+			plain, err := r.box.Open(string(setting.ValueEnc))
+			if err != nil {
+				r.log.Warn("uu token decrypt failed", "err", err)
+			} else if json.Unmarshal(plain, &payload) == nil && payload.Token != "" {
+				r.buildUUAdapter(ctx, payload.Token)
 			}
-			opts = append(opts, uu.WithLogger(r.log))
-			if c, err := uu.NewClient(ctx, payload.Token, opts...); err == nil {
-				r.ad[domain.ChannelUU] = uu.NewAdapter(c)
-				r.uuClient = c
-			} else {
-				r.log.Warn("uu adapter build failed", "err", err)
-				delete(r.ad, domain.ChannelUU)
+		case setting.ValuePlain != nil:
+			if json.Unmarshal([]byte(*setting.ValuePlain), &payload) == nil && payload.Token != "" {
+				if r.buildUUAdapter(ctx, payload.Token) && r.box != nil {
+					// Lazy migration: re-seal legacy plaintext into value_enc.
+					b, _ := json.Marshal(map[string]string{"token": payload.Token})
+					if enc, err := r.box.Seal(b); err == nil &&
+						r.st.UpsertSettingEnc(ctx, keyUUToken, []byte(enc)) == nil { // clears value_plain
+						r.log.Info("uu token migrated to encrypted storage")
+					}
+				}
 			}
 		}
-	} else if err != nil && err != store.ErrNotFound {
-		return err
 	}
 
 	// ECO
-	setting, err := r.st.GetSetting(ctx, keyECOCreds)
+	ecoSetting, ecoErr := r.st.GetSetting(ctx, keyECOCreds)
 	switch {
-	case err == nil && setting.ValueEnc != nil && r.box != nil:
-		plain, err := r.box.Open(string(setting.ValueEnc))
+	case ecoErr == nil && ecoSetting.ValueEnc != nil && r.box != nil:
+		plain, err := r.box.Open(string(ecoSetting.ValueEnc))
 		if err != nil {
 			r.log.Warn("eco creds decrypt failed", "err", err)
 			break
@@ -112,8 +122,8 @@ func (r *Registry) Refresh(ctx context.Context) error {
 				delete(r.ad, domain.ChannelECO)
 			}
 		}
-	case err != nil && err != store.ErrNotFound:
-		return err
+	case ecoErr != nil && ecoErr != store.ErrNotFound:
+		return ecoErr
 	}
 	return nil
 }
@@ -150,21 +160,58 @@ func (r *Registry) Health(ctx context.Context) map[string]string {
 	return out
 }
 
-// SetUUToken validates then persists the token and rebuilds the adapter.
+// SetUUToken validates then persists the token (encrypted at rest) and rebuilds the adapter.
 func (r *Registry) SetUUToken(ctx context.Context, token string) error {
-	c, err := uu.NewClient(ctx, token)
+	if r.box == nil {
+		return fmt.Errorf("APP_MASTER_KEY not configured: cannot store credentials safely")
+	}
+	c, err := uu.NewClient(ctx, token, r.uuOptions()...)
 	if err != nil {
 		return fmt.Errorf("token invalid: %w", err)
 	}
 	b, _ := json.Marshal(map[string]string{"token": token})
-	if err := r.st.UpsertSettingPlain(ctx, keyUUToken, json.RawMessage(b)); err != nil {
+	enc, err := r.box.Seal(b)
+	if err != nil {
+		return err
+	}
+	if err := r.st.UpsertSettingEnc(ctx, keyUUToken, []byte(enc)); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	r.ad[domain.ChannelUU] = uu.NewAdapter(c)
+	r.uuClient = c
 	r.mu.Unlock()
 	r.log.Info("uu credential updated", "nickname", c.Nickname())
 	return nil
+}
+
+func (r *Registry) uuOptions() []uu.Option {
+	opts := []uu.Option{}
+	if l, ok := r.lim[domain.ChannelUU]; ok {
+		opts = append(opts, uu.WithLimiter(l))
+	}
+	opts = append(opts, uu.WithLogger(r.log))
+	if r.uuHTTP != nil {
+		opts = append(opts, uu.WithHTTPClient(r.uuHTTP))
+	}
+	return opts
+}
+
+// SetUUHTTPClient pins the HTTP client used to build UU clients. Production
+// code never calls this; tests use it to point the UU API at a local mock.
+func (r *Registry) SetUUHTTPClient(h *http.Client) { r.uuHTTP = h }
+
+// buildUUAdapter constructs the UU adapter from a raw token; reports success.
+func (r *Registry) buildUUAdapter(ctx context.Context, token string) bool {
+	c, err := uu.NewClient(ctx, token, r.uuOptions()...)
+	if err != nil {
+		r.log.Warn("uu adapter build failed", "err", err)
+		delete(r.ad, domain.ChannelUU)
+		return false
+	}
+	r.ad[domain.ChannelUU] = uu.NewAdapter(c)
+	r.uuClient = c
+	return true
 }
 
 // SetECOCreds validates then persists ECO credentials (encrypted at rest).

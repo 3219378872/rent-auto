@@ -200,3 +200,111 @@ func TestAcceptRejectsCostlyOffer(t *testing.T) {
 		t.Fatalf("zero-cost detection wrong: %d", costly)
 	}
 }
+
+// ---- accept failure semantics: ambiguous responses must never read as success ----
+
+func TestAcceptOfferRejectsHTTPError(t *testing.T) {
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/tradeoffer/777/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("<html>server error</html>"))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "777", "76561198000000001")
+	if ok || err == nil || !strings.Contains(err.Error(), "http 500") {
+		t.Fatalf("http error must fail loudly: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAcceptOfferRejectsNonJSONBody(t *testing.T) {
+	// logged-out / login-page HTML with HTTP 200 must not count as accepted.
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/tradeoffer/778/") && strings.HasSuffix(r.URL.Path, "/accept") {
+			_, _ = w.Write([]byte(`<html><body>Login</body></html>`))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "778", "76561198000000001")
+	if ok || err == nil || !strings.Contains(err.Error(), "non-json") {
+		t.Fatalf("html body must fail loudly: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAcceptOfferRejectsUnknownState(t *testing.T) {
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/accept") {
+			_, _ = w.Write([]byte(`{"tradeofferid":"779","strError":"session mismatch"}`))
+			return
+		}
+		w.WriteHeader(404)
+	})
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "779", "76561198000000001")
+	if ok || err == nil || !strings.Contains(err.Error(), "not accepted") {
+		t.Fatalf("unknown state must fail: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAcceptOfferDirectAcceptedState(t *testing.T) {
+	// no mobile confirmation flag, state accepted → immediate success,
+	// confirmer endpoints must never be contacted.
+	contactedConf := false
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			_, _ = w.Write([]byte(`{"tradeofferid":"880","trade_offer_state":"Accepted"}`))
+		case strings.HasPrefix(r.URL.Path, "/mobileconf/"):
+			contactedConf = true
+			w.WriteHeader(404)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "880", "76561198000000001")
+	if !ok || err != nil {
+		t.Fatalf("accepted state: ok=%v err=%v", ok, err)
+	}
+	if contactedConf {
+		t.Fatal("confirmer must not run for directly accepted offers")
+	}
+}
+
+func TestAcceptOfferConfirmAllowFailurePropagates(t *testing.T) {
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			_, _ = w.Write([]byte(`{"needs_mobile_confirmation":true}`))
+		case r.URL.Path == "/mobileconf/getlist":
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":881}]}`))
+		case r.URL.Path == "/mobileconf/ajaxop":
+			_, _ = w.Write([]byte(`{"success":false}`))
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "881", "76561198000000001")
+	if ok || err == nil || !strings.Contains(err.Error(), "ajaxop allow failed") {
+		t.Fatalf("allow failure must propagate: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAcceptOfferAjaxopNonJSONFails(t *testing.T) {
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			_, _ = w.Write([]byte(`{"needs_mobile_confirmation":true}`))
+		case r.URL.Path == "/mobileconf/getlist":
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":882}]}`))
+		case r.URL.Path == "/mobileconf/ajaxop":
+			_, _ = w.Write([]byte(`<html>gateway</html>`))
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	if _, err := s.AcceptOfferWithPartner(context.Background(), "882", "76561198000000001"); err == nil ||
+		!strings.Contains(err.Error(), "ajaxop decode") {
+		t.Fatalf("ajaxop non-json must fail: %v", err)
+	}
+}

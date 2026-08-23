@@ -175,7 +175,7 @@ func TestExecutorPaths(t *testing.T) {
 	}
 }
 
-func TestExecutorDryRunAndFailures(t *testing.T) {
+func TestExecutorFailurePaths(t *testing.T) {
 	uu := &stubAdapter{ch: domain.ChannelUU, failPub: true, delErr: errors.New("busy")}
 	e := &Executor{
 		DryRun: false, Log: discardLogger(),
@@ -187,6 +187,48 @@ func TestExecutorDryRunAndFailures(t *testing.T) {
 	}
 	applied, failed := e.Execute(context.Background(), plan)
 	if applied != 0 || failed != 2 {
+		t.Fatalf("applied=%d failed=%d", applied, failed)
+	}
+}
+
+// DryRun must gate the platform entirely: no adapter call may happen, actions
+// are audited with the dry_run marker and counted as would-be applied.
+func TestExecutorDryRunSkipsPlatformCalls(t *testing.T) {
+	uu := &stubAdapter{ch: domain.ChannelUU}
+	var audited []domain.AuditEntry
+	e := &Executor{
+		DryRun: true, Log: discardLogger(),
+		Audit:    func(_ context.Context, en domain.AuditEntry) { audited = append(audited, en) },
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu},
+	}
+	plan := []Action{
+		{Kind: "publish", Channel: domain.ChannelUU, AssetID: "a1", HashName: "H", Decision: okDecision(1.5)},
+		{Kind: "delist", Channel: domain.ChannelUU, GoodsRef: "G1", HashName: "H"},
+	}
+	applied, failed := e.Execute(context.Background(), plan)
+	if applied != 2 || failed != 0 {
+		t.Fatalf("dry-run applied=%d failed=%d", applied, failed)
+	}
+	if len(uu.pubCalls) != 0 || uu.delCalls != 0 {
+		t.Fatalf("dry-run must not touch platform: pub=%d del=%d", len(uu.pubCalls), uu.delCalls)
+	}
+	if len(audited) != 2 {
+		t.Fatalf("audits=%d", len(audited))
+	}
+	for _, en := range audited {
+		dry, ok := en.Detail["dry_run"].(bool)
+		if !ok || !dry {
+			t.Fatalf("audit entry missing dry_run marker: %+v", en.Detail)
+		}
+	}
+}
+
+// Even in dry-run, a plan targeting an unconfigured channel is a planning error.
+func TestExecutorDryRunMissingAdapterFails(t *testing.T) {
+	e := &Executor{DryRun: true, Log: discardLogger()}
+	plan := []Action{{Kind: "delist", Channel: domain.ChannelECO, GoodsRef: "G1", HashName: "H"}}
+	applied, failed := e.Execute(context.Background(), plan)
+	if applied != 0 || failed != 1 {
 		t.Fatalf("applied=%d failed=%d", applied, failed)
 	}
 }

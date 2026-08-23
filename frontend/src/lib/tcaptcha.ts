@@ -27,7 +27,10 @@ function loadTCaptcha(): Promise<CaptchaCtor> {
     s.src = 'https://turing.captcha.qcloud.com/TCaptcha.js'
     s.onload = () => {
       if (window.TencentCaptcha) resolve(window.TencentCaptcha)
-      else reject(new Error('TCaptcha 加载异常：脚本已加载但入口缺失'))
+      else {
+        loader = null // allow a fresh attempt; a cached rejected promise would brick the flow
+        reject(new Error('TCaptcha 加载异常：脚本已加载但入口缺失'))
+      }
     }
     s.onerror = () => {
       loader = null

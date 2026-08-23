@@ -101,6 +101,8 @@ func (s *Session) ResolvePartnerID(ctx context.Context, offerID string) (string,
 }
 
 // AcceptOfferWithPartner is the full accept path: resolve partner → accept → confirm.
+// Ambiguous responses (non-2xx, non-JSON, unknown state) are reported as errors —
+// never silently treated as success — so callers can retry safely.
 func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID string) (bool, error) {
 	form := url.Values{
 		"sessionid":    {s.sessionid},
@@ -117,29 +119,30 @@ func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID
 	}
 	accReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	accReq.Header.Set("Referer", communityURL+"/tradeoffer/"+offerID+"/")
-	body, err := s.doRaw(accReq)
+	body, status, err := s.doRawStatus(accReq)
 	if err != nil {
 		return false, err
+	}
+	if status < 200 || status > 299 {
+		return false, fmt.Errorf("steam: accept %s: http %d", offerID, status)
 	}
 	var resp struct {
 		NeedsMobileConfirmation bool   `json:"needs_mobile_confirmation"`
 		TradeOfferState         string `json:"trade_offer_state"`
 	}
-	_ = jsonUnmarshal(body, &resp)
-	if strings.EqualFold(resp.TradeOfferState, "accepted") && !resp.NeedsMobileConfirmation {
-		return true, nil
+	if err := jsonUnmarshal(body, &resp); err != nil {
+		return false, fmt.Errorf("steam: accept %s: non-json response (http %d)", offerID, status)
 	}
-	if !resp.NeedsMobileConfirmation {
-		// Some responses omit the flag when already confirmed server-side.
-		if resp.TradeOfferState == "" {
-			return true, nil
+	if resp.NeedsMobileConfirmation {
+		if err := s.confirmTradeOffer(ctx, offerID); err != nil {
+			return false, err
 		}
 		return true, nil
 	}
-	if err := s.confirmTradeOffer(ctx, offerID); err != nil {
-		return false, err
+	if strings.EqualFold(resp.TradeOfferState, "accepted") {
+		return true, nil
 	}
-	return true, nil
+	return false, fmt.Errorf("steam: accept %s not accepted (state=%q)", offerID, resp.TradeOfferState)
 }
 
 type confListResp struct {
@@ -221,7 +224,10 @@ func (s *Session) allowConfirmation(ctx context.Context, confID, nonce string) e
 	var out struct {
 		Success bool `json:"success"`
 	}
-	if jsonUnmarshal(body, &out) == nil && !out.Success {
+	if err := jsonUnmarshal(body, &out); err != nil {
+		return fmt.Errorf("steam: ajaxop decode: %w", err)
+	}
+	if !out.Success {
 		return errors.New("steam: ajaxop allow failed")
 	}
 	return nil

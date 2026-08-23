@@ -1,13 +1,44 @@
-:80 {
+# rent-auto 面板入口（Caddy）
+#
+# 生产部署（强烈推荐）—— 在 deploy/.env 中设置：
+#   SITE_ADDRESS=panel.example.com     # Caddy 自动申请/续期 Let's Encrypt 证书，
+#                                      # 并在 :80 上自动做 HTTP→HTTPS 跳转
+# 自带证书 / ACME 邮箱等进阶需求：volume 挂载自定义 Caddyfile 覆盖本文件
+#   （- ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile）。
+#
+# ⚠️ 未设置 SITE_ADDRESS 时退化为纯 HTTP :80 —— 仅限内网调试；
+#    公网明文暴露面板等于公开 Steam 密码 / ECO 私钥 / UU 会话凭证。
+{$SITE_ADDRESS::80} {
 	encode gzip zstd
+
+	header {
+		-X-Powered-By
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://turing.captcha.qcloud.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src https://turing.captcha.qcloud.com https://t.captcha.qq.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+	}
 
 	handle /api/* {
 		reverse_proxy backend:8080 {
 			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
 		}
 	}
 
+	# 带内容 hash 的构建产物：永久缓存
+	@assets path /assets/*
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		root * /srv
+		file_server
+	}
+
+	# SPA 入口与回退：禁缓存，保证发版即生效
 	handle {
+		header Cache-Control "no-cache"
 		root * /srv
 		try_files {path} /index.html
 		file_server

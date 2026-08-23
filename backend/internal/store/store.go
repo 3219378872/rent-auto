@@ -69,11 +69,12 @@ func (s *Store) UpsertSettingPlain(ctx context.Context, key string, value any) e
 	return nil
 }
 
-// UpsertSettingEnc stores encrypted bytes.
+// UpsertSettingEnc stores encrypted bytes. Any stale plaintext twin is cleared
+// so secrets never linger in value_plain after an encrypted rewrite.
 func (s *Store) UpsertSettingEnc(ctx context.Context, key string, enc []byte) error {
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO app_settings(key, value_enc) VALUES($1,$2)
-		 ON CONFLICT(key) DO UPDATE SET value_enc=EXCLUDED.value_enc, updated_at=now()`,
+		 ON CONFLICT(key) DO UPDATE SET value_enc=EXCLUDED.value_enc, value_plain=NULL, updated_at=now()`,
 		key, enc)
 	if err != nil {
 		return fmt.Errorf("upsert setting %s: %w", key, err)

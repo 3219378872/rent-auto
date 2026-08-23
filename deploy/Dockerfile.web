@@ -10,4 +10,5 @@ RUN pnpm exec vite build
 FROM caddy:2-alpine
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
-EXPOSE 80
+# 80: HTTP（SITE_ADDRESS 配置域名后自动做 HTTPS 跳转）；443: HTTPS
+EXPOSE 80 443

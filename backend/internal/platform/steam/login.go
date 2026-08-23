@@ -114,25 +114,32 @@ func (s *Session) authAPIPOST(ctx context.Context, method string, msg []byte) ([
 }
 
 func (s *Session) doRaw(req *http.Request) ([]byte, error) {
+	body, _, err := s.doRawStatus(req)
+	return body, err
+}
+
+// doRawStatus is doRaw plus the final HTTP status code, for callers that must
+// distinguish transport success from application-level failure (write ops).
+func (s *Session) doRawStatus(req *http.Request) ([]byte, int, error) {
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)
+		return nil, 0, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 		if loc := resp.Header.Get("Location"); loc != "" {
 			next, err := http.NewRequestWithContext(req.Context(), req.Method, loc, nil)
 			if err != nil {
-				return nil, err
+				return nil, resp.StatusCode, err
 			}
-			return s.doRaw(next)
+			return s.doRawStatus(next)
 		}
 	}
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 // ---- login state machine ----

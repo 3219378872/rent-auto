@@ -70,6 +70,9 @@ func (c *Client) UserID() int64       { return c.userID }
 func (c *Client) Nickname() string    { return c.nick }
 func (c *Client) DeviceToken() string { return c.device }
 
+// Token reports the credential this client authenticates with.
+func (c *Client) Token() string { return c.token }
+
 // generateHeaders builds the baseline device headers every platform endpoint
 // expects, including the anonymous auth endpoints (SMS login flow).
 func generateHeaders(device string) http.Header {

@@ -101,7 +101,7 @@ func run() error {
 	planner := &recon.Planner{Store: st, Log: log, Health: registry.Health}
 	executor := &recon.Executor{DryRun: cfg.DryRunDefault, Log: log,
 		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) }}
-	steamSess := channels.NewSteamSession(st, box)
+	steamSess := channels.NewSteamSession(st, box, log)
 	if err := steamSess.Restore(ctx); err != nil {
 		log.Warn("steam session restore", "err", err)
 	}

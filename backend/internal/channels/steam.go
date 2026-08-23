@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -19,12 +20,15 @@ type SteamSession struct {
 	mu      sync.Mutex
 	st      *store.Store
 	box     *secrets.Box
-	log     interface{ Info(string, ...any) }
+	log     *slog.Logger
 	session *steam.Session
 }
 
-func NewSteamSession(st *store.Store, box *secrets.Box) *SteamSession {
-	return &SteamSession{st: st, box: box}
+func NewSteamSession(st *store.Store, box *secrets.Box, log *slog.Logger) *SteamSession {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &SteamSession{st: st, box: box, log: log}
 }
 
 // Restore rebuilds a session from stored tokens (fast path, no password login).

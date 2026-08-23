@@ -193,11 +193,18 @@ type Executor struct {
 }
 
 // Execute runs publish/delist actions; returns failures.
+// When DryRun is set, no platform call is made at all: every planned action is
+// audited with a dry_run marker and counted as applied (i.e. "would apply").
 func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed int) {
 	for _, a := range plan {
 		ad, ok := e.Adapters[a.Channel]
 		if !ok {
 			failed++
+			continue
+		}
+		if e.DryRun {
+			e.record(ctx, a, true, "")
+			applied++
 			continue
 		}
 		switch a.Kind {
