@@ -44,8 +44,7 @@ func TestAnchorContract(t *testing.T) {
 	if got := Median([]float64{*uu, *eco}); got != 105 {
 		t.Fatalf("both present: %v", got)
 	}
-	eco = nil
-	if got := Median([]float64{*uu}); got != 100 {
+	if got := Median([]float64{*uu}); got != 100 { // eco missing → single-value median
 		t.Fatalf("single: %v", got)
 	}
 }
