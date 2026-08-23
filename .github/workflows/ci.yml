@@ -33,7 +33,7 @@ jobs:
       - name: fmt check
         run: test -z "$(gofmt -l ./cmd ./internal)"
       - name: lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           working-directory: backend
           version: v2.6
