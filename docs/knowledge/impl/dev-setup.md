@@ -17,6 +17,9 @@ make web                       # 前端 :5173（代理 /api → 8080）
 宿主机 15432 被占用时：在 `deploy/.env` 设 `PG_HOST_PORT=25432` 后重新 `make dev-up`，
 并让门控/集成测试使用同一端口：`make gate PG_HOST_PORT=25432`
 （或 `export TEST_DATABASE_URL=postgres://rentauto:rentauto@localhost:25432/rentauto?sslmode=disable`）。
+⚠️ pre-push 钩子执行裸 `make gate`（默认 15432）：端口非默认的机器请
+`export PG_HOST_PORT=25432` 后再 push，否则探测失败会静默跳过集成测试，
+analytics 等依赖 DB fixture 的包将卡在覆盖率门控上。
 
 ## 环境变量（backend）
 
