@@ -70,7 +70,39 @@ func (s *Server) handleChannelsStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "channels not initialized")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Channels.Health(r.Context()))
+	out := s.Channels.Health(r.Context())
+	if out == nil {
+		out = map[string]string{}
+	}
+	if s.Steam != nil {
+		out["steam"] = s.Steam.Health(r.Context())
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type steamCredsRequest struct {
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	SharedSecret   string `json:"shared_secret"`
+	IdentitySecret string `json:"identity_secret"`
+}
+
+func (s *Server) handleSteamCreds(w http.ResponseWriter, r *http.Request) {
+	var req steamCredsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.Username == "" || req.Password == "" || req.SharedSecret == "" || req.IdentitySecret == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request",
+			"username/password/shared_secret/identity_secret all required")
+		return
+	}
+	if err := s.Steam.SetCredentials(r.Context(),
+		req.Username, req.Password, req.SharedSecret, req.IdentitySecret); err != nil {
+		s.audit(r, "channel.steam.creds_failed", map[string]any{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, "login_failed", err.Error())
+		return
+	}
+	s.audit(r, "channel.steam.creds_update", map[string]any{})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {

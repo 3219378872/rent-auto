@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/bench"
 	"github.com/3219378872/rent-auto/backend/internal/domain"
@@ -266,4 +267,15 @@ func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID strin
 		return err
 	}
 	return r.SetUUToken(ctx, token)
+}
+
+// DeliverPendingRentals walks the UU to-do list and sends pending offers.
+func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent, gifts int, err error) {
+	r.mu.RLock()
+	c := r.uuClient
+	r.mu.RUnlock()
+	if c == nil {
+		return 0, 0, platform.ErrUnsupported
+	}
+	return c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
 }

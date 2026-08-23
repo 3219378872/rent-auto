@@ -52,6 +52,14 @@
 5. 风控：连续高频调用触发 84104；全局限频默认 3rps + 任务间 sleep 抖动
 6. compensation_type：0=非会员 7=V1（默认7）
 
+## 发货域端点（M9 增补）
+
+| 端点 | 用途 | 备注 |
+|---|---|---|
+| /api/youpin/bff/trade/todo/v1/orderTodo/list | 待办列表(含待发货) | message 字段区分动作；"有买家下单，待您发送报价"=需发报价；含"赠送"=赠送单跳过 |
+| /api/youpin/bff/trade/v1/order/sell/delivery/send-offer | 平台代发 Steam 报价 | PUT {orderNo,Sessionid} |
+| /api/youpin/bff/trade/v1/order/sell/delivery/get-offer-status | 发送状态轮询 | data.status==3 即发送成功（上游 5×1.5s） |
+
 ## Go 实现补充约定（M2a 落地结论）
 
 7. 信封字段大小写混乱：库存接口用小写 `code/data`，行情用大写 `Code/Data` ——

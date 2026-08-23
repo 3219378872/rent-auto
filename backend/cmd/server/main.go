@@ -101,6 +101,27 @@ func run() error {
 	planner := &recon.Planner{Store: st, Log: log, Health: registry.Health}
 	executor := &recon.Executor{DryRun: cfg.DryRunDefault, Log: log,
 		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) }}
+	steamSess := channels.NewSteamSession(st, box)
+	if err := steamSess.Restore(ctx); err != nil {
+		log.Warn("steam session restore", "err", err)
+	}
+	uuDeliveryFn := func(ctx context.Context) error {
+		if a, ok := registry.Get(domain.ChannelUU); ok {
+			_ = a // adapter wraps client; use registry passthrough below
+		}
+		sent, gifts, err := registry.DeliverPendingRentals(ctx)
+		log.Info("uu delivery", "sent", sent, "gifts_skipped", gifts, "err", err)
+		return err
+	}
+	steamOffersFn := func(ctx context.Context) error {
+		accepted, skipped, err := steamSess.AcceptZeroCostOffers(ctx, log)
+		if err != nil {
+			log.Warn("steam offers", "err", err)
+		}
+		log.Info("steam offers", "accepted", accepted, "skipped_costly", skipped)
+		return nil
+	}
+
 	reconcileFn := func(ctx context.Context) error {
 		ads := map[domain.Channel]platform.Adapter{}
 		for _, a := range registry.All() {
@@ -116,7 +137,7 @@ func run() error {
 		return nil
 	}
 
-	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, log) {
+	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, uuDeliveryFn, steamOffersFn, log) {
 		if err := sch.Register(job); err != nil {
 			return err
 		}
@@ -126,6 +147,7 @@ func run() error {
 	srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
 	srv.Jobs = schedulerAdapter{sch}
 	srv.Channels = registry
+	srv.Steam = steamSess
 	srv.Wallets = func(ctx context.Context) map[domain.Channel]float64 {
 		out := map[domain.Channel]float64{}
 		for _, a := range registry.All() {

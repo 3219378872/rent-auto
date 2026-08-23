@@ -26,8 +26,14 @@ type Server struct {
 	Jobs      JobController   // nil-safe: endpoints degrade when nil
 	Channels  ChannelsService // nil-safe
 	Wallets   WalletProvider  // nil-safe
+	Steam     SteamService    // nil-safe
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
 	PasswordHash func(ctx context.Context) (string, error)
+}
+
+type SteamService interface {
+	Health(ctx context.Context) string
+	SetCredentials(ctx context.Context, username, password, sharedSecret, identitySecret string) error
 }
 
 type ChannelsService interface {
@@ -63,6 +69,7 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("POST /api/v1/channels/uu/sms", s.handleUUSms)
 	protected.HandleFunc("POST /api/v1/channels/uu/sms-verify", s.handleUUSmsVerify)
 	protected.HandleFunc("PUT /api/v1/channels/eco", s.handleECOCreds)
+	protected.HandleFunc("PUT /api/v1/channels/steam", s.handleSteamCreds)
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/v1/health", s.handleHealth)

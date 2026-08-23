@@ -15,6 +15,7 @@
 | M6 Reconciler | [m6-reconciler.md](m6-reconciler.md) | 路由矩阵+失效切换+执行器路径，76.8% |
 | M7 统计分析 | [m7-analytics.md](m7-analytics.md) | 年化公式/记账幂等/dashboard 数值断言，83.0% |
 | M8 前端 | [m8-frontend.md](m8-frontend.md) | tsc/eslint/vitest/build 四绿 |
+| M9 发货+Steam | [m9-auto-delivery.md](m9-auto-delivery.md) | guard 向量交叉验证+protobuf 黄金+全链路 mock，74% |
 
 ## 事故复盘
 

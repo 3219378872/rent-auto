@@ -23,6 +23,10 @@ export default function Channels() {
   const [partnerId, setPartnerId] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [steamId, setSteamId] = useState('')
+  const [steamUser, setSteamUser] = useState('')
+  const [steamPass, setSteamPass] = useState('')
+  const [sharedSecret, setSharedSecret] = useState('')
+  const [identitySecret, setIdentitySecret] = useState('')
 
   const load = useCallback(() => {
     api.get<Health>('/channels').then(setHealth).catch((e) => setErr(e.message))
@@ -52,6 +56,20 @@ export default function Channels() {
     }
   }
 
+  const saveSteam = async () => {
+    setErr(''); setMsg('')
+    try {
+      await api.put('/channels/steam', {
+        username: steamUser, password: steamPass,
+        shared_secret: sharedSecret, identity_secret: identitySecret,
+      })
+      setMsg('Steam 登录成功，会话已加密保存')
+      load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const saveEco = async () => {
     setErr(''); setMsg('')
     try {
@@ -63,7 +81,8 @@ export default function Channels() {
     }
   }
 
-  const badge = (s: string) => (s === 'ok' ? 'ok' : s.startsWith('error') ? 'bad' : '')
+  const badge = (s: string) =>
+    s === 'ok' || s.startsWith('ok:') ? 'ok' : s.startsWith('error') ? 'bad' : ''
 
   return (
     <div>
@@ -122,6 +141,30 @@ export default function Channels() {
         />
         <div className="toolbar" style={{ marginTop: 10 }}>
           <button onClick={saveEco} disabled={!partnerId || !privateKey}>保存并验证</button>
+        </div>
+      </div>
+
+      <div className="section">
+        <h3 style={{ marginTop: 0 }}>Steam · 自动收报价（礼物 / 租赁归还）</h3>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          需要 Steam Guard 令牌的 shared_secret 与 identity_secret（SDA/ Watt Toolkit 导出）。
+          系统自动接受「我们不付出任何物品」的报价，其余报价仅记录不动。
+        </div>
+        <div className="toolbar">
+          <input placeholder="Steam 用户名" value={steamUser} onChange={(e) => setSteamUser(e.target.value)} />
+          <input placeholder="密码" type="password" value={steamPass} onChange={(e) => setSteamPass(e.target.value)} />
+        </div>
+        <div className="toolbar">
+          <input placeholder="shared_secret (base64)" value={sharedSecret}
+            onChange={(e) => setSharedSecret(e.target.value)} style={{ minWidth: 260 }} />
+          <input placeholder="identity_secret (base64)" value={identitySecret}
+            onChange={(e) => setIdentitySecret(e.target.value)} style={{ minWidth: 260 }} />
+        </div>
+        <div className="toolbar">
+          <button onClick={saveSteam}
+            disabled={!steamUser || !steamPass || !sharedSecret || !identitySecret}>
+            登录 Steam 并保存
+          </button>
         </div>
       </div>
     </div>

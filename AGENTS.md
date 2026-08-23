@@ -43,6 +43,7 @@ Golang 后端 + React 前端的 UU/ECO 双渠道 Steam 饰品租赁自动化系�
 | design | adr-*.md | 技术决策记录（纯Go重写/Postgres/双通道等） |
 | design | [platform-uu-api-notes.md](docs/knowledge/design/platform-uu-api-notes.md) | UU API 逆向行为规格（端点、加密、风控） |
 | design | [platform-eco-api-notes.md](docs/knowledge/design/platform-eco-api-notes.md) | ECO 开放平台规格（签名、押金公式、限频） |
+| design | [platform-steam-api-notes.md](docs/knowledge/design/platform-steam-api-notes.md) | Steam 会话/收报价/确认器流程（IAuthentication protobuf 全链路） |
 | impl | [repo-layout.md](docs/knowledge/impl/repo-layout.md) | 目录结构与代码归属规则 |
 | impl | [dev-setup.md](docs/knowledge/impl/dev-setup.md) | 本地环境搭建 |
 | impl | [testing-strategy.md](docs/knowledge/impl/testing-strategy.md) | 测试金字塔、fixture 交叉验证方法、门控说明 |
