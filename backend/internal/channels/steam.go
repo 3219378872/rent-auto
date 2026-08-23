@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform/steam"
 	"github.com/3219378872/rent-auto/backend/internal/secrets"
 	"github.com/3219378872/rent-auto/backend/internal/store"
@@ -204,6 +205,12 @@ func (s *SteamSession) AcceptZeroCostOffers(ctx context.Context, log interface{ 
 		if ok {
 			accepted++
 			log.Info("steam offer accepted", "offer", o.TradeOfferID)
+			if AuditFn != nil {
+				AuditFn(ctx, domain.AuditEntry{
+					Time: time.Now().UTC(), Actor: "system",
+					Action: "order.accepted", Channel: "steam", Target: o.TradeOfferID,
+				})
+			}
 		}
 	}
 	return accepted, skipped, nil

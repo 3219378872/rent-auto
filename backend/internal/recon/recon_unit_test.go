@@ -237,19 +237,6 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestConvertQuotes(t *testing.T) {
-	rows := []store.QuoteRow{
-		{Kind: "lease_short", Price: 2.0},
-		{Kind: "lease_long", Price: 1.9},
-		{Kind: "deposit", Price: 200},
-		{Kind: "unknown", Price: 5},
-	}
-	qs := ConvertQuotes(rows)
-	if len(qs) != 4 || qs[0].Short != 2.0 || qs[1].Long != 1.9 || qs[2].Deposit != 200 {
-		t.Fatalf("quotes: %+v", qs)
-	}
-}
-
 func TestRentDayBoundsAndErrHelpers(t *testing.T) {
 	if rentDayMin(domain.ChannelECO) != 8 || rentDayMin(domain.ChannelUU) != 1 {
 		t.Fatal("min bounds")

@@ -241,8 +241,10 @@ func mapECOOrderStatus(code int) string {
 		return "delivering"
 	case 3:
 		return "leasing"
-	case 4, 5:
+	case 4:
 		return "returning"
+	case 5:
+		return "breach"
 	case 6:
 		return "arbitrating"
 	case 7, 12:

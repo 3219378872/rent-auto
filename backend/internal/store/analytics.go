@@ -46,28 +46,36 @@ func (s *Store) UnrecordedTerminalOrders(ctx context.Context, limit int) ([]Term
 	return out, rows.Err()
 }
 
-// MarkIncomeRecorded flips the flag after successful rollup.
-func (s *Store) MarkIncomeRecorded(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
+// RecordIncomeBatch applies daily-stat deltas for finished orders and flips
+// their income_recorded flags in one transaction: either every order is
+// counted and marked, or neither — a crash can never double-count income.
+func (s *Store) RecordIncomeBatch(ctx context.Context, orders []TerminalUnrecordedOrder) error {
+	if len(orders) == 0 {
 		return nil
 	}
-	_, err := s.Pool.Exec(ctx, `UPDATE lease_orders SET income_recorded=true WHERE id = ANY($1)`, ids)
-	return err
-}
-
-// UpsertDailyStat adds a delta into the daily rollup.
-func (s *Store) UpsertDailyStat(ctx context.Context, date time.Time, channel domain.Channel, category string, incomeDelta float64, orderDelta int) error {
-	_, err := s.Pool.Exec(ctx,
-		`INSERT INTO daily_stats(stat_date, channel, category, income, order_count)
-		 VALUES($1,$2,$3,$4,$5)
-		 ON CONFLICT(stat_date, channel, category) DO UPDATE SET
-		   income = daily_stats.income + EXCLUDED.income,
-		   order_count = daily_stats.order_count + EXCLUDED.order_count`,
-		date.UTC().Format("2006-01-02"), channel, category, incomeDelta, orderDelta)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("upsert daily stat: %w", err)
+		return fmt.Errorf("begin income tx: %w", err)
 	}
-	return nil
+	defer func() { _ = tx.Rollback(ctx) }()
+	ids := make([]int64, 0, len(orders))
+	for _, o := range orders {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO daily_stats(stat_date, channel, category, income, order_count)
+			 VALUES($1,$2,$3,$4,$5)
+			 ON CONFLICT(stat_date, channel, category) DO UPDATE SET
+			   income = daily_stats.income + EXCLUDED.income,
+			   order_count = daily_stats.order_count + EXCLUDED.order_count`,
+			o.Finished.UTC().Format("2006-01-02"), o.Channel, o.Category, o.Amount, 1); err != nil {
+			return fmt.Errorf("upsert daily stat: %w", err)
+		}
+		ids = append(ids, o.ID)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE lease_orders SET income_recorded=true WHERE id = ANY($1)`, ids); err != nil {
+		return fmt.Errorf("mark income recorded: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 type ChannelTotal struct {
@@ -98,11 +106,12 @@ func (s *Store) IncomeByChannel(ctx context.Context) ([]ChannelTotal, error) {
 	return out, rows.Err()
 }
 
-// TodayIncome returns today's rolled-up income.
+// TodayIncome returns today's rolled-up income (UTC day boundary, matching writes).
 func (s *Store) TodayIncome(ctx context.Context) (float64, error) {
 	var f *float64
 	err := s.Pool.QueryRow(ctx,
-		`SELECT SUM(income) FROM daily_stats WHERE stat_date = CURRENT_DATE`).Scan(&f)
+		`SELECT SUM(income) FROM daily_stats
+		 WHERE stat_date = (now() AT TIME ZONE 'utc')::date`).Scan(&f)
 	if err != nil {
 		return 0, err
 	}
@@ -119,22 +128,32 @@ type CategoryYield struct {
 	Yield    float64 `json:"yield"` // income / cost; 0 when cost==0
 }
 
-// CategoryYields computes per-category cost vs recorded income.
+// CategoryYields computes per-category yield per data-model 口径 B:
+// numerator = recorded income − sold-out inventory cost, denominator = all-time
+// category cost basis (every status, not just held stock).
 func (s *Store) CategoryYields(ctx context.Context) ([]CategoryYield, error) {
 	rows, err := s.Pool.Query(ctx,
 		`WITH costs AS (
 		   SELECT COALESCE(NULLIF(t.category,''),'未分类') AS cat,
 		          SUM(COALESCE(i.cost_basis,0)) AS cost
 		   FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
-		   WHERE i.status IN ('in_stock','listed','leased')
+		   GROUP BY 1
+		 ),
+		 sold AS (
+		   SELECT COALESCE(NULLIF(t.category,''),'未分类') AS cat,
+		          SUM(COALESCE(i.cost_basis,0)) AS sold_cost
+		   FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
+		   WHERE i.status='sold'
 		   GROUP BY 1
 		 )
-		 SELECT c.cat, c.cost, COALESCE(d.income,0)
+		 SELECT c.cat, c.cost,
+		        COALESCE(d.income,0) - COALESCE(s.sold_cost,0)
 		 FROM costs c
 		 LEFT JOIN (
 		   SELECT ds.category, SUM(ds.income) AS income
 		   FROM daily_stats ds GROUP BY ds.category
-		 ) d ON d.category = c.cat`)
+		 ) d ON d.category = c.cat
+		 LEFT JOIN sold s ON s.cat = c.cat`)
 	if err != nil {
 		return nil, fmt.Errorf("category yields: %w", err)
 	}
@@ -190,12 +209,25 @@ func (s *Store) HeldDeposits(ctx context.Context) (map[domain.Channel]float64, e
 	return out, rows.Err()
 }
 
-// TotalCostBasis sums cost of currently held inventory.
-func (s *Store) TotalCostBasis(ctx context.Context) (float64, error) {
+// TotalCostEverBasis sums cost basis over all inventory statuses — the capital
+// ever deployed (denominator of the annualized ROI per data-model 口径).
+func (s *Store) TotalCostEverBasis(ctx context.Context) (float64, error) {
+	var v *float64
+	err := s.Pool.QueryRow(ctx,
+		`SELECT SUM(cost_basis) FROM inventory_items WHERE cost_basis IS NOT NULL`).Scan(&v)
+	if err != nil || v == nil {
+		return 0, err
+	}
+	return *v, nil
+}
+
+// SoldCostBasis sums cost of inventory already consumed (status='sold') —
+// subtracted from income for net realized return (data-model 口径 B).
+func (s *Store) SoldCostBasis(ctx context.Context) (float64, error) {
 	var v *float64
 	err := s.Pool.QueryRow(ctx,
 		`SELECT SUM(cost_basis) FROM inventory_items
-		 WHERE status IN ('in_stock','listed','leased') AND cost_basis IS NOT NULL`).Scan(&v)
+		 WHERE status='sold' AND cost_basis IS NOT NULL`).Scan(&v)
 	if err != nil || v == nil {
 		return 0, err
 	}
@@ -215,11 +247,12 @@ type DailyPoint struct {
 	Income float64 `json:"income"`
 }
 
-// IncomeSeries returns the last N days of income.
+// IncomeSeries returns the last N days of income (UTC day boundary).
 func (s *Store) IncomeSeries(ctx context.Context, days int) ([]DailyPoint, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT stat_date::text, SUM(income) FROM daily_stats
-		 WHERE stat_date > CURRENT_DATE - $1::int GROUP BY stat_date ORDER BY stat_date`, days)
+		 WHERE stat_date > (now() AT TIME ZONE 'utc')::date - $1::int
+		 GROUP BY stat_date ORDER BY stat_date`, days)
 	if err != nil {
 		return nil, err
 	}

@@ -107,19 +107,71 @@ func TestRollupAndDashboard(t *testing.T) {
 	if dash.LeasedOut != 1 {
 		t.Fatalf("leased_out=%d", dash.LeasedOut)
 	}
-	// categories: cost 80, income 14
+	// categories per 口径 B: cost=all-status basis=80, net income=14-0(sold)=14
 	if len(dash.Categories) != 1 || dash.Categories[0].Category != "步枪" || dash.Categories[0].Cost != 80 {
 		t.Fatalf("categories: %+v", dash.Categories)
 	}
 	if dash.Categories[0].Yield < 0.1749 || dash.Categories[0].Yield > 0.1751 {
 		t.Fatalf("yield=%v", dash.Categories[0].Yield)
 	}
-	// ROI: net=14-80=-66 over ~0 days → floored to 1 day; just assert finite & negative
-	if dash.AnnualizedROI >= 0 {
-		t.Fatalf("roi should reflect net loss: %v", dash.AnnualizedROI)
+	// ROI per 口径 B: net=income−sold(0)=14 over all-time basis 80 → positive
+	if dash.AnnualizedROI <= 0 {
+		t.Fatalf("roi should be positive realized return: %v", dash.AnnualizedROI)
 	}
 	// series has at least today's point
 	if len(dash.Series30d) == 0 || dash.Series30d[0].Income != 14 {
 		t.Fatalf("series: %+v", dash.Series30d)
+	}
+}
+
+// Sold inventory cost must be deducted from income (口径 B) in both the
+// annualized ROI numerator and category yields.
+func TestDashboardSoldCostDeduction(t *testing.T) {
+	st := openAnalyticsDB(t)
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	now := time.Now().UTC()
+
+	pf := func(v float64) *float64 { return &v }
+	hash := "Sold Item (Field-Tested)"
+	if err := st.UpsertTemplate(ctx, store.Template{HashName: hash, Category: "手枪", UUMarkPrice: pf(40)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecomputeAnchors(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// item bought for 50, later sold out
+	if err := st.UpsertInventoryItem(ctx, domain.InventoryItem{
+		Channel: domain.ChannelUU, AssetID: "s1", HashName: hash,
+		MarkPrice: 40, Tradable: true, Status: "sold",
+	}, pf(50)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertLeaseOrder(ctx, domain.LeaseOrder{
+		Channel: domain.ChannelUU, OrderRef: "o-sold", AssetID: "s1", HashName: hash,
+		Status: "bought_out", RentDays: 7, RentPrice: 2, Amount: 10, Deposits: 60,
+		DueAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := analytics.RollupTerminalOrders(ctx, st, log); err != nil || n != 1 {
+		t.Fatalf("rollup: %v %d", err, n)
+	}
+
+	dash, err := analytics.BuildDashboard(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// category: cost=50 (all-time), net income = 10 − 50(sold) = −40, yield −0.8
+	if len(dash.Categories) != 1 {
+		t.Fatalf("categories: %+v", dash.Categories)
+	}
+	c := dash.Categories[0]
+	if c.Cost != 50 || c.Income != -40 || c.Yield < -0.8001 || c.Yield > -0.7999 {
+		t.Fatalf("category yield wrong: %+v", c)
+	}
+	// ROI numerator = 10 − 50 = −40 over basis 50 → negative
+	if dash.AnnualizedROI >= 0 {
+		t.Fatalf("roi must reflect consumed capital loss: %v", dash.AnnualizedROI)
 	}
 }

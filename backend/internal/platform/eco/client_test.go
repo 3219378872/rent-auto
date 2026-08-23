@@ -61,6 +61,49 @@ func TestClientRateLimited(t *testing.T) {
 	}
 }
 
+func fastRetry(t *testing.T) {
+	t.Helper()
+	old := rateRetryBase
+	rateRetryBase = time.Millisecond
+	t.Cleanup(func() { rateRetryBase = old })
+}
+
+// 6001 must be retried with backoff up to 3 total attempts; success on the
+// last allowed attempt still succeeds.
+func TestClientRateLimitedRetriesThenSucceeds(t *testing.T) {
+	fastRetry(t)
+	attempts := 0
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
+		attempts++
+		if attempts < 3 {
+			return `{"ResultCode":"6001","ResultMsg":"too fast"}`
+		}
+		return okEnv(`{"Money": 1}`)
+	})
+	if _, err := c.GetWalletBalance(context.Background()); err != nil {
+		t.Fatalf("retry should recover: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d, want 3", attempts)
+	}
+}
+
+// More than 3 attempts must never happen even when the platform keeps limiting.
+func TestClientRateLimitedRetriesCapped(t *testing.T) {
+	fastRetry(t)
+	attempts := 0
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
+		attempts++
+		return `{"ResultCode":"6001","ResultMsg":"too fast"}`
+	})
+	if _, err := c.GetWalletBalance(context.Background()); !errors.Is(err, platform.ErrRateLimited) {
+		t.Fatalf("want ErrRateLimited, got %v", err)
+	}
+	if attempts != rateRetryAttempts {
+		t.Fatalf("attempts=%d, want %d", attempts, rateRetryAttempts)
+	}
+}
+
 func TestPublishRentPayloadShape(t *testing.T) {
 	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
 		if r.URL.Path != "/Api/Rent/PublishRentAndSaleGoods" {

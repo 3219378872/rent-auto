@@ -23,35 +23,55 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+const DEFAULT_TIMEOUT_MS = 15000
+
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   const tok = getToken()
   if (tok) headers['Authorization'] = `Bearer ${tok}`
-  const res = await fetch(BASE + path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  if (res.status === 401 && path !== '/auth/login') {
-    const body = await res.clone().json().catch(() => ({} as { code?: string }))
-    // Only a panel-auth rejection ends the session; channel-level 401s
-    // (upstream platforms) must surface as in-page errors instead.
-    if ((body as { code?: string }).code === 'unauthorized') {
-      clearToken()
-      window.location.hash = '#/login'
+
+  // Hard timeout for every request; composes with a caller-provided signal.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS)
+  const onExternalAbort = () => ctrl.abort()
+  signal?.addEventListener('abort', onExternalAbort)
+  try {
+    const res = await fetch(BASE + path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+    if (res.status === 401 && path !== '/auth/login') {
+      const errBody = await res.clone().json().catch(() => ({} as { code?: string }))
+      // Only a panel-auth rejection ends the session; channel-level 401s
+      // (upstream platforms) must surface as in-page errors instead.
+      if ((errBody as { code?: string }).code === 'unauthorized') {
+        clearToken()
+        window.location.hash = '#/login'
+      }
     }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const e = data as { code?: string; message?: string }
+      throw new ApiError(res.status, e.code ?? 'error', e.message ?? res.statusText)
+    }
+    return data as T
+  } catch (e) {
+    if (e instanceof ApiError) throw e
+    if (ctrl.signal.aborted && !signal?.aborted) {
+      throw new ApiError(0, 'timeout', '请求超时，请检查网络后重试')
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onExternalAbort)
   }
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const e = data as { code?: string; message?: string }
-    throw new ApiError(res.status, e.code ?? 'error', e.message ?? res.statusText)
-  }
-  return data as T
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>('GET', p),
+  get: <T>(p: string, signal?: AbortSignal) => request<T>('GET', p, undefined, signal),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),
 }

@@ -174,7 +174,7 @@ export default function Channels() {
         </div>
         <textarea
           rows={5}
-          placeholder={'-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----'}
+          placeholder={'-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'}
           value={privateKey}
           onChange={(e) => setPrivateKey(e.target.value)}
           style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
@@ -195,9 +195,11 @@ export default function Channels() {
           <input placeholder="密码" type="password" value={steamPass} onChange={(e) => setSteamPass(e.target.value)} />
         </div>
         <div className="toolbar">
-          <input placeholder="shared_secret (base64)" value={sharedSecret}
+          <input placeholder="shared_secret (base64)" type="password" autoComplete="off"
+            value={sharedSecret}
             onChange={(e) => setSharedSecret(e.target.value)} style={{ minWidth: 260 }} />
-          <input placeholder="identity_secret (base64)" value={identitySecret}
+          <input placeholder="identity_secret (base64)" type="password" autoComplete="off"
+            value={identitySecret}
             onChange={(e) => setIdentitySecret(e.target.value)} style={{ minWidth: 260 }} />
         </div>
         <div className="toolbar">

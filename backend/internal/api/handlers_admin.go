@@ -33,7 +33,7 @@ func (s *Server) handleSetCost(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "inventory item missing")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	s.audit(r, "inventory.cost_update", map[string]any{
@@ -61,7 +61,7 @@ func (s *Server) handleStrategiesList(w http.ResponseWriter, r *http.Request) {
 		        real_execution_enabled, priority, updated_at
 		 FROM strategies ORDER BY scope DESC, priority DESC, id`)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	defer rows.Close()
@@ -72,7 +72,7 @@ func (s *Server) handleStrategiesList(w http.ResponseWriter, r *http.Request) {
 		var hashName string
 		if err := rows.Scan(&v.ID, &v.Name, &v.Scope, &hashName, &v.Route,
 			&paramsText, &v.RealEnabled, &v.Priority, &v.UpdatedAt); err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			s.internalError(w, err)
 			return
 		}
 		v.Params = json.RawMessage(paramsText)
@@ -102,7 +102,7 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	id, _, err := s.Store.EnsureGlobalStrategy(ctx, "{}")
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	if req.Params != nil {
@@ -113,7 +113,7 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		if _, err := s.Store.Pool.Exec(ctx,
 			`UPDATE strategies SET params=$2, updated_by='user', updated_at=now() WHERE id=$1`,
 			id, []byte(*req.Params)); err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			s.internalError(w, err)
 			return
 		}
 	}
@@ -121,7 +121,7 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		if _, err := s.Store.Pool.Exec(ctx,
 			`UPDATE strategies SET channel_route=$2, updated_by='user', updated_at=now() WHERE id=$1`,
 			id, *req.Route); err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			s.internalError(w, err)
 			return
 		}
 	}
@@ -129,7 +129,7 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		if _, err := s.Store.Pool.Exec(ctx,
 			`UPDATE strategies SET real_execution_enabled=$2, updated_by='user', updated_at=now() WHERE id=$1`,
 			id, *req.RealEnabled); err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			s.internalError(w, err)
 			return
 		}
 	}
@@ -148,7 +148,7 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		Limit:   limit,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	if items == nil {

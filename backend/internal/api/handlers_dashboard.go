@@ -22,7 +22,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	dash, err := analytics.BuildDashboard(r.Context(), s.Store, wallets)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, dash)

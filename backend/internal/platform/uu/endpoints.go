@@ -21,33 +21,42 @@ type InventoryItem struct {
 	MarketHashName string `json:"MarketHashName"`
 }
 
+// GetInventory pages through the full Steam inventory (pageSize=1000 per call,
+// looped until a short page — never silently truncated).
 func (c *Client) GetInventory(ctx context.Context, refresh bool) ([]InventoryItem, error) {
-	payload := map[string]any{
-		"pageIndex": 1, "pageSize": 1000, "AppType": 4,
-		"IsMerge": 0, "Sessionid": c.device,
+	const pageSize = 1000
+	var out []InventoryItem
+	for pageIndex := 1; ; pageIndex++ {
+		payload := map[string]any{
+			"pageIndex": pageIndex, "pageSize": pageSize, "AppType": 4,
+			"IsMerge": 0, "Sessionid": c.device,
+		}
+		if refresh && pageIndex == 1 {
+			payload["IsRefresh"] = true
+			payload["RefreshType"] = 2
+		}
+		data, err := c.do(ctx, "POST", "/api/commodity/Inventory/GetUserInventoryDataListV3", payload)
+		if err != nil {
+			return nil, err
+		}
+		env, err := decodeEnvelope(data)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkEnv(env, "inventory"); err != nil {
+			return nil, err
+		}
+		var d struct {
+			ItemsInfos []InventoryItem `json:"ItemsInfos"`
+		}
+		if err := json.Unmarshal(env.Data, &d); err != nil {
+			return nil, fmt.Errorf("uu: inventory payload: %w", err)
+		}
+		out = append(out, d.ItemsInfos...)
+		if len(d.ItemsInfos) < pageSize {
+			return out, nil
+		}
 	}
-	if refresh {
-		payload["IsRefresh"] = true
-		payload["RefreshType"] = 2
-	}
-	data, err := c.do(ctx, "POST", "/api/commodity/Inventory/GetUserInventoryDataListV3", payload)
-	if err != nil {
-		return nil, err
-	}
-	env, err := decodeEnvelope(data)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkEnv(env, "inventory"); err != nil {
-		return nil, err
-	}
-	var d struct {
-		ItemsInfos []InventoryItem `json:"ItemsInfos"`
-	}
-	if err := json.Unmarshal(env.Data, &d); err != nil {
-		return nil, fmt.Errorf("uu: inventory payload: %w", err)
-	}
-	return d.ItemsInfos, nil
 }
 
 // ---- lease shelf ----

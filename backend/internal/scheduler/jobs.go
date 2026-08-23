@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -13,40 +15,59 @@ import (
 )
 
 // Jobs builds the standard job set bound to live dependencies.
-func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile, uuDelivery, steamOffers, ecoDelivery func(ctx context.Context) error, log *slog.Logger) []Job {
+func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile, uuDelivery, steamOffers, ecoDelivery func(ctx context.Context) error, log *slog.Logger) []Job {
 	return []Job{
 		{Name: "reprice", Kind: KindInterval, Every: 31 * time.Minute, Jitter: 90 * time.Second,
 			Fn: func(ctx context.Context) error { return d.RunReprice(ctx, adapters()) }},
 		{Name: "inventory_sync", Kind: KindInterval, Every: 30 * time.Minute, Jitter: 60 * time.Second,
 			Fn: func(ctx context.Context) error {
+				var errs []error
 				for _, ad := range adapters() {
+					if !d.channelReady(ad.Channel(), time.Now()) {
+						continue
+					}
 					if _, err := bench.SyncInventory(ctx, ad, d.Store, log); err != nil {
+						d.penalize(ad.Channel(), err)
 						log.Error("inventory sync", "channel", string(ad.Channel()), "err", err)
+						errs = append(errs, fmt.Errorf("inventory %s: %w", ad.Channel(), err))
 					}
 				}
-				return nil
+				return errors.Join(errs...)
 			}},
 		{Name: "shelf_sync", Kind: KindInterval, Every: 10 * time.Minute, Jitter: 30 * time.Second,
 			Fn: func(ctx context.Context) error {
+				var errs []error
 				for _, ad := range adapters() {
+					if !d.channelReady(ad.Channel(), time.Now()) {
+						continue
+					}
 					if _, err := bench.SyncShelf(ctx, ad, d.Store, log); err != nil {
+						d.penalize(ad.Channel(), err)
 						log.Error("shelf sync", "channel", string(ad.Channel()), "err", err)
+						errs = append(errs, fmt.Errorf("shelf %s: %w", ad.Channel(), err))
 					}
 				}
-				return nil
+				return errors.Join(errs...)
 			}},
 		{Name: "orders_sync", Kind: KindInterval, Every: 10 * time.Minute, Jitter: 30 * time.Second,
 			Fn: func(ctx context.Context) error {
 				since := time.Now().Add(-24 * time.Hour)
+				var errs []error
 				for _, ad := range adapters() {
+					if !d.channelReady(ad.Channel(), time.Now()) {
+						continue
+					}
 					if _, err := bench.SyncOrders(ctx, ad, d.Store, since, log); err != nil {
+						d.penalize(ad.Channel(), err)
 						log.Error("orders sync", "channel", string(ad.Channel()), "err", err)
+						errs = append(errs, fmt.Errorf("orders %s: %w", ad.Channel(), err))
 					}
 				}
 				if _, err := analytics.RollupTerminalOrders(ctx, d.Store, log); err != nil {
 					log.Error("income rollup", "err", err)
+					errs = append(errs, fmt.Errorf("income rollup: %w", err))
 				}
-				return nil
+				return errors.Join(errs...)
 			}},
 		{Name: "market_snapshot", Kind: KindInterval, Every: 20 * time.Minute, Jitter: 120 * time.Second,
 			Fn: func(ctx context.Context) error { return runMarketSnapshot(ctx, d.Store, uuQuotes, log) }},

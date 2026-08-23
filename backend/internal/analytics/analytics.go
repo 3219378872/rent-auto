@@ -9,16 +9,13 @@ import (
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
 // Round2 rounds money to two decimals, half away from zero.
-func Round2(v float64) float64 {
-	if v >= 0 {
-		return float64(int64(v*100+0.5)) / 100
-	}
-	return float64(int64(v*100-0.5)) / 100
-}
+// Delegates to the canonical pricing implementation (AGENTS.md 硬规则).
+func Round2(v float64) float64 { return pricing.Round2(v) }
 
 // AnnualizedROI = netIncome / cost × (365d / observation days).
 // Returns 0 when inputs are insufficient (never negative-days or div-by-zero panics).
@@ -38,28 +35,21 @@ func AnnualizedROI(netIncome, cost float64, firstCost, now time.Time) float64 {
 }
 
 // RollupTerminalOrders records income for finished orders into daily_stats.
+// Deltas and the recorded-flag flip share one transaction, so a crash between
+// the two can never double-count income on retry.
 func RollupTerminalOrders(ctx context.Context, st *store.Store, log *slog.Logger) (int, error) {
 	const batch = 200
 	orders, err := st.UnrecordedTerminalOrders(ctx, batch)
 	if err != nil {
 		return 0, err
 	}
-	n := 0
-	ids := make([]int64, 0, len(orders))
-	for _, o := range orders {
-		if err := st.UpsertDailyStat(ctx, o.Finished, o.Channel, o.Category, o.Amount, 1); err != nil {
-			return n, err
-		}
-		ids = append(ids, o.ID)
-		n++
+	if err := st.RecordIncomeBatch(ctx, orders); err != nil {
+		return 0, err
 	}
-	if err := st.MarkIncomeRecorded(ctx, ids); err != nil {
-		return n, err
+	if len(orders) > 0 {
+		log.Info("income rollup", "orders", len(orders))
 	}
-	if n > 0 {
-		log.Info("income rollup", "orders", n)
-	}
-	return n, nil
+	return len(orders), nil
 }
 
 // Dashboard is the aggregated payload for the panel home page.
@@ -135,7 +125,13 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 		return nil, err
 	}
 
-	cost, err := st.TotalCostBasis(ctx)
+	// 年化收益率 per data-model 口径: net = income − sold-out cost,
+	// denominator = all-time cost basis; observation starts at first cost entry.
+	cost, err := st.TotalCostEverBasis(ctx)
+	if err != nil {
+		return nil, err
+	}
+	soldCost, err := st.SoldCostBasis(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +140,8 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 		return nil, err
 	}
 	if first != nil && cost > 0 {
-		d.AnnualizedROI = AnnualizedROI(total-cost, cost, *first, time.Now())
-	} else if cost > 0 {
-		d.AnnualizedROI = AnnualizedROI(total-cost, cost, time.Now(), time.Now())
-	}
+		d.AnnualizedROI = AnnualizedROI(total-soldCost, cost, *first, time.Now())
+	} // else: no observation window yet — report 0 rather than absurd extrapolation
 
 	cats, err := st.CategoryYields(ctx)
 	if err != nil {

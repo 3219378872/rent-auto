@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,8 +101,30 @@ func (c *Client) checkEnv(e *envelope, path string) error {
 	}
 }
 
+// Rate-limit retry policy (api-notes §限频: 6001 → 指数退避，最多 3 次).
+const rateRetryAttempts = 3
+
+var rateRetryBase = 500 * time.Millisecond
+
 // post signs and executes one API call; result may be nil to ignore payload.
+// A 6001 (rate limited) response is retried with exponential backoff.
 func (c *Client) post(ctx context.Context, path string, biz map[string]any, result any) error {
+	for attempt := 0; ; attempt++ {
+		err := c.postOnce(ctx, path, biz, result)
+		if attempt < rateRetryAttempts-1 && errors.Is(err, platform.ErrRateLimited) {
+			delay := rateRetryBase << attempt // 0.5s, 1s
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
+		}
+		return err
+	}
+}
+
+func (c *Client) postOnce(ctx context.Context, path string, biz map[string]any, result any) error {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("eco: limiter: %w", err)
 	}

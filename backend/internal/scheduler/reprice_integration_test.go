@@ -118,14 +118,46 @@ func seedRepriceFixture(t *testing.T, st *store.Store) int64 {
 	if snapCount != 4 {
 		t.Fatalf("snapshots seeded=%d", snapCount)
 	}
-	qs, err := st.RecentQuotes(ctx, hash, time.Now().Add(-30*time.Minute), 45)
+	mq, err := st.RecentMergedQuotes(ctx, hash, time.Now().Add(-30*time.Minute), 45)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(qs) != 4 {
-		t.Fatalf("recent quotes=%d", len(qs))
+	if len(mq) != 2 || mq[0].Short != 2.0 || mq[0].Deposit != 200 || mq[1].Long != 0 {
+		t.Fatalf("merged quotes=%+v", mq)
 	}
 	return cands[0].ListingID
+}
+
+// Overlapping capture batches must not double-count: each (rank, kind) resolves
+// to its newest sample within the window.
+func TestRecentMergedQuotesDeduplicatesOverlappingBatches(t *testing.T) {
+	st := openDB(t)
+	ctx := context.Background()
+	hash := "Overlap Item (Minimal Wear)"
+	if err := st.UpsertTemplate(ctx, store.Template{HashName: hash, DisplayName: hash, UUTemplateID: ptr(999)}); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-25 * time.Minute)
+	fresh := time.Now().Add(-5 * time.Minute)
+	snaps := []store.Snapshot{
+		{HashName: hash, Source: "uu_market", Kind: "lease_short", Rank: 1, Price: 9.9, CapturedAt: old},
+		{HashName: hash, Source: "uu_market", Kind: "deposit", Rank: 1, Price: 900, CapturedAt: old},
+		{HashName: hash, Source: "uu_market", Kind: "lease_short", Rank: 1, Price: 3.3, CapturedAt: fresh},
+		{HashName: hash, Source: "uu_market", Kind: "lease_short", Rank: 2, Price: 3.5, CapturedAt: fresh},
+	}
+	if err := st.InsertSnapshots(ctx, snaps); err != nil {
+		t.Fatal(err)
+	}
+	mq, err := st.RecentMergedQuotes(ctx, hash, time.Now().Add(-30*time.Minute), 45)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mq) != 2 {
+		t.Fatalf("ranks=%d, want 2 (no duplicate rows)", len(mq))
+	}
+	if mq[0].Rank != 1 || mq[0].Short != 3.3 || mq[0].Deposit != 900 {
+		t.Fatalf("rank1 must keep newest short but retain deposit: %+v", mq[0])
+	}
 }
 
 func ptr(v int64) *int64      { return &v }

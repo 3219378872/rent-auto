@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
@@ -29,6 +30,10 @@ type Server struct {
 	Steam     SteamService    // nil-safe
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
 	PasswordHash func(ctx context.Context) (string, error)
+
+	logins       *loginLimiter
+	dummyOnce    sync.Once
+	dummyHashVal string
 }
 
 type SteamService interface {
@@ -45,7 +50,8 @@ type ChannelsService interface {
 }
 
 func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *slog.Logger) *Server {
-	return &Server{Store: st, JWT: jwt, TTL: 24 * time.Hour, AdminUser: adminUser, Version: version, Log: log}
+	return &Server{Store: st, JWT: jwt, TTL: 24 * time.Hour, AdminUser: adminUser, Version: version, Log: log,
+		logins: newLoginLimiter()}
 }
 
 // Routes builds the handler tree:

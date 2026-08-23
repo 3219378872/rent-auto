@@ -99,13 +99,14 @@ func (c *Client) GetDeliveryOfferStatus(ctx context.Context, orderNo string) (in
 
 // DeliverPendingRentals walks the to-do list and sends offers for every
 // payable rental order. Gift orders are counted and skipped.
-// Returns (sent, skippedGifts).
-func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, pollInterval func()) (int, int, error) {
+// Returns (sentOrderNos, skippedGifts).
+func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, pollInterval func()) ([]string, int, error) {
 	todos, err := c.GetWaitDeliverList(ctx)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
-	sent, gifts := 0, 0
+	var sent []string
+	gifts := 0
 	for _, t := range todos {
 		if msgGift != "" && containsStr(t.Message, msgGift) {
 			gifts++
@@ -123,7 +124,7 @@ func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, po
 			}
 			st, err := c.GetDeliveryOfferStatus(ctx, t.OrderNo)
 			if err == nil && st == 3 {
-				sent++
+				sent = append(sent, t.OrderNo)
 				break
 			}
 			if i == pollAttempts-1 {

@@ -28,7 +28,7 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
 		Offset:  offset,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": itemsOrEmpty(items), "total": total})
@@ -44,7 +44,7 @@ func (s *Server) handleListings(w http.ResponseWriter, r *http.Request) {
 		Offset:  offset,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": itemsOrEmpty(items), "total": total})
@@ -60,7 +60,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		Offset:  offset,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": itemsOrEmpty(items), "total": total})
@@ -69,7 +69,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Store.ListTemplates(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		s.internalError(w, err)
 		return
 	}
 	if items == nil {

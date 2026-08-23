@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, AuditRow } from '../api/client'
+import { useDebounced } from '../lib/ui'
 
 export default function Audit() {
   const [data, setData] = useState<{ items: AuditRow[]; total: number } | null>(null)
   const [action, setAction] = useState('')
   const [channel, setChannel] = useState('')
   const [err, setErr] = useState('')
+  const actionDebounced = useDebounced(action)
 
   const load = useCallback(() => {
     const q = new URLSearchParams({ page_size: '100' })
-    if (action) q.set('action', action)
+    if (actionDebounced) q.set('action', actionDebounced)
     if (channel) q.set('channel', channel)
-    api.get<{ items: AuditRow[]; total: number }>(`/audit?${q}`).then(setData).catch((e) => setErr(e.message))
-  }, [action, channel])
+    let alive = true
+    api.get<{ items: AuditRow[]; total: number }>(`/audit?${q}`)
+      .then((d) => { if (alive) { setData(d); setErr('') } })
+      .catch((e) => { if (alive) setErr(e.message) })
+    return () => { alive = false }
+  }, [actionDebounced, channel])
 
   useEffect(load, [load])
 
@@ -31,8 +37,8 @@ export default function Audit() {
       <table className="grid">
         <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>渠道</th><th>目标</th><th>详情</th></tr></thead>
         <tbody>
-          {(data?.items ?? []).map((a, i) => (
-            <tr key={i}>
+          {(data?.items ?? []).map((a) => (
+            <tr key={`${a.ts}-${a.action}-${a.target ?? ''}`}>
               <td className="muted">{new Date(a.ts).toLocaleString('zh-CN', { hour12: false })}</td>
               <td>{a.actor}</td>
               <td>{a.action}</td>

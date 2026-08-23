@@ -130,11 +130,8 @@ func TestDeliverPendingRentalsHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delivery: %v", err)
 	}
-	if sent != 1 || gifts != 1 {
-		t.Fatalf("sent=%d gifts=%d", sent, gifts)
-	}
-	if len(sentOrderNos) != 1 || sentOrderNos[0] != "R100" {
-		t.Fatalf("sent offers: %v", sentOrderNos)
+	if len(sent) != 1 || sent[0] != "R100" || gifts != 1 {
+		t.Fatalf("sent=%v gifts=%d", sent, gifts)
 	}
 	if sendMethod != http.MethodPut {
 		t.Fatalf("send-offer must be PUT, got %s", sendMethod)
@@ -162,8 +159,8 @@ func TestDeliverPendingRentalsSendOfferFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent, gifts, err := c.DeliverPendingRentals(context.Background(), 3, func() {})
-	if err == nil || !strings.Contains(err.Error(), "send offer R1") || sent != 0 || gifts != 0 {
-		t.Fatalf("send failure must surface: sent=%d gifts=%d err=%v", sent, gifts, err)
+	if err == nil || !strings.Contains(err.Error(), "send offer R1") || len(sent) != 0 || gifts != 0 {
+		t.Fatalf("send failure must surface: sent=%v gifts=%d err=%v", sent, gifts, err)
 	}
 }
 
@@ -212,7 +209,7 @@ func TestDeliverPendingRentalsEmptyTodo(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent, gifts, err := c.DeliverPendingRentals(context.Background(), 3, func() {})
-	if err != nil || sent != 0 || gifts != 0 {
-		t.Fatalf("empty todo: sent=%d gifts=%d err=%v", sent, gifts, err)
+	if err != nil || len(sent) != 0 || gifts != 0 {
+		t.Fatalf("empty todo: sent=%v gifts=%d err=%v", sent, gifts, err)
 	}
 }

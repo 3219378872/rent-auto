@@ -3,11 +3,15 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/platform/uu"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
@@ -17,20 +21,73 @@ type Deps struct {
 	Store  *store.Store
 	Log    *slog.Logger
 	DryRun bool // global default; effective = DryRun || !strategy.RealEnabled
+
+	mu        sync.Mutex
+	cooldowns map[domain.Channel]time.Time // risk-control backoff per channel
+}
+
+// Risk-control backoff windows (api-notes: 平台风控信号由调度器决定退避).
+const (
+	rateLimitCooldown    = 5 * time.Minute
+	platformBlockCool    = 15 * time.Minute
+	ukExpiredCooldownMin = 2 * time.Minute
+)
+
+// channelReady reports whether a channel has served out its risk-control cooldown.
+func (d *Deps) channelReady(ch domain.Channel, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	until, ok := d.cooldowns[ch]
+	return !ok || now.After(until)
+}
+
+// penalize puts a channel into cooldown when the platform signalled risk
+// control (rate limit / block / UK expiry); other errors are ignored.
+func (d *Deps) penalize(ch domain.Channel, err error) {
+	var until time.Time
+	switch {
+	case errors.Is(err, platform.ErrRateLimited):
+		until = time.Now().Add(rateLimitCooldown)
+	case errors.Is(err, platform.ErrPlatformBlocked):
+		until = time.Now().Add(platformBlockCool)
+	case errors.Is(err, uu.ErrUKExpired):
+		until = time.Now().Add(ukExpiredCooldownMin)
+	default:
+		return
+	}
+	d.mu.Lock()
+	if d.cooldowns == nil {
+		d.cooldowns = map[domain.Channel]time.Time{}
+	}
+	prev := d.cooldowns[ch]
+	if until.After(prev) {
+		d.cooldowns[ch] = until
+	}
+	d.mu.Unlock()
+	d.Log.Warn("channel risk-control cooldown",
+		"channel", string(ch), "until", until.Format(time.RFC3339), "err", err.Error())
 }
 
 // quoteWindow bounds how old market snapshots may be for baselines.
 const quoteWindow = 30 * time.Minute
 
 // RunReprice reprices active listings on every configured channel.
+// Channels in risk-control cooldown are skipped; real failures are aggregated
+// into the returned error so the panel LastError reflects them.
 func (d *Deps) RunReprice(ctx context.Context, adapters []platform.Adapter) error {
 	now := time.Now().UTC()
+	var errs []error
 	for _, ad := range adapters {
+		if !d.channelReady(ad.Channel(), now) {
+			continue
+		}
 		if err := d.repriceChannel(ctx, ad, now); err != nil {
 			d.Log.Error("reprice channel failed", "channel", string(ad.Channel()), "err", err)
+			d.penalize(ad.Channel(), err)
+			errs = append(errs, fmt.Errorf("reprice %s: %w", ad.Channel(), err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time.Time) error {
@@ -132,27 +189,17 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 	return nil
 }
 
-// loadQuotes rebuilds the ranked quote slice from stored snapshots.
+// loadQuotes rebuilds the per-commodity ranked quote slice from stored
+// snapshots (pricing-spec §2: one quote per market position; overlapping
+// capture batches must not double-count).
 func (d *Deps) loadQuotes(ctx context.Context, hash string, topn int) []pricing.Quote {
-	rows, err := d.Store.RecentQuotes(ctx, hash, time.Now().Add(-quoteWindow), topn*3)
+	rows, err := d.Store.RecentMergedQuotes(ctx, hash, time.Now().Add(-quoteWindow), topn*3)
 	if err != nil {
 		return nil
 	}
-	out := make([]pricing.Quote, 0, topn)
+	out := make([]pricing.Quote, 0, len(rows))
 	for _, r := range rows {
-		q := pricing.Quote{}
-		switch r.Kind {
-		case "lease_short":
-			q.Short = r.Price
-		case "lease_long":
-			q.Long = r.Price
-		case "deposit":
-			q.Deposit = r.Price
-		}
-		out = append(out, q)
-	}
-	if len(out) > topn {
-		out = out[:topn]
+		out = append(out, pricing.Quote{Short: r.Short, Long: r.Long, Deposit: r.Deposit})
 	}
 	return out
 }

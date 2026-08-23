@@ -12,23 +12,31 @@ export default function Listings() {
   const [page, setPage] = useState(1)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const [repricing, setRepricing] = useState(false)
 
   const load = useCallback(() => {
     const q = new URLSearchParams({ page: String(page), page_size: '50' })
     if (channel) q.set('channel', channel)
     if (state) q.set('state', state)
-    api.get<Paged<ListingRow>>(`/listings?${q}`).then(setData).catch((e) => setErr(e.message))
+    let alive = true
+    api.get<Paged<ListingRow>>(`/listings?${q}`)
+      .then((d) => { if (alive) { setData(d); setErr('') } })
+      .catch((e) => { if (alive) setErr(e.message) })
+    return () => { alive = false }
   }, [channel, state, page])
 
   useEffect(load, [load])
 
   const triggerReprice = async () => {
     setErr(''); setMsg('')
+    setRepricing(true)
     try {
       await api.post('/jobs/reprice/run')
       setMsg('已触发立即重定价')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRepricing(false)
     }
   }
 
@@ -48,7 +56,9 @@ export default function Listings() {
         </select>
         <span className="muted">共 {data?.total ?? 0} 条</span>
         <div className="grow" />
-        <button onClick={triggerReprice}>立即重定价</button>
+        <button onClick={triggerReprice} disabled={repricing}>
+          {repricing ? '触发中…' : '立即重定价'}
+        </button>
       </div>
 
       <table className="grid">
@@ -78,7 +88,9 @@ export default function Listings() {
       <div className="toolbar" style={{ marginTop: 12 }}>
         <button className="ghost small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
         <span className="muted">第 {page} 页</span>
-        <button className="ghost small" disabled={(data?.items.length ?? 0) < 50} onClick={() => setPage(page + 1)}>下一页</button>
+        <button className="ghost small"
+          disabled={data ? page * 50 >= data.total : true}
+          onClick={() => setPage(page + 1)}>下一页</button>
       </div>
     </div>
   )

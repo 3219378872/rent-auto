@@ -91,3 +91,33 @@ func TestUnknownProtectedEndpoint(t *testing.T) {
 		t.Fatalf("unknown protected endpoint must 401 without token, got %d", rec.Code)
 	}
 }
+
+// Repeated failures from the same IP+username must lock out before the window
+// elapses; a successful login resets the counter.
+func TestLoginBruteForceLockout(t *testing.T) {
+	s := newTestServer(t)
+	h := s.Routes()
+	body := `{"username":"admin","password":"wrong"}`
+
+	for i := 0; i < loginMaxFails; i++ {
+		if rec := do(t, h, "POST", "/api/v1/auth/login", "", body); rec.Code != 401 {
+			t.Fatalf("attempt %d: want 401, got %d", i+1, rec.Code)
+		}
+	}
+	rec := do(t, h, "POST", "/api/v1/auth/login", "", body)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked out attempt: want 429, got %d", rec.Code)
+	}
+
+	// even correct credentials are rejected while locked out
+	rec = do(t, h, "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"hunter2"}`)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("correct password during lockout: want 429, got %d", rec.Code)
+	}
+
+	// a different username (different key) is unaffected
+	rec = do(t, h, "POST", "/api/v1/auth/login", "", `{"username":"nobody","password":"x"}`)
+	if rec.Code != 401 {
+		t.Fatalf("other username should not be locked: got %d", rec.Code)
+	}
+}

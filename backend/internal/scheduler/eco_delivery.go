@@ -3,13 +3,14 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/platform/eco"
-	"github.com/3219378872/rent-auto/backend/internal/platform/steam"
 )
 
 // EcoDeliveryDeps abstracts the two platform clients for testability.
@@ -55,6 +56,9 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 	state := detailsStateWaitDeliver
 	orders, err := d.Eco.SellerOrderList(ctx, start, end, &state, "")
 	if err != nil {
+		if errors.Is(err, platform.ErrUnsupported) {
+			return nil // ECO not configured — nothing to deliver
+		}
 		return fmt.Errorf("eco: order list: %w", err)
 	}
 	for _, o := range orders {
@@ -76,27 +80,30 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 		}
 		d.mu.Lock()
 		seen := d.accepted[detail.TradeOfferID]
-		if !seen {
-			d.accepted[detail.TradeOfferID] = true
-		}
 		d.mu.Unlock()
 		if seen {
 			continue
 		}
 		ok, aerr := d.Steam.AcceptTradeOffer(ctx, detail.TradeOfferID)
 		if aerr != nil {
+			// not marked as handled: retried on the next cycle
 			d.warn(ctx, "order.accept_offer_failed", detail.TradeOfferID, aerr.Error())
 			continue
 		}
-		if ok && d.Audit != nil {
-			d.Audit(ctx, domain.AuditEntry{
-				Time: time.Now().UTC(), Actor: "system",
-				Action: "order.delivered", Channel: "eco",
-				Target: o.GoodsName,
-				Detail: map[string]any{"order": o.OrderNum, "offer": detail.TradeOfferID},
-			})
+		if ok {
+			d.mu.Lock()
+			d.accepted[detail.TradeOfferID] = true
+			d.mu.Unlock()
+			if d.Audit != nil {
+				d.Audit(ctx, domain.AuditEntry{
+					Time: time.Now().UTC(), Actor: "system",
+					Action: "order.delivered", Channel: "eco",
+					Target: o.GoodsName,
+					Detail: map[string]any{"order": o.OrderNum, "offer": detail.TradeOfferID},
+				})
+			}
+			d.info(ctx, "delivered", fmt.Sprintf("%s/%s", o.OrderNum, detail.TradeOfferID))
 		}
-		d.info(ctx, "delivered", fmt.Sprintf("%s/%s", o.OrderNum, detail.TradeOfferID))
 	}
 	return nil
 }
@@ -118,8 +125,3 @@ func (d *EcoDeliveryDeps) warn(ctx context.Context, action, target, errMsg strin
 		})
 	}
 }
-
-var (
-	_ = eco.SellerOrder{}
-	_ = steam.ErrSevenDayHold
-)

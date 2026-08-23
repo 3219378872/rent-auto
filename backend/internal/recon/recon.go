@@ -118,8 +118,14 @@ func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.Rou
 	if err != nil {
 		return &pricing.Decision{SkipReason: "bad_strategy_params"}
 	}
-	rows, _ := p.Store.RecentQuotes(ctx, it.HashName, time.Now().Add(-30*time.Minute), params.Baseline.TopN*3)
-	quotes := ConvertQuotes(rows)
+	mq, err := p.Store.RecentMergedQuotes(ctx, it.HashName, time.Now().Add(-30*time.Minute), params.Baseline.TopN*3)
+	if err != nil {
+		return &pricing.Decision{SkipReason: "no_baseline"}
+	}
+	quotes := make([]pricing.Quote, 0, len(mq))
+	for _, m := range mq {
+		quotes = append(quotes, pricing.Quote{Short: m.Short, Long: m.Long, Deposit: m.Deposit})
+	}
 	base, hasBase := pricing.Baseline(quotes, params.Baseline, *it.V)
 	in := pricing.Input{
 		Channel: ch, HasV: true, V: *it.V,
@@ -129,24 +135,6 @@ func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.Rou
 	}
 	d := pricing.Decide(in)
 	return &d
-}
-
-// ConvertQuotes maps stored snapshot rows to engine quotes.
-func ConvertQuotes(rows []store.QuoteRow) []pricing.Quote {
-	out := make([]pricing.Quote, 0, len(rows))
-	for _, r := range rows {
-		q := pricing.Quote{}
-		switch r.Kind {
-		case "lease_short":
-			q.Short = r.Price
-		case "lease_long":
-			q.Long = r.Price
-		case "deposit":
-			q.Deposit = r.Price
-		}
-		out = append(out, q)
-	}
-	return out
 }
 
 func rentDayMin(ch domain.Channel) int {

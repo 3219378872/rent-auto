@@ -294,7 +294,20 @@ func (r *Registry) ClearZeroCD(ctx context.Context) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return c.EnableZeroCD(ctx, ids)
+	if err := c.EnableZeroCD(ctx, ids); err != nil {
+		return err
+	}
+	audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+		Action: "shelf.zero_cd_enabled", Channel: string(domain.ChannelUU),
+		Detail: map[string]any{"orders": len(ids)}})
+	return nil
+}
+
+// audit dispatches a write-operation audit entry when the hook is wired.
+func audit(ctx context.Context, e domain.AuditEntry) {
+	if AuditFn != nil {
+		AuditFn(ctx, e)
+	}
 }
 
 // SendLoginSmsCode starts the UU SMS login flow and reports the delivery mode.
@@ -317,15 +330,21 @@ func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID, logi
 	return r.SetUUToken(ctx, token)
 }
 
-// DeliverPendingRentals walks the UU to-do list and sends pending offers.
-func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent, gifts int, err error) {
+// DeliverPendingRentals walks the UU to-do list and sends pending offers,
+// auditing every confirmed send (order.offer_sent).
+func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent []string, gifts int, err error) {
 	r.mu.RLock()
 	c := r.uuClient
 	r.mu.RUnlock()
 	if c == nil {
-		return 0, 0, platform.ErrUnsupported
+		return nil, 0, platform.ErrUnsupported
 	}
-	return c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
+	sent, gifts, err = c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
+	for _, orderNo := range sent {
+		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+			Action: "order.offer_sent", Channel: string(domain.ChannelUU), Target: orderNo})
+	}
+	return sent, gifts, err
 }
 
 // AuditFn receives write-operation audit entries (wired to store by main).
@@ -346,22 +365,24 @@ func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
 	for _, so := range out.SendOffers {
 		if so.Error != "" || so.NeedsMobileConfirmation || so.NeedsEmailConfirmation {
 			logWarnDelivery(r.log, "eco send offer failed", so.OrderNum, so.Error)
-			if AuditFn != nil {
-				AuditFn(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
-					Action: "order.send_offer_failed", Channel: "eco", Target: so.OrderNum,
-					Detail: map[string]any{"error": so.Error}})
-			}
+			audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+				Action: "order.send_offer_failed", Channel: "eco", Target: so.OrderNum,
+				Detail: map[string]any{"error": so.Error}})
+			continue
 		}
+		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+			Action: "order.offer_sent", Channel: "eco", Target: so.OrderNum})
 	}
 	for _, ao := range out.AcceptOffers {
 		if ao.ErrorCode != 1 || ao.Error != "" { // ErrorCode OK=1
 			logWarnDelivery(r.log, "eco accept offer failed", ao.OrderNum, ao.Error)
-			if AuditFn != nil {
-				AuditFn(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
-					Action: "order.accept_offer_failed", Channel: "eco", Target: ao.OrderNum,
-					Detail: map[string]any{"error": ao.Error, "code": ao.ErrorCode}})
-			}
+			audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+				Action: "order.accept_offer_failed", Channel: "eco", Target: ao.OrderNum,
+				Detail: map[string]any{"error": ao.Error, "code": ao.ErrorCode}})
+			continue
 		}
+		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+			Action: "order.accepted", Channel: "eco", Target: ao.OrderNum})
 	}
 	return nil
 }

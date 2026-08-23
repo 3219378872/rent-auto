@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, Paged, InventoryRow } from '../api/client'
+import { useDebounced } from '../lib/ui'
 
 const statusBadge: Record<string, string> = {
   in_stock: 'ok', listed: '', leased: 'warn', locked: 'bad', sold: 'bad',
@@ -12,14 +13,20 @@ export default function Inventory() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [err, setErr] = useState('')
+  const searchDebounced = useDebounced(search)
 
   const load = useCallback(() => {
     const q = new URLSearchParams({ page: String(page), page_size: '50' })
     if (channel) q.set('channel', channel)
     if (status) q.set('status', status)
-    if (search) q.set('search', search)
-    api.get<Paged<InventoryRow>>(`/inventory?${q}`).then(setData).catch((e) => setErr(e.message))
-  }, [channel, status, search, page])
+    if (searchDebounced) q.set('search', searchDebounced)
+    // alive-guard: only the latest effect run may write state (no stale races)
+    let alive = true
+    api.get<Paged<InventoryRow>>(`/inventory?${q}`)
+      .then((d) => { if (alive) { setData(d); setErr('') } })
+      .catch((e) => { if (alive) setErr(e.message) })
+    return () => { alive = false }
+  }, [channel, status, searchDebounced, page])
 
   useEffect(load, [load])
 
@@ -76,7 +83,9 @@ export default function Inventory() {
       <div className="toolbar" style={{ marginTop: 12 }}>
         <button className="ghost small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
         <span className="muted">第 {page} 页</span>
-        <button className="ghost small" disabled={(data?.items.length ?? 0) < 50} onClick={() => setPage(page + 1)}>下一页</button>
+        <button className="ghost small"
+          disabled={data ? page * 50 >= data.total : true}
+          onClick={() => setPage(page + 1)}>下一页</button>
       </div>
     </div>
   )
@@ -84,10 +93,15 @@ export default function Inventory() {
 
 function CostEditor({ initial, onSave }: { initial: number; onSave: (c: number) => void }) {
   const [v, setV] = useState(initial > 0 ? String(initial) : '')
+  const n = parseFloat(v)
+  const valid = !isNaN(n) && n > 0
   return (
     <span className="row">
-      <input style={{ width: 80 }} value={v} onChange={(e) => setV(e.target.value)} placeholder="成本" />
-      <button className="small" onClick={() => { const n = parseFloat(v); if (!isNaN(n)) onSave(n) }}>存</button>
+      <input style={{ width: 80 }} value={v} onChange={(e) => setV(e.target.value)} placeholder="成本"
+        aria-label="录入成本价" />
+      <button className="small" disabled={!valid}
+        title={valid ? '' : '请输入正数金额'}
+        onClick={() => { if (valid) onSave(n) }}>存</button>
     </span>
   )
 }

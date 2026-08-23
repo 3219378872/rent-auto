@@ -17,6 +17,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/logging"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/platform/eco"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/ratelimit"
 	"github.com/3219378872/rent-auto/backend/internal/recon"
@@ -106,11 +107,8 @@ func run() error {
 		log.Warn("steam session restore", "err", err)
 	}
 	uuDeliveryFn := func(ctx context.Context) error {
-		if a, ok := registry.Get(domain.ChannelUU); ok {
-			_ = a // adapter wraps client; use registry passthrough below
-		}
 		sent, gifts, err := registry.DeliverPendingRentals(ctx)
-		log.Info("uu delivery", "sent", sent, "gifts_skipped", gifts, "err", err)
+		log.Info("uu delivery", "sent", len(sent), "gifts_skipped", gifts, "err", err)
 		return err
 	}
 	steamOffersFn := func(ctx context.Context) error {
@@ -119,21 +117,23 @@ func run() error {
 			log.Warn("steam offers", "err", err)
 		}
 		log.Info("steam offers", "accepted", accepted, "skipped_costly", skipped)
-		return nil
+		return err
 	}
 
 	channels.AuditFn = func(ctx context.Context, e domain.AuditEntry) {
 		_ = st.InsertAudit(ctx, e)
 	}
 	ecoDeps := &scheduler.EcoDeliveryDeps{
-		Eco:   registry.EcoOrderClient(),
+		Eco:   liveECOClient{r: registry},
 		Steam: steamSess,
 		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) },
 		Log:   log,
 	}
 	ecoDeliveryFn := func(ctx context.Context) error {
-		if err := ecoDeps.RunECODelivery(ctx); err != nil {
+		err := ecoDeps.RunECODelivery(ctx)
+		if err != nil {
 			log.Warn("eco delivery", "err", err)
+			return err
 		}
 		// 平台批量兜底（归还方向等），失败不阻塞主链路
 		if err := registry.EcoOneClickResolve(ctx); err != nil && err != platform.ErrUnsupported {
@@ -157,7 +157,7 @@ func run() error {
 		return nil
 	}
 
-	for _, job := range scheduler.Jobs(deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, uuDeliveryFn, steamOffersFn, ecoDeliveryFn, log) {
+	for _, job := range scheduler.Jobs(&deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), registry.ClearZeroCD, reconcileFn, uuDeliveryFn, steamOffersFn, ecoDeliveryFn, log) {
 		if err := sch.Register(job); err != nil {
 			return err
 		}
@@ -207,6 +207,46 @@ func run() error {
 }
 
 func newLimiter(rps float64) platform.Limiter { return ratelimit.New(rps) }
+
+// liveECOClient forwards ECO order calls to whatever client is currently
+// configured in the registry, so panel credential updates take effect on the
+// next delivery cycle without a restart.
+type liveECOClient struct{ r *channels.Registry }
+
+func (l liveECOClient) client() (interface {
+	SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
+	SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error)
+	Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error)
+}, error) {
+	if c := l.r.EcoOrderClient(); c != nil {
+		return c, nil
+	}
+	return nil, platform.ErrUnsupported
+}
+
+func (l liveECOClient) SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.SellerOrderList(ctx, start, end, detailsState, steamID)
+}
+
+func (l liveECOClient) SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.SendOffer(ctx, orderNum)
+}
+
+func (l liveECOClient) Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.Detail(ctx, orderNum)
+}
 
 func uuQuotesFn(r *channels.Registry) func(context.Context, int64, float64, float64) ([]pricing.Quote, error) {
 	return func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error) {

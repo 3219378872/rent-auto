@@ -166,25 +166,63 @@ func (s *Store) GetEffectiveStrategy(ctx context.Context, hash string) (*Effecti
 // ---- market quotes for baseline ----
 
 // RecentQuotes returns ranked lease quotes captured since cutoff for one hash.
-func (s *Store) RecentQuotes(ctx context.Context, hash string, since time.Time, limit int) ([]QuoteRow, error) {
+// MergedQuote is one market position (rank) carrying its latest price per kind.
+type MergedQuote struct {
+	Rank    int
+	Short   float64 // lease_short; 0 when absent
+	Long    float64 // lease_long;  0 when absent
+	Deposit float64 // deposit;     0 when absent
+}
+
+// RecentMergedQuotes returns the top `limit` ranked market positions within the
+// window, one entry per commodity rank. When overlapping capture batches exist,
+// each (rank, kind) resolves to the newest sample so batches never double-count.
+// This matches pricing-spec §2: quotes are a per-commodity ranked list where
+// "first 10 LeaseUnitPrice" means the first 10 commodities offering a short price.
+func (s *Store) RecentMergedQuotes(ctx context.Context, hash string, since time.Time, limit int) ([]MergedQuote, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT kind, rank, price FROM market_snapshots
-		 WHERE hash_name=$1 AND source='uu_market' AND captured_at >= $2
-		 ORDER BY rank ASC, captured_at DESC LIMIT $3`,
+		`SELECT kind, rank, price FROM (
+		   SELECT DISTINCT ON (rank, kind) kind, rank, price
+		   FROM market_snapshots
+		   WHERE hash_name=$1 AND source='uu_market' AND captured_at >= $2
+		   ORDER BY rank ASC, kind ASC, captured_at DESC
+		 ) t
+		 ORDER BY rank ASC LIMIT $3`,
 		hash, since, limit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("recent merged quotes: %w", err)
 	}
 	defer rows.Close()
-	var out []QuoteRow
+	byRank := map[int]*MergedQuote{}
+	var order []int
 	for rows.Next() {
 		var q QuoteRow
 		if err := rows.Scan(&q.Kind, &q.Rank, &q.Price); err != nil {
 			return nil, err
 		}
-		out = append(out, q)
+		m, ok := byRank[q.Rank]
+		if !ok {
+			m = &MergedQuote{Rank: q.Rank}
+			byRank[q.Rank] = m
+			order = append(order, q.Rank)
+		}
+		switch q.Kind {
+		case "lease_short":
+			m.Short = q.Price
+		case "lease_long":
+			m.Long = q.Price
+		case "deposit":
+			m.Deposit = q.Price
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]MergedQuote, 0, len(order))
+	for _, r := range order {
+		out = append(out, *byRank[r])
+	}
+	return out, nil
 }
 
 type QuoteRow struct {

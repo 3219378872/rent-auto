@@ -118,11 +118,11 @@ func TestECODeliveryMemoAndFailureAudit(t *testing.T) {
 	d := newTestDeps(ef, sf, spy)
 	ctx := context.Background()
 
-	_ = d.RunECODelivery(ctx) // accept 失败 → 审计；offer 记入已见集合
-	_ = d.RunECODelivery(ctx) // 同一 offer 第二轮必须被 memo 跳过
+	_ = d.RunECODelivery(ctx) // accept 失败 → 审计；不进 memo（下轮重试）
+	_ = d.RunECODelivery(ctx) // 失败的 offer 第二轮必须重试
 
-	if len(sf.attempts) != 1 {
-		t.Fatalf("accept attempted %d times, want 1 (memo)", len(sf.attempts))
+	if len(sf.attempts) != 2 {
+		t.Fatalf("accept attempted %d times, want 2 (failure must not be memoized)", len(sf.attempts))
 	}
 	if len(sf.accepted) != 0 {
 		t.Fatalf("failed accept must not count as accepted: %v", sf.accepted)
@@ -135,6 +135,17 @@ func TestECODeliveryMemoAndFailureAudit(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("failure not audited: %v", spy.actions)
+	}
+
+	// 平台恢复后：第三次成功并审计，第四次被 memo 跳过
+	sf.failOn = nil
+	_ = d.RunECODelivery(ctx)
+	if len(sf.accepted) != 1 {
+		t.Fatalf("recovered offer must deliver: %v", sf.accepted)
+	}
+	_ = d.RunECODelivery(ctx)
+	if len(sf.attempts) != 3 {
+		t.Fatalf("successful offer must be memoized: attempts=%d", len(sf.attempts))
 	}
 }
 
