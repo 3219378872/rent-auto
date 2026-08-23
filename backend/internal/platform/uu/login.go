@@ -6,9 +6,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 )
+
+// SMS code delivery modes reported by SendSignInSmsCode.
+const (
+	SmsModeDownlink = "down" // platform sent the code to the phone
+	SmsModeUplink   = "up"   // phone owner must send an SMS manually
+)
+
+// SmsCodeResult reports how the login code is delivered after SendSignInSmsCode.
+type SmsCodeResult struct {
+	Mode string // SmsModeDownlink or SmsModeUplink
+	Msg  string // platform message
+}
+
+// SmsUpConfig describes the manual SMS required by the uplink flow.
+type SmsUpConfig struct {
+	Content string
+	Number  string
+}
 
 // GetUserInfo validates the token and fills UserID/Nickname.
 func (c *Client) fetchUserInfo(ctx context.Context) error {
@@ -41,13 +60,60 @@ func (c *Client) fetchUserInfo(ctx context.Context) error {
 
 // SendLoginSmsCode requests an SMS login code for phone (+86).
 // sessionID must be reused in SmsSignIn. uk may be empty.
-func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID string) error {
+// The platform reply decides the delivery mode: a Msg containing 成功 means a
+// downstream SMS was sent; any other success Msg means the number was switched
+// to the uplink flow and GetSmsUpSignInConfig carries the manual instructions.
+func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID string) (SmsCodeResult, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
 	payload := map[string]any{"Area": 86, "Mobile": phone, "Sessionid": sessionID, "Code": ""}
-	_, err := postJSON(ctx, hc, "https://api.youpin898.com/api/user/Auth/SendSignInSmsCode", payload, nil)
-	return err
+	body, err := postJSON(ctx, hc, apiBase+"/api/user/Auth/SendSignInSmsCode", payload, generateHeaders(sessionID))
+	if err != nil {
+		return SmsCodeResult{}, err
+	}
+	env, err := decodeEnvelope(body)
+	if err != nil {
+		return SmsCodeResult{}, err
+	}
+	res := SmsCodeResult{Mode: SmsModeUplink, Msg: env.Msg}
+	if strings.Contains(env.Msg, "成功") {
+		res.Mode = SmsModeDownlink
+	}
+	if env.Code != codeOK {
+		return res, checkEnv(env, "/api/user/Auth/SendSignInSmsCode")
+	}
+	return res, nil
+}
+
+// GetSmsUpSignInConfig fetches the manual-SMS instructions for the uplink
+// login flow: the user must send Content to Number from the login phone,
+// then complete sign-in with an empty code (SmsUpSignIn path).
+func GetSmsUpSignInConfig(ctx context.Context, hc *http.Client) (SmsUpConfig, error) {
+	if hc == nil {
+		hc = &http.Client{Timeout: defaultHTTPTimeout}
+	}
+	body, err := getJSON(ctx, hc, apiBase+"/api/user/Auth/GetSmsUpSignInConfig", generateHeaders(RandomString(16)))
+	if err != nil {
+		return SmsUpConfig{}, err
+	}
+	env, err := decodeEnvelope(body)
+	if err != nil {
+		return SmsUpConfig{}, err
+	}
+	if err := checkEnv(env, "/api/user/Auth/GetSmsUpSignInConfig"); err != nil {
+		return SmsUpConfig{}, err
+	}
+	var d struct {
+		SmsUpContent string `json:"SmsUpContent"`
+		SmsUpNumber  string `json:"SmsUpNumber"`
+	}
+	if len(env.Data) > 0 {
+		if err := json.Unmarshal(env.Data, &d); err != nil {
+			return SmsUpConfig{}, fmt.Errorf("uu: smsup config payload: %w", err)
+		}
+	}
+	return SmsUpConfig{Content: d.SmsUpContent, Number: d.SmsUpNumber}, nil
 }
 
 // SmsSignIn exchanges the SMS code for a token. Empty code falls back to the
@@ -64,7 +130,7 @@ func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID stri
 		"Area": 86, "Code": code, "DeviceName": sessionID,
 		"Sessionid": sessionID, "Mobile": phone,
 	}
-	body, err := postJSON(ctx, hc, url, payload, nil)
+	body, err := postJSON(ctx, hc, url, payload, generateHeaders(sessionID))
 	if err != nil {
 		return "", err
 	}

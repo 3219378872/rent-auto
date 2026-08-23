@@ -15,6 +15,16 @@
 ## 认证
 
 - Token 获取：手机号 → `send_login_sms_code`(可能走 SmsUp 短信上行兜底) → `sms_sign_in` → `Data.Token`
+- **短信上行分支（实测 2026-08-23）**：`SendSignInSmsCode` 返回 `Code=0` 但 `Msg` 不含
+  "成功"时，平台**不下发**验证码短信，该手机号被切换为上行模式；此时须调
+  `GET /api/user/Auth/GetSmsUpSignInConfig` 获取 `Data.SmsUpContent`/`Data.SmsUpNumber`，
+  由用户从登录手机号手动发送该短信，随后以空 Code 调 `SmsSignIn`（即 `SmsUpSignIn` 端点）。
+  未发送即调 `SmsUpSignIn` 会得到 Msg「暂未收到您的短信，请重新点击一键发送后，
+  再次点击"我已发送"」。判定依据为 Msg 文案匹配，脆弱点：平台改文案需同步
+  `uu.SendLoginSmsCode` 的判定常量
+- 认证端点（SendSignInSmsCode/SmsSignIn/GetSmsUpSignInConfig）虽匿名可调，但必须携带
+  generate_headers 全套设备头（UA/AppVersion/DeviceToken 等），否则有风控拦截风险；
+  DeviceToken 与 Sessionid 同源（参考件行为）
 - Token 长期有效但可被踢；失效表现：调用抛 KeyError/未登录码 → 面板重新短信登录
 - `get_uu_uk`：匿名可取，登录头需带 uk（风控字段）
 
@@ -53,4 +63,8 @@
     Go 版翻译为 ErrUKExpired 由调度器决定退避策略）
 11. deviceW2 换取 uk 的流程已实现（GetUUUK）；当前版本每次请求随机 uk 即可通过，
     uk_verify 留作风控升级后的开关
+12. 短信登录模式判定：`SendSignInSmsCode` 响应 `Msg` 含"成功"→ 下行（收码），
+    否则 → 上行（用户自发短信，配合 GetSmsUpSignInConfig）；实现见
+    `uu.SendLoginSmsCode`/`uu.GetSmsUpSignInConfig`，API `POST /channels/uu/sms`
+    一次性返回 `{session_id, mode, msg, sms_up_content?, sms_up_number?}`
 

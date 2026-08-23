@@ -249,9 +249,14 @@ func (r *Registry) ClearZeroCD(ctx context.Context) error {
 	return c.EnableZeroCD(ctx, ids)
 }
 
-// SendLoginSmsCode starts the UU SMS login flow.
-func (r *Registry) SendLoginSmsCode(ctx context.Context, phone, sessionID string) error {
+// SendLoginSmsCode starts the UU SMS login flow and reports the delivery mode.
+func (r *Registry) SendLoginSmsCode(ctx context.Context, phone, sessionID string) (uu.SmsCodeResult, error) {
 	return uu.SendLoginSmsCode(ctx, nil, phone, sessionID)
+}
+
+// GetSmsUpSignInConfig exposes the manual-SMS instructions for the uplink flow.
+func (r *Registry) GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, error) {
+	return uu.GetSmsUpSignInConfig(ctx, nil)
 }
 
 // VerifyUUSms completes the SMS login and stores the token.

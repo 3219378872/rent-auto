@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/platform/uu"
 )
 
 type JobStatus struct {
@@ -45,7 +46,11 @@ type uuSmsRequest struct {
 }
 
 type uuSmsResponse struct {
-	SessionID string `json:"session_id"`
+	SessionID    string `json:"session_id"`
+	Mode         string `json:"mode"`
+	Msg          string `json:"msg,omitempty"`
+	SmsUpContent string `json:"sms_up_content,omitempty"`
+	SmsUpNumber  string `json:"sms_up_number,omitempty"`
 }
 
 type uuVerifyRequest struct {
@@ -75,11 +80,22 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session := domain.RandomSessionID()
-	if err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session); err != nil {
+	res, err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session)
+	if err != nil {
 		writeErr(w, http.StatusBadGateway, "sms_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, uuSmsResponse{SessionID: session})
+	s.audit(r, "channel.uu.sms_sent", map[string]any{"mode": res.Mode, "msg": res.Msg})
+	out := uuSmsResponse{SessionID: session, Mode: res.Mode, Msg: res.Msg}
+	if res.Mode == uu.SmsModeUplink {
+		cfg, err := s.Channels.GetSmsUpSignInConfig(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "sms_up_config_failed", err.Error())
+			return
+		}
+		out.SmsUpContent, out.SmsUpNumber = cfg.Content, cfg.Number
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleUUSmsVerify(w http.ResponseWriter, r *http.Request) {

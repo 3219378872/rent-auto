@@ -10,6 +10,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/platform/uu"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
@@ -31,7 +32,8 @@ type Server struct {
 
 type ChannelsService interface {
 	Health(ctx context.Context) map[string]string
-	SendLoginSmsCode(ctx context.Context, phone, sessionID string) error
+	SendLoginSmsCode(ctx context.Context, phone, sessionID string) (uu.SmsCodeResult, error)
+	GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, error)
 	VerifyUUSms(ctx context.Context, phone, code, sessionID string) error
 	SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error
 }

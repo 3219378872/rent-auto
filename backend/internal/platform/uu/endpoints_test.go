@@ -3,6 +3,7 @@ package uu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -192,7 +193,7 @@ func TestSMSLoginFlow(t *testing.T) {
 			if req["Mobile"] != "13800000000" || req["Sessionid"] != "sess" {
 				t.Errorf("sms payload: %v", req)
 			}
-			_, _ = w.Write([]byte(`{"Code":0,"Msg":"sent"}`))
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"发送成功"}`))
 		case "/api/user/Auth/SmsSignIn":
 			_, _ = w.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"Token":"tok123"}}`))
 		case "/api/user/Auth/SmsUpSignIn":
@@ -205,8 +206,9 @@ func TestSMSLoginFlow(t *testing.T) {
 	hc := mockHTTP(srv.URL)
 	ctx := context.Background()
 
-	if err := SendLoginSmsCode(ctx, hc, "13800000000", "sess"); err != nil {
-		t.Fatal(err)
+	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	if err != nil || res.Mode != SmsModeDownlink {
+		t.Fatalf("mode=%q err=%v", res.Mode, err)
 	}
 	tok, err := SmsSignIn(ctx, hc, "13800000000", "123456", "sess")
 	if err != nil || tok != "tok123" {
@@ -215,5 +217,68 @@ func TestSMSLoginFlow(t *testing.T) {
 	tok, err = SmsSignIn(ctx, hc, "13800000000", "", "sess")
 	if err != nil || tok != "tokUp" {
 		t.Fatalf("smsup token=%q err=%v", tok, err)
+	}
+}
+
+func TestSMSUplinkFlow(t *testing.T) {
+	sendMsg := ""
+	var gotHeaders http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/Auth/SendSignInSmsCode":
+			gotHeaders = r.Header.Clone()
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"` + sendMsg + `"}`))
+		case "/api/user/Auth/GetSmsUpSignInConfig":
+			if r.Method != http.MethodGet {
+				t.Errorf("upconfig method = %s", r.Method)
+			}
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"SmsUpContent":"YZ#123456","SmsUpNumber":"106900001"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	hc := mockHTTP(srv.URL)
+	ctx := context.Background()
+
+	sendMsg = "验证码发送成功"
+	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	if err != nil || res.Mode != SmsModeDownlink {
+		t.Fatalf("down mode=%q err=%v", res.Mode, err)
+	}
+	if gotHeaders.Get("User-Agent") != "okhttp/3.14.9" ||
+		gotHeaders.Get("App-Version") == "" ||
+		gotHeaders.Get("DeviceToken") != "sess" {
+		t.Fatalf("auth headers missing: %v", gotHeaders)
+	}
+
+	sendMsg = "暂未收到您的短信，请重新点击一键发送后，再次点击“我已发送”"
+	res, err = SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	if err != nil || res.Mode != SmsModeUplink {
+		t.Fatalf("up mode=%q err=%v", res.Mode, err)
+	}
+
+	cfg, err := GetSmsUpSignInConfig(ctx, hc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Content != "YZ#123456" || cfg.Number != "106900001" {
+		t.Fatalf("upconfig: %+v", cfg)
+	}
+}
+
+func TestSMSLoginPlatformError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/user/Auth/SendSignInSmsCode" {
+			_, _ = w.Write([]byte(`{"Code":84104,"Msg":"risk"}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess")
+	if !errors.Is(err, platform.ErrPlatformBlocked) {
+		t.Fatalf("want ErrPlatformBlocked, got %v (res=%+v)", err, res)
 	}
 }

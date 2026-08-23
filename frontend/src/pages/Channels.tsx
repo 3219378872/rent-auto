@@ -3,6 +3,14 @@ import { api } from '../api/client'
 
 type Health = Record<string, string>
 
+type SmsResp = {
+  session_id: string
+  mode: 'down' | 'up'
+  msg?: string
+  sms_up_content?: string
+  sms_up_number?: string
+}
+
 export default function Channels() {
   const [health, setHealth] = useState<Health | null>(null)
   const [err, setErr] = useState('')
@@ -11,6 +19,7 @@ export default function Channels() {
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
   const [session, setSession] = useState('')
+  const [sms, setSms] = useState<SmsResp | null>(null)
   const [partnerId, setPartnerId] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [steamId, setSteamId] = useState('')
@@ -23,9 +32,10 @@ export default function Channels() {
   const sendSms = async () => {
     setErr(''); setMsg('')
     try {
-      const r = await api.post<{ session_id: string }>('/channels/uu/sms', { phone })
+      const r = await api.post<SmsResp>('/channels/uu/sms', { phone })
       setSession(r.session_id)
-      setMsg('验证码已发送，请查收短信')
+      setSms(r)
+      setMsg(r.mode === 'up' ? '' : '验证码已发送，请查收短信')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -84,6 +94,13 @@ export default function Channels() {
             </>
           )}
         </div>
+        {sms?.mode === 'up' && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            平台未下发验证码，该手机号需短信上行验证：请用本机编辑短信{' '}
+            <b>{sms.sms_up_content || '（获取失败，请重试发送）'}</b> 发送至 <b>{sms.sms_up_number || '?'}</b>
+            ，发送完成后验证码留空，直接点击登录
+          </div>
+        )}
         {session && <div className="muted">session: {session.slice(0, 8)}…</div>}
       </div>
 

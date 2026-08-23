@@ -70,27 +70,34 @@ func (c *Client) UserID() int64       { return c.userID }
 func (c *Client) Nickname() string    { return c.nick }
 func (c *Client) DeviceToken() string { return c.device }
 
-func (c *Client) headers(uk string) http.Header {
+// generateHeaders builds the baseline device headers every platform endpoint
+// expects, including the anonymous auth endpoints (SMS login flow).
+func generateHeaders(device string) http.Header {
 	h := http.Header{}
-	h.Set("uk", uk)
-	h.Set("authorization", "Bearer "+c.token)
 	h.Set("content-type", "application/json; charset=utf-8")
 	h.Set("user-agent", "okhttp/3.14.9")
 	h.Set("App-Version", "5.28.3")
 	h.Set("AppType", "4")
 	h.Set("deviceType", "1")
 	h.Set("package-type", "uuyp")
-	h.Set("DeviceToken", c.device)
-	h.Set("DeviceId", c.device)
+	h.Set("DeviceToken", device)
+	h.Set("DeviceId", device)
 	h.Set("platform", "android")
 	h.Set("accept-encoding", "gzip")
 	h.Set("Gameid", "730")
 	devInfo, _ := json.Marshal(map[string]any{
-		"deviceId": c.device, "deviceType": c.device, "hasSteamApp": 1,
+		"deviceId": device, "deviceType": device, "hasSteamApp": 1,
 		"requestTag":  strings.ToUpper(RandomString(32)),
 		"systemName ": "Android", "systemVersion": "15",
 	})
 	h.Set("Device-Info", string(devInfo))
+	return h
+}
+
+func (c *Client) headers(uk string) http.Header {
+	h := generateHeaders(c.device)
+	h.Set("uk", uk)
+	h.Set("authorization", "Bearer "+c.token)
 	return h
 }
 
