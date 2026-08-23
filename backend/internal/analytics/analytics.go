@@ -119,6 +119,9 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 	for _, c := range incomeByCh {
 		total += c.Income
 	}
+	if incomeByCh == nil {
+		incomeByCh = []store.ChannelTotal{}
+	}
 	d.Income.ByChannel = incomeByCh
 	d.Income.Total = Round2(total)
 
@@ -150,6 +153,9 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 	if err != nil {
 		return nil, err
 	}
+	if cats == nil {
+		cats = []store.CategoryYield{}
+	}
 	for i := range cats {
 		cats[i].Cost = Round2(cats[i].Cost)
 		cats[i].Income = Round2(cats[i].Income)
@@ -160,6 +166,9 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 	series, err := st.IncomeSeries(ctx, 30)
 	if err != nil {
 		return nil, err
+	}
+	if series == nil {
+		series = []store.DailyPoint{}
 	}
 	d.Series30d = series
 

@@ -61,8 +61,8 @@ export default function Dashboard() {
 
       <div className="section">
         <h3 style={{ marginTop: 0 }}>近 30 天收益</h3>
-        <Sparkline points={data.series_30d.map((p) => p.income)} />
-        <div className="muted">{data.series_30d[0]?.date ?? '—'} → {data.series_30d.at(-1)?.date ?? '—'}</div>
+        <Sparkline points={(data.series_30d ?? []).map((p) => p.income)} />
+        <div className="muted">{(data.series_30d ?? [])[0]?.date ?? '—'} → {(data.series_30d ?? []).at(-1)?.date ?? '—'}</div>
       </div>
 
       <div className="section">
@@ -70,7 +70,7 @@ export default function Dashboard() {
         <table className="grid">
           <thead><tr><th>渠道</th><th>收入</th><th>订单数</th></tr></thead>
           <tbody>
-            {data.income.by_channel.map((c) => (
+            {(data.income.by_channel ?? []).map((c) => (
               <tr key={c.channel}><td>{c.channel}</td><td>{fmtMoney(c.income)}</td><td>{c.orders}</td></tr>
             ))}
           </tbody>
@@ -82,7 +82,7 @@ export default function Dashboard() {
         <table className="grid">
           <thead><tr><th>品类</th><th>成本</th><th>收入</th><th>收益率</th></tr></thead>
           <tbody>
-            {data.categories.map((c) => (
+            {(data.categories ?? []).map((c) => (
               <tr key={c.category}>
                 <td>{c.category}</td><td>{fmtMoney(c.cost)}</td>
                 <td>{fmtMoney(c.income)}</td><td>{fmtPct(c.yield)}</td>
