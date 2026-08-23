@@ -251,8 +251,9 @@ func (r *Registry) ClearZeroCD(ctx context.Context) error {
 }
 
 // SendLoginSmsCode starts the UU SMS login flow and reports the delivery mode.
-func (r *Registry) SendLoginSmsCode(ctx context.Context, phone, sessionID string) (uu.SmsCodeResult, error) {
-	return uu.SendLoginSmsCode(ctx, nil, phone, sessionID)
+// captcha is non-nil when retrying after a SmsModeCaptcha result.
+func (r *Registry) SendLoginSmsCode(ctx context.Context, phone, sessionID string, captcha *uu.CaptchaResult) (uu.SmsCodeResult, error) {
+	return uu.SendLoginSmsCode(ctx, nil, phone, sessionID, captcha)
 }
 
 // GetSmsUpSignInConfig exposes the manual-SMS instructions for the uplink flow.
@@ -261,8 +262,8 @@ func (r *Registry) GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, er
 }
 
 // VerifyUUSms completes the SMS login and stores the token.
-func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID string) error {
-	token, err := uu.SmsSignIn(ctx, nil, phone, code, sessionID)
+func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) error {
+	token, err := uu.SmsSignIn(ctx, nil, phone, code, sessionID, loginReqTicket)
 	if err != nil {
 		return err
 	}

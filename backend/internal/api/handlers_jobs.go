@@ -42,7 +42,17 @@ func (s *Server) handleJobTrigger(w http.ResponseWriter, r *http.Request) {
 // ---- channels ----
 
 type uuSmsRequest struct {
-	Phone string `json:"phone"`
+	Phone     string          `json:"phone"`
+	SessionID string          `json:"session_id,omitempty"`
+	Captcha   *uuCaptchaInput `json:"captcha,omitempty"`
+}
+
+// uuCaptchaInput is the panel frontend's Tencent TCaptcha outcome, produced by
+// the user completing the slider manually.
+type uuCaptchaInput struct {
+	Ticket    string `json:"ticket"`
+	Randstr   string `json:"randstr"`
+	ReqTicket string `json:"req_ticket"`
 }
 
 type uuSmsResponse struct {
@@ -51,12 +61,15 @@ type uuSmsResponse struct {
 	Msg          string `json:"msg,omitempty"`
 	SmsUpContent string `json:"sms_up_content,omitempty"`
 	SmsUpNumber  string `json:"sms_up_number,omitempty"`
+	ReqTicket    string `json:"req_ticket,omitempty"` // captcha mode: echo back on retry
+	Secs         int    `json:"secs,omitempty"`       // server-side cooldown seconds
 }
 
 type uuVerifyRequest struct {
-	Phone     string `json:"phone"`
-	Code      string `json:"code"`
-	SessionID string `json:"session_id"`
+	Phone          string `json:"phone"`
+	Code           string `json:"code"`
+	SessionID      string `json:"session_id"`
+	LoginReqTicket string `json:"login_req_ticket,omitempty"`
 }
 
 type ecoCredsRequest struct {
@@ -111,15 +124,28 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "phone required")
 		return
 	}
-	session := domain.RandomSessionID()
-	res, err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session)
+	session := req.SessionID
+	if session == "" {
+		session = domain.RandomSessionID()
+	}
+	var cv *uu.CaptchaResult
+	if req.Captcha != nil && req.Captcha.Ticket != "" {
+		cv = &uu.CaptchaResult{
+			Ticket: req.Captcha.Ticket, Randstr: req.Captcha.Randstr, ReqTicket: req.Captcha.ReqTicket,
+		}
+	}
+	res, err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session, cv)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "sms_failed", err.Error())
 		return
 	}
 	s.audit(r, "channel.uu.sms_sent", map[string]any{"mode": res.Mode, "msg": res.Msg})
-	out := uuSmsResponse{SessionID: session, Mode: res.Mode, Msg: res.Msg}
-	if res.Mode == uu.SmsModeUplink {
+	out := uuSmsResponse{SessionID: session, Mode: res.Mode, Msg: res.Msg,
+		ReqTicket: res.ReqTicket, Secs: res.Secs}
+	switch res.Mode {
+	case uu.SmsModeCaptcha:
+		s.audit(r, "channel.uu.captcha_required", map[string]any{"msg": res.Msg})
+	case uu.SmsModeUplink:
 		cfg, err := s.Channels.GetSmsUpSignInConfig(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, "sms_up_config_failed", err.Error())
@@ -136,7 +162,7 @@ func (s *Server) handleUUSmsVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid payload")
 		return
 	}
-	if err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID); err != nil {
+	if err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID, req.LoginReqTicket); err != nil {
 		s.audit(r, "channel.uu.login_failed", map[string]any{"error": err.Error()})
 		// 400, not 401: this is an upstream code rejection, NOT a panel-session
 		// expiry — the frontend force-logouts on 401.

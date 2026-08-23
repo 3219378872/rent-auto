@@ -38,9 +38,9 @@ type SteamService interface {
 
 type ChannelsService interface {
 	Health(ctx context.Context) map[string]string
-	SendLoginSmsCode(ctx context.Context, phone, sessionID string) (uu.SmsCodeResult, error)
+	SendLoginSmsCode(ctx context.Context, phone, sessionID string, captcha *uu.CaptchaResult) (uu.SmsCodeResult, error)
 	GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, error)
-	VerifyUUSms(ctx context.Context, phone, code, sessionID string) error
+	VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) error
 	SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error
 }
 

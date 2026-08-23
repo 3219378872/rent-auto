@@ -22,9 +22,25 @@
   未发送即调 `SmsUpSignIn` 会得到 Msg「暂未收到您的短信，请重新点击一键发送后，
   再次点击"我已发送"」。判定依据为 Msg 文案匹配，脆弱点：平台改文案需同步
   `uu.SendLoginSmsCode` 的判定常量
-- **图形校验风控（实测 2026-08-23）**：高频重试后 `SendSignInSmsCode` 可能返回
-  `Code=0, Msg="需进行图形校验"` ——既非下行也非上行，而是要求滑块/图形验证码；
-  Go 实现对此直接报错（含原始 Msg），不得归入 up 模式误导用户
+- **图形校验风控（实测 2026-08-23，官网 PC 网关 HAR 全量抓包）**：高频重试后
+  发送验证码被拦，要求人工通过腾讯云天御 TCaptcha。完整协议：
+  1. 首次 sendSmsCode → `{code:1110205, data:{secs:30, behaviorVerifyReqTicket}}`
+     （30s 冷却 + 一次性关联票据）
+  2. 页面加载 `turing.captcha.qcloud.com/TCaptcha.js`，
+     CaptchaAppID=**191004049**，用户手动完成点选/滑块 → 回调 `{ticket, randstr}`
+  3. 重发时请求体追加
+     `behaviorVerifyResult:{randstr, ticket, reqTicket}`（reqTicket=第1步票据原样带回）
+     → `{code:0, msg:发送成功, data:{secs:60, loginReqTicket}}`
+  4. 登录调用疑似需携带 loginReqTicket（第4步行为待真机确认）
+  - 该票据链与 sessionId 绑定：重发必须复用首次的 sessionId
+  - Go 实现：`SendLoginSmsCode(..., *CaptchaResult)` 被拦时返回
+    `Mode="captcha"`+ReqTicket/Secs（不报错）；带票重试 payload 键为
+    `behaviorVerifyResult`；成功响应解析 LoginReqTicket 并经 SmsSignIn 透传。
+    面板前端内嵌 TCaptcha SDK 人工完成后自动重试（ADR-0002），服务端绝不合成票据
+  - **App 网关待校订项**（本客户端走 api.youpin898.com AES 加密网关，抓包来自
+    pc-api 明文网关）：①被拦响应 Data 是否含 BehaviorVerifyReqTicket；
+    ②payload 键大小写（camelCase vs PascalCase，改动集中在 SendLoginSmsCode）；
+    ③SmsSignIn 是否必须 loginReqTicket；④TCaptcha aid 是否配置域名白名单
 - 认证端点（SendSignInSmsCode/SmsSignIn/GetSmsUpSignInConfig）虽匿名可调，但必须携带
   generate_headers 全套设备头（UA/AppVersion/DeviceToken 等），否则有风控拦截风险；
   DeviceToken 与 Sessionid 同源（参考件行为）

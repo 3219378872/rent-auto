@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { solveCaptcha, UU_CAPTCHA_APP_ID } from '../lib/tcaptcha'
 
 type Health = Record<string, string>
 
 type SmsResp = {
   session_id: string
-  mode: 'down' | 'up'
+  mode: 'down' | 'up' | 'captcha'
   msg?: string
   sms_up_content?: string
   sms_up_number?: string
+  req_ticket?: string
+  secs?: number
+  login_req_ticket?: string
 }
 
 export default function Channels() {
@@ -20,6 +24,8 @@ export default function Channels() {
   const [code, setCode] = useState('')
   const [session, setSession] = useState('')
   const [sms, setSms] = useState<SmsResp | null>(null)
+  const [loginTicket, setLoginTicket] = useState('')
+  const [cooldown, setCooldown] = useState(0)
   const [partnerId, setPartnerId] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [steamId, setSteamId] = useState('')
@@ -33,12 +39,36 @@ export default function Channels() {
   }, [])
   useEffect(load, [load])
 
-  const sendSms = async () => {
+  useEffect(() => {
+    if (cooldown <= 0) return undefined
+    const t = setTimeout(() => setCooldown((s) => s - 1), 1000)
+    return () => clearTimeout(t)
+  }, [cooldown])
+
+  const sendSms = async (captcha?: { ticket: string; randstr: string; req_ticket: string }) => {
     setErr(''); setMsg('')
     try {
-      const r = await api.post<SmsResp>('/channels/uu/sms', { phone })
+      const body: Record<string, unknown> = { phone }
+      if (session) body.session_id = session
+      if (captcha) body.captcha = captcha
+      const r = await api.post<SmsResp>('/channels/uu/sms', body)
       setSession(r.session_id)
+      if (r.secs && r.secs > 0) setCooldown(r.secs)
+      if (r.mode === 'captcha') {
+        setSms(null)
+        setMsg('平台风控要求图形验证，请在弹窗中手动完成')
+        try {
+          const c = await solveCaptcha(UU_CAPTCHA_APP_ID)
+          setMsg('图形验证通过，正在重新发送短信…')
+          await sendSms({ ticket: c.ticket, randstr: c.randstr, req_ticket: r.req_ticket || '' })
+        } catch (e2) {
+          setMsg('')
+          setErr(e2 instanceof Error ? e2.message : String(e2))
+        }
+        return
+      }
       setSms(r)
+      if (r.login_req_ticket) setLoginTicket(r.login_req_ticket)
       setMsg(r.mode === 'up' ? '' : '验证码已发送，请查收短信')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -48,7 +78,9 @@ export default function Channels() {
   const verifySms = async () => {
     setErr(''); setMsg('')
     try {
-      await api.post('/channels/uu/sms-verify', { phone, code, session_id: session })
+      await api.post('/channels/uu/sms-verify', {
+        phone, code, session_id: session, login_req_ticket: loginTicket || undefined,
+      })
       setMsg('UU 登录成功，token 已入库')
       load()
     } catch (e) {
@@ -105,7 +137,9 @@ export default function Channels() {
         <h3 style={{ marginTop: 0 }}>悠悠有品 · 短信登录</h3>
         <div className="toolbar">
           <input placeholder="+86 手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <button onClick={sendSms} disabled={!phone}>发送验证码</button>
+          <button onClick={() => sendSms()} disabled={!phone || cooldown > 0}>
+            {cooldown > 0 ? `发送验证码(${cooldown}s)` : '发送验证码'}
+          </button>
           {session && (
             <>
               <input placeholder="6位验证码（留空=短信上行）" value={code} onChange={(e) => setCode(e.target.value)} />
@@ -113,6 +147,12 @@ export default function Channels() {
             </>
           )}
         </div>
+        {sms?.mode === 'captcha' && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            平台风控要求图形验证。若弹窗未出现或加载失败，请到 youpin898.com
+            官网登录页完成一次图形验证后回来重试。
+          </div>
+        )}
         {sms?.mode === 'up' && (
           <div className="muted" style={{ marginTop: 8 }}>
             平台未下发验证码，该手机号需短信上行验证：请用本机编辑短信{' '}

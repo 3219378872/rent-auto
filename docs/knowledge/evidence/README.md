@@ -16,6 +16,7 @@
 | M7 统计分析 | [m7-analytics.md](m7-analytics.md) | 年化公式/记账幂等/dashboard 数值断言，83.0% |
 | M8 前端 | [m8-frontend.md](m8-frontend.md) | tsc/eslint/vitest/build 四绿 |
 | M9 发货+Steam | [m9-auto-delivery.md](m9-auto-delivery.md) | guard 向量交叉验证+protobuf 黄金+全链路 mock，74% |
+| 2026-08-23 UU 图形校验 | [2026-08-23-uu-captcha.md](2026-08-23-uu-captcha.md) | HAR 协议基线+mock 三模式覆盖；4 项 App 网关待真机校订 |
 
 ## 事故复盘
 

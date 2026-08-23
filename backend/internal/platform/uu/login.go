@@ -13,14 +13,27 @@ import (
 
 // SMS code delivery modes reported by SendSignInSmsCode.
 const (
-	SmsModeDownlink = "down" // platform sent the code to the phone
-	SmsModeUplink   = "up"   // phone owner must send an SMS manually
+	SmsModeDownlink = "down"    // platform sent the code to the phone
+	SmsModeUplink   = "up"      // phone owner must send an SMS manually
+	SmsModeCaptcha  = "captcha" // risk control demands a manual slider/click captcha
 )
 
 // SmsCodeResult reports how the login code is delivered after SendSignInSmsCode.
 type SmsCodeResult struct {
-	Mode string // SmsModeDownlink or SmsModeUplink
-	Msg  string // platform message
+	Mode           string // SmsModeDownlink, SmsModeUplink or SmsModeCaptcha
+	Msg            string // platform message
+	ReqTicket      string // captcha mode: correlation ticket issued by the blocked reply
+	Secs           int    // cooldown seconds before the next attempt (0 = unknown)
+	LoginReqTicket string // success: correlation ticket for the subsequent sign-in call
+}
+
+// CaptchaResult carries the Tencent TCaptcha outcome used to retry a
+// captcha-blocked SendLoginSmsCode. Produced by the panel frontend after the
+// user completes the slider manually; never synthesized server-side.
+type CaptchaResult struct {
+	Ticket    string
+	Randstr   string
+	ReqTicket string
 }
 
 // SmsUpConfig describes the manual SMS required by the uplink flow.
@@ -59,15 +72,25 @@ func (c *Client) fetchUserInfo(ctx context.Context) error {
 // ---- SMS login flow (panel-driven; no interactive stdin) ----
 
 // SendLoginSmsCode requests an SMS login code for phone (+86).
-// sessionID must be reused in SmsSignIn. uk may be empty.
-// The platform reply decides the delivery mode: a Msg containing 成功 means a
-// downstream SMS was sent; any other success Msg means the number was switched
-// to the uplink flow and GetSmsUpSignInConfig carries the manual instructions.
-func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID string) (SmsCodeResult, error) {
+// sessionID must be reused in SmsSignIn and across captcha retries. uk may be
+// empty. The platform reply decides the delivery mode: a Msg containing 成功
+// means a downstream SMS was sent; any other success Msg means the number was
+// switched to the uplink flow and GetSmsUpSignInConfig carries the manual
+// instructions. A 需进行图形校验 reply yields Mode=SmsModeCaptcha (no error)
+// together with ReqTicket/Secs — retry with a *CaptchaResult solved by the
+// panel frontend (Tencent TCaptcha aid 191004049), never server-side.
+func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID string, captcha *CaptchaResult) (SmsCodeResult, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
 	payload := map[string]any{"Area": 86, "Mobile": phone, "Sessionid": sessionID, "Code": ""}
+	if captcha != nil {
+		payload["behaviorVerifyResult"] = map[string]string{
+			"randstr":   captcha.Randstr,
+			"ticket":    captcha.Ticket,
+			"reqTicket": captcha.ReqTicket,
+		}
+	}
 	body, err := postJSON(ctx, hc, apiBase+"/api/user/Auth/SendSignInSmsCode", payload, generateHeaders(sessionID))
 	if err != nil {
 		return SmsCodeResult{}, err
@@ -81,13 +104,36 @@ func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID str
 	case strings.Contains(env.Msg, "成功"):
 		res.Mode = SmsModeDownlink
 	case strings.Contains(env.Msg, "图形校验"), strings.Contains(env.Msg, "滑块"):
-		// Risk control demands a captcha — not the uplink flow; surface it.
-		return SmsCodeResult{Mode: "", Msg: env.Msg}, fmt.Errorf("uu: send sms code blocked by risk control: %s", env.Msg)
+		res.Mode = SmsModeCaptcha
+		res.ReqTicket, res.Secs = parseVerifyData(env.Data)
+		return res, nil
 	}
 	if env.Code != codeOK {
 		return res, checkEnv(env, "/api/user/Auth/SendSignInSmsCode")
 	}
+	if res.Mode == SmsModeDownlink {
+		res.LoginReqTicket, res.Secs = parseVerifyData(env.Data)
+	}
 	return res, nil
+}
+
+// parseVerifyData extracts the correlation ticket and cooldown seconds from a
+// SendSignInSmsCode Data payload. Field casing differs between the PC web
+// gateway (camelCase, captured 2026-08-23) and the app gateway (unverified).
+func parseVerifyData(data json.RawMessage) (ticket string, secs int) {
+	if len(data) == 0 {
+		return "", 0
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return "", 0
+	}
+	ticket = rawString(m, "BehaviorVerifyReqTicket", "behaviorVerifyReqTicket", "LoginReqTicket", "loginReqTicket")
+	if ticket == "" {
+		ticket = rawString(m, "ReqTicket", "reqTicket")
+	}
+	secs, _ = rawInt(m, "Secs", "secs")
+	return ticket, secs
 }
 
 // GetSmsUpSignInConfig fetches the manual-SMS instructions for the uplink
@@ -122,7 +168,9 @@ func GetSmsUpSignInConfig(ctx context.Context, hc *http.Client) (SmsUpConfig, er
 
 // SmsSignIn exchanges the SMS code for a token. Empty code falls back to the
 // SmsUp (SMS uplink) sign-in path used when the platform requires manual SMS.
-func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID string) (string, error) {
+// loginReqTicket carries the correlation ticket issued by a successful
+// SendLoginSmsCode; pass "" when unknown.
+func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID, loginReqTicket string) (string, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
@@ -133,6 +181,9 @@ func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID stri
 	payload := map[string]any{
 		"Area": 86, "Code": code, "DeviceName": sessionID,
 		"Sessionid": sessionID, "Mobile": phone,
+	}
+	if loginReqTicket != "" {
+		payload["loginReqTicket"] = loginReqTicket
 	}
 	body, err := postJSON(ctx, hc, url, payload, generateHeaders(sessionID))
 	if err != nil {

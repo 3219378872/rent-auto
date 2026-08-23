@@ -195,10 +195,20 @@ func TestSMSLoginFlow(t *testing.T) {
 			if req["Mobile"] != "13800000000" || req["Sessionid"] != "sess" {
 				t.Errorf("sms payload: %v", req)
 			}
-			_, _ = w.Write([]byte(`{"Code":0,"Msg":"发送成功"}`))
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"发送成功","Data":{"loginReqTicket":"lr-7","secs":60}}`))
 		case "/api/user/Auth/SmsSignIn":
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req["loginReqTicket"] != "lr-7" {
+				t.Errorf("signin payload missing loginReqTicket: %v", req)
+			}
 			_, _ = w.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"Token":"tok123"}}`))
 		case "/api/user/Auth/SmsUpSignIn":
+			var up map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&up)
+			if up["loginReqTicket"] != nil {
+				t.Errorf("smsup payload must omit empty loginReqTicket: %v", up)
+			}
 			_, _ = w.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"Token":"tokUp"}}`))
 		default:
 			w.WriteHeader(404)
@@ -208,15 +218,18 @@ func TestSMSLoginFlow(t *testing.T) {
 	hc := mockHTTP(srv.URL)
 	ctx := context.Background()
 
-	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess", nil)
 	if err != nil || res.Mode != SmsModeDownlink {
 		t.Fatalf("mode=%q err=%v", res.Mode, err)
 	}
-	tok, err := SmsSignIn(ctx, hc, "13800000000", "123456", "sess")
+	if res.LoginReqTicket != "lr-7" || res.Secs != 60 {
+		t.Fatalf("verify data parse: %+v", res)
+	}
+	tok, err := SmsSignIn(ctx, hc, "13800000000", "123456", "sess", res.LoginReqTicket)
 	if err != nil || tok != "tok123" {
 		t.Fatalf("token=%q err=%v", tok, err)
 	}
-	tok, err = SmsSignIn(ctx, hc, "13800000000", "", "sess")
+	tok, err = SmsSignIn(ctx, hc, "13800000000", "", "sess", "")
 	if err != nil || tok != "tokUp" {
 		t.Fatalf("smsup token=%q err=%v", tok, err)
 	}
@@ -244,7 +257,7 @@ func TestSMSUplinkFlow(t *testing.T) {
 	ctx := context.Background()
 
 	sendMsg = "验证码发送成功"
-	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	res, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess", nil)
 	if err != nil || res.Mode != SmsModeDownlink {
 		t.Fatalf("down mode=%q err=%v", res.Mode, err)
 	}
@@ -255,7 +268,7 @@ func TestSMSUplinkFlow(t *testing.T) {
 	}
 
 	sendMsg = "暂未收到您的短信，请重新点击一键发送后，再次点击“我已发送”"
-	res, err = SendLoginSmsCode(ctx, hc, "13800000000", "sess")
+	res, err = SendLoginSmsCode(ctx, hc, "13800000000", "sess", nil)
 	if err != nil || res.Mode != SmsModeUplink {
 		t.Fatalf("up mode=%q err=%v", res.Mode, err)
 	}
@@ -279,7 +292,7 @@ func TestSMSLoginPlatformError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess")
+	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess", nil)
 	if !errors.Is(err, platform.ErrPlatformBlocked) {
 		t.Fatalf("want ErrPlatformBlocked, got %v (res=%+v)", err, res)
 	}
@@ -288,19 +301,48 @@ func TestSMSLoginPlatformError(t *testing.T) {
 func TestSMSSendCaptchaBlocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/user/Auth/SendSignInSmsCode" {
-			_, _ = w.Write([]byte(`{"Code":0,"Msg":"需进行图形校验"}`))
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"需进行图形校验","Data":{"BehaviorVerifyReqTicket":"tk-1","Secs":30}}`))
 			return
 		}
 		w.WriteHeader(404)
 	}))
 	defer srv.Close()
 
-	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess")
-	if err == nil || !strings.Contains(err.Error(), "图形校验") {
-		t.Fatalf("want captcha error, got err=%v res=%+v", err, res)
+	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess", nil)
+	if err != nil {
+		t.Fatalf("captcha mode must not error, got %v", err)
 	}
-	if res.Mode != "" {
-		t.Fatalf("captcha must not classify as a delivery mode, got %q", res.Mode)
+	if res.Mode != SmsModeCaptcha {
+		t.Fatalf("mode=%q, want captcha", res.Mode)
+	}
+	if res.ReqTicket != "tk-1" || res.Secs != 30 {
+		t.Fatalf("captcha correlation data: %+v", res)
+	}
+}
+
+func TestSMSSendCaptchaRetryPayload(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/user/Auth/SendSignInSmsCode" {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"发送成功","Data":{"loginReqTicket":"lr-9","secs":60}}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess",
+		&CaptchaResult{Ticket: "tr03-x*", Randstr: "@Z4w", ReqTicket: "tk-1"})
+	if err != nil || res.Mode != SmsModeDownlink {
+		t.Fatalf("mode=%q err=%v", res.Mode, err)
+	}
+	bvr, ok := got["behaviorVerifyResult"].(map[string]any)
+	if !ok || bvr["ticket"] != "tr03-x*" || bvr["randstr"] != "@Z4w" || bvr["reqTicket"] != "tk-1" {
+		t.Fatalf("behaviorVerifyResult payload: %v", got["behaviorVerifyResult"])
+	}
+	if res.LoginReqTicket != "lr-9" || res.Secs != 60 {
+		t.Fatalf("success verify data: %+v", res)
 	}
 }
 
@@ -322,7 +364,7 @@ func TestSmsSignInGzipBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tok, err := SmsSignIn(context.Background(), mockHTTP(srv.URL), "13800000000", "123456", "sess")
+	tok, err := SmsSignIn(context.Background(), mockHTTP(srv.URL), "13800000000", "123456", "sess", "")
 	if err != nil || tok != "tokGz" {
 		t.Fatalf("token=%q err=%v", tok, err)
 	}
