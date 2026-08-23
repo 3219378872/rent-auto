@@ -24,6 +24,7 @@ type Server struct {
 	Log       *slog.Logger
 	Jobs      JobController   // nil-safe: endpoints degrade when nil
 	Channels  ChannelsService // nil-safe
+	Wallets   WalletProvider  // nil-safe
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
 	PasswordHash func(ctx context.Context) (string, error)
 }
@@ -49,6 +50,7 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
 	protected.HandleFunc("GET /api/v1/templates", s.handleTemplates)
+	protected.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 	protected.HandleFunc("GET /api/v1/jobs", s.handleJobsList)
 	protected.HandleFunc("POST /api/v1/jobs/{name}/run", s.handleJobTrigger)
 	protected.HandleFunc("GET /api/v1/channels", s.handleChannelsStatus)

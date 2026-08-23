@@ -225,7 +225,7 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 		o.Channel, o.OrderRef, o.AssetID, o.HashName, o.OrderType, o.Status,
 		o.RentDays, o.RentPrice, o.Amount, o.Deposits,
 		nullTime(o.StartedAt), nullTime(o.DueAt), nullTimePtr(finishedAt(o, finished)),
-		isTerminal(o.Status), o.Raw)
+		false, o.Raw)
 	if err != nil {
 		return fmt.Errorf("upsert order %s/%s: %w", o.Channel, o.OrderRef, err)
 	}

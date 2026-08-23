@@ -126,6 +126,15 @@ func run() error {
 	srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
 	srv.Jobs = schedulerAdapter{sch}
 	srv.Channels = registry
+	srv.Wallets = func(ctx context.Context) map[domain.Channel]float64 {
+		out := map[domain.Channel]float64{}
+		for _, a := range registry.All() {
+			if v, err := a.Wallet(ctx); err == nil {
+				out[a.Channel()] = v
+			}
+		}
+		return out
+	}
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

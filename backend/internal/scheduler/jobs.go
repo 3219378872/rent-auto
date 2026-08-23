@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/3219378872/rent-auto/backend/internal/analytics"
 	"github.com/3219378872/rent-auto/backend/internal/bench"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
@@ -41,6 +42,9 @@ func Jobs(d Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.
 					if _, err := bench.SyncOrders(ctx, ad, d.Store, since, log); err != nil {
 						log.Error("orders sync", "channel", string(ad.Channel()), "err", err)
 					}
+				}
+				if _, err := analytics.RollupTerminalOrders(ctx, d.Store, log); err != nil {
+					log.Error("income rollup", "err", err)
 				}
 				return nil
 			}},
