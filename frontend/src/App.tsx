@@ -1,0 +1,73 @@
+import { useEffect, useState } from 'react'
+import { HashRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
+import { clearToken, getToken } from './api/client'
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
+import Inventory from './pages/Inventory'
+import Listings from './pages/Listings'
+import Orders from './pages/Orders'
+import Strategies from './pages/Strategies'
+import Channels from './pages/Channels'
+import Audit from './pages/Audit'
+
+function Shell({ children }: { children: React.ReactNode }) {
+  const nav = useNavigate()
+  const logout = () => {
+    clearToken()
+    nav('/login')
+  }
+  return (
+    <div className="shell">
+      <aside>
+        <h1>rent-auto</h1>
+        <nav>
+          <NavLink to="/">仪表盘</NavLink>
+          <NavLink to="/inventory">库存状态</NavLink>
+          <NavLink to="/listings">上架状态</NavLink>
+          <NavLink to="/orders">租赁订单</NavLink>
+          <NavLink to="/strategies">策略配置</NavLink>
+          <NavLink to="/channels">渠道账号</NavLink>
+          <NavLink to="/audit">审计日志</NavLink>
+        </nav>
+        <button className="ghost" onClick={logout}>退出登录</button>
+      </aside>
+      <main>{children}</main>
+    </div>
+  )
+}
+
+export default function App() {
+  const [authed, setAuthed] = useState(!!getToken())
+  useEffect(() => {
+    const iv = setInterval(() => setAuthed(!!getToken()), 500)
+    return () => clearInterval(iv)
+  }, [])
+  return (
+    <HashRouter>
+      <Routes>
+        <Route path="/login" element={<Login onLogin={() => setAuthed(true)} />} />
+        <Route
+          path="/*"
+          element={
+            authed ? (
+              <Shell>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/inventory" element={<Inventory />} />
+                  <Route path="/listings" element={<Listings />} />
+                  <Route path="/orders" element={<Orders />} />
+                  <Route path="/strategies" element={<Strategies />} />
+                  <Route path="/channels" element={<Channels />} />
+                  <Route path="/audit" element={<Audit />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </Shell>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+      </Routes>
+    </HashRouter>
+  )
+}
