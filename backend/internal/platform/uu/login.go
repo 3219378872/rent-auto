@@ -77,8 +77,12 @@ func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID str
 		return SmsCodeResult{}, err
 	}
 	res := SmsCodeResult{Mode: SmsModeUplink, Msg: env.Msg}
-	if strings.Contains(env.Msg, "成功") {
+	switch {
+	case strings.Contains(env.Msg, "成功"):
 		res.Mode = SmsModeDownlink
+	case strings.Contains(env.Msg, "图形校验"), strings.Contains(env.Msg, "滑块"):
+		// Risk control demands a captcha — not the uplink flow; surface it.
+		return SmsCodeResult{Mode: "", Msg: env.Msg}, fmt.Errorf("uu: send sms code blocked by risk control: %s", env.Msg)
 	}
 	if env.Code != codeOK {
 		return res, checkEnv(env, "/api/user/Auth/SendSignInSmsCode")

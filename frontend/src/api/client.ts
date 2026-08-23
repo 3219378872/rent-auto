@@ -34,8 +34,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (res.status === 401 && path !== '/auth/login') {
-    clearToken()
-    window.location.hash = '#/login'
+    const body = await res.clone().json().catch(() => ({} as { code?: string }))
+    // Only a panel-auth rejection ends the session; channel-level 401s
+    // (upstream platforms) must surface as in-page errors instead.
+    if ((body as { code?: string }).code === 'unauthorized') {
+      clearToken()
+      window.location.hash = '#/login'
+    }
   }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {

@@ -83,8 +83,10 @@ func generateHeaders(device string) http.Header {
 	h.Set("DeviceToken", device)
 	h.Set("DeviceId", device)
 	h.Set("platform", "android")
-	h.Set("accept-encoding", "gzip")
 	h.Set("Gameid", "730")
+	// NOTE: do NOT set accept-encoding manually — a hand-set header disables
+	// net/http's transparent gzip decompression and raw gzip reaches the JSON
+	// decoder (observed 2026-08-23: SmsSignIn body starting with \x1f).
 	devInfo, _ := json.Marshal(map[string]any{
 		"deviceId": device, "deviceType": device, "hasSteamApp": 1,
 		"requestTag":  strings.ToUpper(RandomString(32)),

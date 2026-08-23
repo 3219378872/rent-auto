@@ -1,6 +1,8 @@
 package uu
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -280,5 +282,48 @@ func TestSMSLoginPlatformError(t *testing.T) {
 	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess")
 	if !errors.Is(err, platform.ErrPlatformBlocked) {
 		t.Fatalf("want ErrPlatformBlocked, got %v (res=%+v)", err, res)
+	}
+}
+
+func TestSMSSendCaptchaBlocked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/user/Auth/SendSignInSmsCode" {
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"需进行图形校验"}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	res, err := SendLoginSmsCode(context.Background(), mockHTTP(srv.URL), "13800000000", "sess")
+	if err == nil || !strings.Contains(err.Error(), "图形校验") {
+		t.Fatalf("want captcha error, got err=%v res=%+v", err, res)
+	}
+	if res.Mode != "" {
+		t.Fatalf("captcha must not classify as a delivery mode, got %q", res.Mode)
+	}
+}
+
+func TestSmsSignInGzipBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/user/Auth/SmsSignIn" {
+			w.WriteHeader(404)
+			return
+		}
+		if r.Header.Get("Accept-Encoding") != "" && r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Errorf("unexpected accept-encoding %q", r.Header.Get("Accept-Encoding"))
+		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, _ = gz.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"Token":"tokGz"}}`))
+		_ = gz.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	tok, err := SmsSignIn(context.Background(), mockHTTP(srv.URL), "13800000000", "123456", "sess")
+	if err != nil || tok != "tokGz" {
+		t.Fatalf("token=%q err=%v", tok, err)
 	}
 }

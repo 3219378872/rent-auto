@@ -23,6 +23,7 @@
 |---|---|---|
 | 2026-08-23 | [incidents/2026-08-23-lost-migration.md](incidents/2026-08-23-lost-migration.md) | 迁移 up 文件丢失造成假绿；加载器 orphan-down 熔断加固 |
 | 2026-08-23 | [incidents/2026-08-23-uu-sms-uplink.md](incidents/2026-08-23-uu-sms-uplink.md) | 短信上行模式被吞致"假发送成功"；模式判定+GetSmsUpSignInConfig 落地 |
+| 2026-08-23 | [incidents/2026-08-23-panel-logout-401.md](incidents/2026-08-23-panel-logout-401.md) | UU验证失败401踢飞面板会话+gzip解压禁用+图形校验误分类 |
 
 ## 归档格式
 

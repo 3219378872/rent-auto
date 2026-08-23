@@ -22,6 +22,9 @@
   未发送即调 `SmsUpSignIn` 会得到 Msg「暂未收到您的短信，请重新点击一键发送后，
   再次点击"我已发送"」。判定依据为 Msg 文案匹配，脆弱点：平台改文案需同步
   `uu.SendLoginSmsCode` 的判定常量
+- **图形校验风控（实测 2026-08-23）**：高频重试后 `SendSignInSmsCode` 可能返回
+  `Code=0, Msg="需进行图形校验"` ——既非下行也非上行，而是要求滑块/图形验证码；
+  Go 实现对此直接报错（含原始 Msg），不得归入 up 模式误导用户
 - 认证端点（SendSignInSmsCode/SmsSignIn/GetSmsUpSignInConfig）虽匿名可调，但必须携带
   generate_headers 全套设备头（UA/AppVersion/DeviceToken 等），否则有风控拦截风险；
   DeviceToken 与 Sessionid 同源（参考件行为）
@@ -75,4 +78,7 @@
     否则 → 上行（用户自发短信，配合 GetSmsUpSignInConfig）；实现见
     `uu.SendLoginSmsCode`/`uu.GetSmsUpSignInConfig`，API `POST /channels/uu/sms`
     一次性返回 `{session_id, mode, msg, sms_up_content?, sms_up_number?}`
+13. **禁止手动设置 `Accept-Encoding`**：Go net/http 对手动设置的该头不做透明
+    gzip 解压，平台返回的 gzip 响应体直达 JSON 解码器（`\x1f` 开头报错）；
+    必须交给传输层自动协商。请求头统一由 `generateHeaders()` 构造
 

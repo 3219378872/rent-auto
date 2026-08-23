@@ -138,7 +138,9 @@ func (s *Server) handleUUSmsVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID); err != nil {
 		s.audit(r, "channel.uu.login_failed", map[string]any{"error": err.Error()})
-		writeErr(w, http.StatusUnauthorized, "verify_failed", err.Error())
+		// 400, not 401: this is an upstream code rejection, NOT a panel-session
+		// expiry — the frontend force-logouts on 401.
+		writeErr(w, http.StatusBadRequest, "verify_failed", err.Error())
 		return
 	}
 	s.audit(r, "channel.uu.login", map[string]any{})
