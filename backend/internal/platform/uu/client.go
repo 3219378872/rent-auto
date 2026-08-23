@@ -27,10 +27,6 @@ const (
 // ErrUKExpired maps HTTP 405 responses (upstream: "UK token expired").
 var ErrUKExpired = errors.New("uu: uk token expired")
 
-type Limiter interface {
-	Wait(ctx context.Context) error
-}
-
 type noopLimiter struct{}
 
 func (noopLimiter) Wait(context.Context) error { return nil }
@@ -42,15 +38,15 @@ type Client struct {
 	device  string
 	userID  int64
 	nick    string
-	limiter Limiter
+	limiter platform.Limiter
 	log     *slog.Logger
 }
 
 type Option func(*Client)
 
-func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
-func WithLimiter(l Limiter) Option         { return func(c *Client) { c.limiter = l } }
-func WithLogger(l *slog.Logger) Option     { return func(c *Client) { c.log = l } }
+func WithHTTPClient(h *http.Client) Option  { return func(c *Client) { c.http = h } }
+func WithLimiter(l platform.Limiter) Option { return func(c *Client) { c.limiter = l } }
+func WithLogger(l *slog.Logger) Option      { return func(c *Client) { c.log = l } }
 
 func NewClient(ctx context.Context, token string, opts ...Option) (*Client, error) {
 	c := &Client{

@@ -44,6 +44,19 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
 
 1. Timestamp 秒级且 5 分钟窗口：机器时钟漂移 >2min 必须告警（NTP）
 2. 签名串构造对 JSON 序列化敏感：Go 侧用 `json.Marshal`（结构体字段序稳定）并禁 HTML escape
-3. QuerySelfRentGoods 返回 GoodsNum(string) 为改价接口的定位键；AssetId 与 StockId 二选一
+3. QuerySelfRentGoods 返回 GoodsNum(string) 为下架接口定位键；改价(PublishType=2)按 **AssetId** 定位（无 GoodsNum 字段）
 4. 长租阈值 21 天为平台当前实现（文档注明"目前为"），需配置化
 5. 6001 频率错误：指数退避重试≤3；全局限频默认 2rps
+
+## Go 实现补充约定（M2b 落地结论）
+
+6. 签名串规则已按官方"拼接示例"黄金测试锁定：首层键名不区分大小写升序；
+   顶层字符串值**不带引号**参与签名，数组/对象为紧凑 JSON（键不重排、禁 HTML 转义）；
+   空串与 nil 不参与签名
+7. ResultCode 存在字符串/整型两种形态，解码层归一
+8. 下架端点实际路径为 `/Api/Rent/OffshelfRentGoods`（文档目录名"下架出租商品"），
+   载荷 `{goodsNumList:[{GoodsNum|AssetId,SteamGameId}]}` ≤100
+9. 市场全量 dump 的 ResultData 存在 `{"List":[…]}` 与裸数组两种形态，解码层兼容
+10. 押金派生公式在服务端重算；客户端提交的 RentDeposits 仅为预估提示，
+    护栏校验以 QuerySelfRentGoods 回读的 Deposits 为准（M3 落地）
+

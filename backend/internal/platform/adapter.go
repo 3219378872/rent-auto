@@ -17,6 +17,19 @@ var (
 	ErrPartialFailure  = errors.New("platform: partial failure")
 )
 
+// Limiter paces outbound platform calls; scheduler installs per-channel buckets.
+type Limiter interface {
+	Wait(ctx context.Context) error
+}
+
+// PartialError reports a per-item failure inside an otherwise successful call.
+type PartialError struct {
+	Ref string
+	Msg string
+}
+
+func (e *PartialError) Error() string { return "platform: item " + e.Ref + ": " + e.Msg }
+
 // Capabilities describes channel-specific behavioral differences that upper
 // layers must respect (ADR-0003).
 type Capabilities struct {
