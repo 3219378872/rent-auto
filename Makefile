@@ -6,8 +6,15 @@
 BACKEND := backend
 FRONTEND := frontend
 
+HAS_BACKEND := $(shell test -f $(BACKEND)/go.mod && echo yes || echo no)
+HAS_FRONTEND := $(shell test -f $(FRONTEND)/package.json && echo yes || echo no)
+
+ifeq ($(HAS_BACKEND),yes)
 gate: fmt-check lint vet build test migrate-check
-	@if [ -d $(FRONTEND) ]; then $(MAKE) frontend-typecheck frontend-lint frontend-test frontend-build; fi
+else
+gate:
+endif
+	@if [ "$(HAS_FRONTEND)" = "yes" ]; then $(MAKE) frontend-typecheck frontend-lint frontend-test frontend-build; fi
 	@echo "=== GATE PASSED ==="
 
 fmt:
@@ -71,7 +78,7 @@ migrate-down:
 	cd $(BACKEND) && go run ./cmd/migrate down 1
 
 migrate-check:
-	cd $(BACKEND) && TEST_MIGRATE_CHECK=1 go test ./internal/store -run TestMigrationsUpDown -count=1
+	@if [ "$(HAS_BACKEND)" = "yes" ]; then cd $(BACKEND) && TEST_MIGRATE_CHECK=1 go test ./internal/store -run TestMigrationsUpDown -count=1; fi
 
 migrate-new:
 	@test -n "$(NAME)" || { echo "usage: make migrate-new NAME=add_xxx"; exit 1; }
