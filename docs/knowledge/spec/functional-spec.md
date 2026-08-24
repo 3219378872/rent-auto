@@ -31,20 +31,29 @@
 
 ## 3. 自动化任务规格
 
+> 表格与 `scheduler/jobs.go` 注册表对齐（2026-08-24 审查轮回写）。
+> 批量上架任务（lease_publish）由 reconcile 周期任务逐条实现替代；
+> rollup 并入 orders_sync 内联步骤——见下表备注与 ADR-0004。
+
 | 任务 | 默认节奏 | 规格 |
 |---|---|---|
-| lease_publish | 每日 HH:MM(默认17:30) | 遍历库存→渠道路由→策略定价→护栏→批量上架(UU≤50/批, ECO≤100/批) |
-| reprice | 每 N 分钟(默认31±抖动) | 在架商品全量重估；仅当变化超过最小步长才提交；频控限速 |
-| zero_cd | 每日 HH:MM(默认23:30) | UU 可转租列表→白名单过滤→开启0CD |
-| market_snapshot | 每 20 分钟 | UU 行情 topN 快照入库；模板级缓存复用 |
-| value_anchor | 每小时 | ECO 全量价格 dump 单次拉取；与 UU 参考价合成价值锚点 V |
-| reconcile | 每 10 分钟 | 期望货架 vs 双渠道实际货架 → 差异动作队列(见 M6) |
-| order_sync | 每 10 分钟 | 两渠道出租订单增量入库；终态订单触发收益记账 |
-| rollup_daily | 每日 00:10 | 昨日分渠道分品类收益汇总；资产快照 |
+| reprice | 每 31m±90s 抖动 | 在架商品全量重估；仅当变化超过最小步长才提交；频控限速；风控退避；策略级 dry-run 双门禁 |
+| factor_events | 每 17m±60s | 终态订单折算 listings.factor（同 listing 批内顺序累计，单事务落库）；stale 步降；f_min 回归 1.00+审计告警 |
+| inventory_sync | 每 30m±60s | 两渠道库存拉取 upsert；成本价维护 |
+| shelf_sync | 每 10m±30s | 货架快照 upsert listings.actual_state |
+| orders_sync | 每 10m±30s | 两渠道订单入库：回看窗口动态锚定最早未终态订单−24h（上限100d，ADR-0004）；内联 RollupTerminalOrders 收益记账 |
+| market_snapshot | 每 20m±120s | UU 行情 topN 快照入库；模板级缓存复用 |
+| value_anchor | 每 1h±5m | ECO 全量价格 dump 单次拉取；与 UU 参考价合成价值锚点 V |
+| reconcile | 每 10m±60s | 期望货架 vs 实际货架 → 差异动作（publish 补齐/delist 含 leased 豁免、orphan/surplus 24h 宽限、写回闭环 ADR-0005）；双层 dry-run 门禁+风控冷却过滤 |
+| uu_delivery | 每 5m±45s | UU 待发货待办→发送报价（审计逐单） |
+| steam_offers | 每 5m±45s | Steam 收报价→0 成本单自动接受 |
+| eco_delivery | 每 5m±45s | ECO 四步交付编排（幂等） |
+| zero_cd | 每日 23:30 | UU 可转租列表→开启0CD |
 
 ### AC-T1 dry-run
 - 新策略首次执行必须 dry_run=true：完整走决策链但只写 `price_actions(dry_run=true)` 不调平台
 - 面板策略页可切换 enable_real_execution
+- （2026-08-24 起）reconcile 与 reprice 同受 `DRY_RUN_DEFAULT || !real_execution_enabled` 双层门禁；门禁查询失败强制 dry-run
 
 ### AC-T2 护栏（全部任务强制）
 - 价格边界 [min_rent, max_rent]；单次改价幅度 ≤ max_change_ratio(默认15%)

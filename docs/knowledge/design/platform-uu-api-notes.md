@@ -98,3 +98,12 @@
     gzip 解压，平台返回的 gzip 响应体直达 JSON 解码器（`\x1f` 开头报错）；
     必须交给传输层自动协商。请求头统一由 `generateHeaders()` 构造
 
+
+## 待真机校订（2026-08-24 第三轮审查增补）
+
+14. **lease/out/list 响应的资产字段名未定**：`LeasedOutOrder` 现按多候选
+    解析（顶层 `assetId`、`commodityInfo.steamAssetId`），任一非空即写入
+    `LeaseOrder.AssetID`——因子控制器的 `UnhandledFactorOrders` JOIN 依赖
+    该字段映射 listing；字段确认后收敛为单一解析并删除本条
+15. 订单状态码映射仍只有 {0:leasing, 2:done, 3:bought_out}，未知→""
+    （静默不可见）；真机抓包补全后同步 `mapUUOrderStatus`
