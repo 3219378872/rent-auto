@@ -70,6 +70,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 			plain, err := r.box.Open(string(setting.ValueEnc))
 			if err != nil {
 				r.log.Warn("uu token decrypt failed", "err", err)
+				r.dropUU() // unreadable stored state ⇒ channel not configured
 			} else if json.Unmarshal(plain, &payload) == nil && payload.Token != "" {
 				r.buildUUAdapter(ctx, payload.Token)
 			}
@@ -94,6 +95,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 		plain, err := r.box.Open(string(ecoSetting.ValueEnc))
 		if err != nil {
 			r.log.Warn("eco creds decrypt failed", "err", err)
+			r.dropECO() // unreadable stored state ⇒ channel not configured
 			break
 		}
 		var creds struct {
@@ -119,7 +121,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 				r.ecoSteamID = steamID
 			} else {
 				r.log.Warn("eco adapter build failed", "err", err)
-				delete(r.ad, domain.ChannelECO)
+				r.dropECO()
 			}
 		}
 	case ecoErr != nil && ecoErr != store.ErrNotFound:
@@ -201,12 +203,27 @@ func (r *Registry) uuOptions() []uu.Option {
 // code never calls this; tests use it to point the UU API at a local mock.
 func (r *Registry) SetUUHTTPClient(h *http.Client) { r.uuHTTP = h }
 
+// dropUU removes the UU adapter AND every bare-client passthrough so the
+// registry never reports "not configured" while convenience channels still
+// fire platform calls with stale credentials.
+func (r *Registry) dropUU() {
+	delete(r.ad, domain.ChannelUU)
+	r.uuClient = nil
+}
+
+// dropECO is the ECO counterpart of dropUU.
+func (r *Registry) dropECO() {
+	delete(r.ad, domain.ChannelECO)
+	r.ecoClient = nil
+	r.ecoSteamID = ""
+}
+
 // buildUUAdapter constructs the UU adapter from a raw token; reports success.
 func (r *Registry) buildUUAdapter(ctx context.Context, token string) bool {
 	c, err := uu.NewClient(ctx, token, r.uuOptions()...)
 	if err != nil {
 		r.log.Warn("uu adapter build failed", "err", err)
-		delete(r.ad, domain.ChannelUU)
+		r.dropUU()
 		return false
 	}
 	r.ad[domain.ChannelUU] = uu.NewAdapter(c)
@@ -216,24 +233,26 @@ func (r *Registry) buildUUAdapter(ctx context.Context, token string) bool {
 
 // SetECOCreds validates then persists ECO credentials (encrypted at rest).
 func (r *Registry) SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error {
+	// Fail-closed checks BEFORE any side effect: without a box nothing may be
+	// persisted, and no real Steam/platform login may run.
+	if r.box == nil {
+		return fmt.Errorf("APP_MASTER_KEY not configured: cannot store credentials safely")
+	}
 	if _, err := eco.NewClient(partnerID, []byte(privateKeyPEM)); err != nil {
 		return fmt.Errorf("eco creds invalid: %w", err)
+	}
+	creds, _ := json.Marshal(map[string]string{
+		"partner_id": partnerID, "private_key_pem": privateKeyPEM,
+	})
+	enc, err := r.box.Seal(creds)
+	if err != nil {
+		return err
 	}
 	if steamID != "" {
 		b, _ := json.Marshal(map[string]string{"steam_id": steamID})
 		if err := r.st.UpsertSettingPlain(ctx, keyECOSteam, json.RawMessage(b)); err != nil {
 			return err
 		}
-	}
-	creds, _ := json.Marshal(map[string]string{
-		"partner_id": partnerID, "private_key_pem": privateKeyPEM,
-	})
-	if r.box == nil {
-		return fmt.Errorf("APP_MASTER_KEY not configured: cannot store credentials safely")
-	}
-	enc, err := r.box.Seal(creds)
-	if err != nil {
-		return err
 	}
 	if err := r.st.UpsertSettingEnc(ctx, keyECOCreds, []byte(enc)); err != nil {
 		return err

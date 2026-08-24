@@ -5,13 +5,17 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/secrets"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
@@ -192,5 +196,54 @@ func TestRefreshPrefersEncryptedOverLegacy(t *testing.T) {
 	}
 	if reg.uuClient == nil || reg.uuClient.Token() != "enctok" {
 		t.Fatalf("encrypted row must win (got %+v)", reg.uuClient)
+	}
+}
+
+// A build failure must leave NO usable remnant: adapter gone AND bare-client
+// passthroughs (UUMarketQuotes/EcoOrderClient/…) returning ErrUnsupported —
+// the panel must not say "not configured" while stale credentials still fire.
+func TestRefreshBuildFailureLeavesNoHalfState(t *testing.T) {
+	st, cleanup := openRegistryDB(t)
+	defer cleanup()
+	box := newTestBox(t)
+	reg := NewRegistry(st, box, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	// ECO: seal garbage creds (valid JSON, unusable key material).
+	creds, _ := json.Marshal(map[string]string{"partner_id": "p", "private_key_pem": "not-a-pem"})
+	enc, err := box.Seal(creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSettingEnc(context.Background(), keyECOCreds, []byte(enc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get(domain.ChannelECO); ok {
+		t.Fatal("eco adapter must be dropped after build failure")
+	}
+	if reg.EcoOrderClient() != nil {
+		t.Fatal("eco bare client must be cleared after build failure")
+	}
+
+	// UU: token decrypts but client construction fails against a dead API.
+	badToken, _ := json.Marshal(map[string]string{"token": "garbage"})
+	enc2, _ := box.Seal(badToken)
+	if err := st.UpsertSettingEnc(context.Background(), keyUUToken, []byte(enc2)); err != nil {
+		t.Fatal(err)
+	}
+	reg.SetUUHTTPClient(&http.Client{Timeout: 100 * time.Millisecond})
+	if err := reg.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get(domain.ChannelUU); ok {
+		t.Fatal("uu adapter must be dropped after build failure")
+	}
+	if _, err := reg.UUMarketQuotes(context.Background(), 1, 1, 2); err != platform.ErrUnsupported {
+		t.Fatalf("uu passthrough must be ErrUnsupported, got %v", err)
+	}
+	if health := reg.Health(context.Background()); health["uu"] != "not_configured" || health["eco"] != "not_configured" {
+		t.Fatalf("health: %v", health)
 	}
 }

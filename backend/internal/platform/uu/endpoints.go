@@ -321,10 +321,19 @@ func (c *Client) GetMarketLeasePrice(ctx context.Context, templateID int64, minP
 
 // ---- leased-out orders ----
 
+// LeasedOutOrder is one entry of the leased-out order list.
+//
+// AssetRef: the response's asset-id field name is pending real-machine
+// calibration (platform-uu-api-notes §待办); we probe the observed candidate
+// spellings so the factor controller's listing join works as soon as any of
+// them carries a value.
 type LeasedOutOrder struct {
 	OrderID       string `json:"orderId"`
+	AssetID       string `json:"assetId"`
 	CommodityInfo struct {
-		Name string `json:"name"`
+		Name         string `json:"name"`
+		SteamAssetID string `json:"steamAssetId"`
+		GoodsID      int64  `json:"goodsId"`
 	} `json:"commodityInfo"`
 	OrderStatus int    `json:"orderStatus"`
 	LeaseDays   int    `json:"leaseDays"`
@@ -332,6 +341,15 @@ type LeasedOutOrder struct {
 	Deposit     string `json:"deposit"`
 	StartTime   string `json:"startTime"`
 	EndTime     string `json:"endTime"`
+}
+
+// AssetRef returns the first non-empty asset identifier among the candidate
+// fields; "" when the payload carries none (pre-calibration payloads).
+func (o LeasedOutOrder) AssetRef() string {
+	if o.AssetID != "" {
+		return o.AssetID
+	}
+	return o.CommodityInfo.SteamAssetID
 }
 
 // GetLeasedOutOrders pages through finished/active rental orders.

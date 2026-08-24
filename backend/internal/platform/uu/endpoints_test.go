@@ -434,3 +434,37 @@ func TestSmsSignInGzipBody(t *testing.T) {
 		t.Fatalf("token=%q err=%v", tok, err)
 	}
 }
+
+// The leased-out payload's asset field name awaits real-machine calibration;
+// candidate spellings must map into LeaseOrder.AssetID so the factor
+// controller's listing join can work the moment the platform sends one.
+func TestLeasedOutOrderAssetRefMapping(t *testing.T) {
+	c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/api/user/Account/getUserInfo":
+			okUserInfo(w)
+		case "/api/youpin/bff/trade/v1/order/lease/out/list":
+			_, _ = w.Write([]byte(`{"Code":0,"data":{"orderDataList":[
+				{"orderId":"o1","assetId":"asset-top","commodityInfo":{"name":"X","steamAssetId":"asset-nested"},"orderStatus":2},
+				{"orderId":"o2","commodityInfo":{"name":"Y","steamAssetId":"asset-nested-only"},"orderStatus":2},
+				{"orderId":"o3","commodityInfo":{"name":"Z"},"orderStatus":2}
+			]}}`))
+		default:
+			w.WriteHeader(404)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders, err := NewAdapter(c).LeaseOrders(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 3 {
+		t.Fatalf("orders=%d", len(orders))
+	}
+	if orders[0].AssetID != "asset-top" || orders[1].AssetID != "asset-nested-only" || orders[2].AssetID != "" {
+		t.Fatalf("asset mapping: %q %q %q", orders[0].AssetID, orders[1].AssetID, orders[2].AssetID)
+	}
+}

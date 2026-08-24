@@ -75,7 +75,10 @@ func (r *pbReader) next() (field, wire uint32, payload []byte, num uint64, err e
 		return field, wire, nil, v, nil
 	case 2:
 		l, n := binary.Uvarint(r.buf)
-		if n <= 0 || len(r.buf)-n < int(l) {
+		// Compare in the uint64 domain: a hostile length ≥ 2^63 makes int(l)
+		// negative and the naive `len-n < int(l)` check pass through to a
+		// panicking slice expression.
+		if n <= 0 || l > uint64(len(r.buf)-n) {
 			return 0, 0, nil, 0, fmt.Errorf("%w: length", errProto)
 		}
 		payload = r.buf[n : n+int(l)]

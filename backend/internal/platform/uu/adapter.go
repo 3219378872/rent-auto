@@ -175,6 +175,7 @@ func (a *Adapter) LeaseOrders(ctx context.Context, since time.Time) ([]domain.Le
 		lo := domain.LeaseOrder{
 			Channel:   domain.ChannelUU,
 			OrderRef:  o.OrderID,
+			AssetID:   o.AssetRef(),
 			HashName:  o.CommodityInfo.Name,
 			Status:    mapUUOrderStatus(o.OrderStatus),
 			RentDays:  o.LeaseDays,

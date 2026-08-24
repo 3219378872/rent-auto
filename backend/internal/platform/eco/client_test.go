@@ -236,3 +236,34 @@ func TestAdapterCapsAndShelfMapping(t *testing.T) {
 		t.Fatalf("shelf: %+v", shelf[0])
 	}
 }
+
+// A non-200 transport status must fail closed even when the body is JSON
+// without our envelope — decoding it as code=0 faked success on write paths
+// (ghost delist regression, 2026-08-24 round 3).
+func TestClientRejectsNon200EnvelopelessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"bad gateway"}`))
+	}))
+	defer srv.Close()
+	priv, _ := testKeyPair(t)
+	c := mustClient(t, priv, srv.URL)
+	_, err := c.GetWalletBalance(context.Background())
+	if err == nil {
+		t.Fatal("non-200 must fail closed")
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Fatalf("error should mention transport status: %v", err)
+	}
+}
+
+// 200 with a JSON body that carries no ResultCode is a protocol violation:
+// defaulting to code=0 would mark writes successful.
+func TestClientRejectsMissingResultCode(t *testing.T) {
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
+		return `{"ResultMsg":"weird"}`
+	})
+	if _, err := c.GetWalletBalance(context.Background()); err == nil {
+		t.Fatal("envelope without ResultCode must fail closed")
+	}
+}

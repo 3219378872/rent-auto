@@ -73,8 +73,14 @@ func decodeEnvelope(body []byte) (*envelope, error) {
 		return nil, fmt.Errorf("eco: decode envelope: %w", err)
 	}
 	e := &envelope{}
+	// Fail closed: an envelope without ResultCode must not decode as code=0
+	// (= success). Proxy/gateway error bodies can be valid JSON without it.
+	v, ok := m["ResultCode"]
+	if !ok {
+		return nil, fmt.Errorf("eco: decode envelope: missing ResultCode")
+	}
 	// ResultCode arrives as string per docs but int on some endpoints.
-	if v, ok := m["ResultCode"]; ok {
+	{
 		var s string
 		if json.Unmarshal(v, &s) == nil {
 			n, _ := strconv.Atoi(s)
@@ -159,6 +165,12 @@ func (c *Client) postOnce(ctx context.Context, path string, biz map[string]any, 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("eco: read body: %w", err)
+	}
+	// Fail closed on transport status: a 5xx/3xx body may still be JSON but is
+	// not an API answer; treating it as success faked write operations
+	// (e.g. ghost delists) in the pre-fix behavior.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("eco: %s http status %d", path, resp.StatusCode)
 	}
 	env, err := decodeEnvelope(data)
 	if err != nil {
