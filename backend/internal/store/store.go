@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -105,8 +106,10 @@ func (s *Store) InsertAudit(ctx context.Context, e domain.AuditEntry) error {
 type AuditFilter struct {
 	Action  string
 	Channel string
+	Since   time.Time
 	Before  time.Time
 	Limit   int
+	Offset  int
 }
 
 func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]domain.AuditEntry, int, error) {
@@ -114,26 +117,40 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]domain.AuditEnt
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	where := "WHERE true"
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	conds := []string{}
 	args := []any{}
 	if f.Action != "" {
 		args = append(args, f.Action)
-		where += fmt.Sprintf(" AND action=$%d", len(args))
+		conds = append(conds, fmt.Sprintf("action=$%d", len(args)))
 	}
 	if f.Channel != "" {
 		args = append(args, f.Channel)
-		where += fmt.Sprintf(" AND channel=$%d", len(args))
+		conds = append(conds, fmt.Sprintf("channel=$%d", len(args)))
+	}
+	if !f.Since.IsZero() {
+		args = append(args, f.Since)
+		conds = append(conds, fmt.Sprintf("ts >= $%d", len(args)))
 	}
 	if !f.Before.IsZero() {
 		args = append(args, f.Before)
-		where += fmt.Sprintf(" AND ts < $%d", len(args))
+		conds = append(conds, fmt.Sprintf("ts < $%d", len(args)))
+	}
+	whereClause := "WHERE true"
+	if len(conds) > 0 {
+		whereClause += " AND " + strings.Join(conds, " AND ")
 	}
 	var total int
-	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM audit_log "+where, args...).Scan(&total); err != nil {
+	if err := s.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM audit_log "+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	q := `SELECT ts, actor, coalesce(channel,''), action, coalesce(target,''), coalesce(detail::text,'')
-	      FROM audit_log ` + where + fmt.Sprintf(" ORDER BY ts DESC LIMIT %d", limit)
+	      FROM audit_log ` + whereClause +
+		fmt.Sprintf(" ORDER BY ts DESC LIMIT %d OFFSET %d", limit, offset)
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err

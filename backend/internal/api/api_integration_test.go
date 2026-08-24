@@ -7,12 +7,46 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
+	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
+
+// ---- shared helpers for DB-backed handler tests ----
+
+// newAuthedServer wires a Server with a real store and a known password.
+func newAuthedServer(t *testing.T, st *store.Store) *Server {
+	t.Helper()
+	s := NewServer(st, auth.NewJWT([]byte(testSecret)), "admin", "test",
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := auth.HashPassword("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PasswordHash = func(context.Context) (string, error) { return h, nil }
+	return s
+}
+
+// tokenFor logs in against the live routes and returns a fresh bearer token.
+func tokenFor(t *testing.T, routes http.Handler) string {
+	t.Helper()
+	rec := do(t, routes, "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"hunter2"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &lr); err != nil || lr.Token == "" {
+		t.Fatalf("login body: %s", rec.Body.String())
+	}
+	return lr.Token
+}
 
 func openAPIDB(t *testing.T) (*store.Store, func()) {
 	t.Helper()
@@ -89,5 +123,86 @@ func TestLogoutRevokesTokens(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &lr2)
 	if rec := do(t, routes, "GET", "/api/v1/auth/me", lr2.Token, ""); rec.Code != 200 {
 		t.Fatalf("fresh token must work: %d", rec.Code)
+	}
+}
+
+// Blacklist toggle: flips the flag, audits, 404 on unknown hash.
+func TestTemplateBlacklistRoundTrip(t *testing.T) {
+	st, cleanup := openAPIDB(t)
+	defer cleanup()
+	if _, err := store.MigrateUp(context.Background(), st.Pool); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertTemplate(context.Background(), store.Template{HashName: "H-BL"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = st.Pool.Exec(context.Background(), `TRUNCATE templates, audit_log`) })
+
+	s := newAuthedServer(t, st)
+	routes := s.Routes()
+
+	rec := do(t, routes, "PUT", "/api/v1/templates/blacklist", tokenFor(t, routes),
+		`{"hash_name":"H-BL","blacklisted":true}`)
+	if rec.Code != 200 {
+		t.Fatalf("blacklist: %d %s", rec.Code, rec.Body.String())
+	}
+	tpl, err := st.GetTemplate(context.Background(), "H-BL")
+	if err != nil || !tpl.Blacklisted {
+		t.Fatalf("template not blacklisted: %+v %v", tpl, err)
+	}
+
+	rec = do(t, routes, "PUT", "/api/v1/templates/blacklist", tokenFor(t, routes),
+		`{"hash_name":"no-such","blacklisted":true}`)
+	if rec.Code != 404 {
+		t.Fatalf("unknown template: %d", rec.Code)
+	}
+}
+
+// Audit listing honors since/until (RFC3339) and page/page_size offsets.
+func TestAuditSinceUntilPaging(t *testing.T) {
+	st, cleanup := openAPIDB(t)
+	defer cleanup()
+	t.Cleanup(func() { _, _ = st.Pool.Exec(context.Background(), `TRUNCATE audit_log`) })
+
+	for i := 0; i < 3; i++ {
+		if err := st.InsertAudit(context.Background(), domain.AuditEntry{
+			Time:  time.Now().UTC().Add(time.Duration(i) * time.Minute),
+			Actor: "system", Action: "probe.audit",
+			Detail: map[string]any{"i": i},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newAuthedServer(t, st)
+	routes := s.Routes()
+	tok := tokenFor(t, routes)
+
+	rec := do(t, routes, "GET", "/api/v1/audit?action=probe.audit&page_size=2&page=1", tok, "")
+	var p1 struct {
+		Items []domain.AuditEntry `json:"items"`
+		Total int                 `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p1); err != nil || p1.Total != 3 || len(p1.Items) != 2 {
+		t.Fatalf("page1: %s (%v)", rec.Body.String(), err)
+	}
+	rec = do(t, routes, "GET", "/api/v1/audit?action=probe.audit&page_size=2&page=2", tok, "")
+	var p2 struct {
+		Items []domain.AuditEntry `json:"items"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &p2)
+	if len(p2.Items) != 1 {
+		t.Fatalf("page2: %s", rec.Body.String())
+	}
+
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	rec = do(t, routes, "GET",
+		"/api/v1/audit?action=probe.audit&since="+future, tok, "")
+	var pf struct {
+		Total int `json:"total"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &pf)
+	if pf.Total != 0 {
+		t.Fatalf("since filter: %s", rec.Body.String())
 	}
 }

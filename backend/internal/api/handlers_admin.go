@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -138,10 +139,25 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("page_size"))
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	parseTS := func(k string) time.Time {
+		if v := q.Get(k); v != "" {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				return t
+			}
+		}
+		return time.Time{}
+	}
 	items, total, err := s.Store.ListAudit(r.Context(), store.AuditFilter{
 		Action:  q.Get("action"),
 		Channel: q.Get("channel"),
+		Since:   parseTS("since"),
+		Before:  parseTS("until"),
 		Limit:   limit,
+		Offset:  (page - 1) * limit,
 	})
 	if err != nil {
 		s.internalError(w, err)
@@ -151,4 +167,31 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		items = []domain.AuditEntry{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// ---- template blacklist management ----
+
+type blacklistRequest struct {
+	HashName    string `json:"hash_name"`
+	Blacklisted bool   `json:"blacklisted"`
+}
+
+func (s *Server) handleTemplateBlacklist(w http.ResponseWriter, r *http.Request) {
+	var req blacklistRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.HashName == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "hash_name required")
+		return
+	}
+	if err := s.Store.SetTemplateBlacklist(r.Context(), req.HashName, req.Blacklisted); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "unknown template")
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	s.audit(r, "template.blacklist", map[string]any{
+		"hash": req.HashName, "blacklisted": req.Blacklisted,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -79,6 +81,15 @@ type ListingFilter struct {
 	Offset  int
 }
 
+// LastDecision is the latest price_action summary attached to a listing row
+// (panel 决策依据 column).
+type LastDecision struct {
+	Action  string     `json:"action"` // publish|reprice|delist|skip
+	At      *time.Time `json:"at"`     // action timestamp
+	NewRent *float64   `json:"new_rent,omitempty"`
+	Skip    string     `json:"skip,omitempty"` // skip reason from decision jsonb
+}
+
 type ListingRow struct {
 	ID            int64          `json:"id"`
 	Channel       domain.Channel `json:"channel"`
@@ -93,27 +104,42 @@ type ListingRow struct {
 	Deposit       float64        `json:"deposit"`
 	ListedAt      *time.Time     `json:"listed_at"`
 	LastRepriceAt *time.Time     `json:"last_reprice_at"`
+	Factor        float64        `json:"factor"`
+	Last          *LastDecision  `json:"last_decision,omitempty"`
 }
 
 func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]ListingRow, int, error) {
 	limit, offset := normalizePage(f.Limit, f.Offset)
-	where := "WHERE true"
+	conds := []string{}
 	args := []any{}
 	if f.Channel.Valid() && f.Channel != "" {
 		args = append(args, string(f.Channel))
-		where += fmt.Sprintf(" AND channel=$%d", len(args))
+		conds = append(conds, fmt.Sprintf("l.channel=$%d", len(args)))
 	}
 	if f.State != "" {
 		args = append(args, f.State)
-		where += fmt.Sprintf(" AND actual_state=$%d", len(args))
+		conds = append(conds, fmt.Sprintf("l.actual_state=$%d", len(args)))
+	}
+	whereClause := "true"
+	if len(conds) > 0 {
+		whereClause = strings.Join(conds, " AND ")
 	}
 	var total int
-	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM listings "+where, args...).Scan(&total); err != nil {
+	if err := s.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM listings l WHERE "+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	q := `SELECT id, channel, asset_id, hash_name, goods_ref, desired_state, actual_state,
-	             rent_price, long_rent_price, max_days, deposit, listed_at, last_reprice_at
-	      FROM listings ` + where + fmt.Sprintf(" ORDER BY id DESC LIMIT %d OFFSET %d", limit, offset)
+	q := `SELECT l.id, l.channel, l.asset_id, l.hash_name, l.goods_ref,
+	             l.desired_state, l.actual_state,
+	             l.rent_price, COALESCE(l.long_rent_price,0), COALESCE(l.max_days,0), COALESCE(l.deposit,0),
+	             l.listed_at, l.last_reprice_at, COALESCE(l.factor,1.0),
+	             pa.action, pa.ts, pa.new_rent, pa.decision::text
+	      FROM listings l
+	      LEFT JOIN LATERAL (
+	        SELECT action, ts, new_rent, decision FROM price_actions
+	        WHERE listing_id = l.id ORDER BY id DESC LIMIT 1
+	      ) pa ON true
+	      WHERE ` + whereClause + fmt.Sprintf(" ORDER BY l.id DESC LIMIT %d OFFSET %d", limit, offset)
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
@@ -122,10 +148,29 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]ListingRow
 	out := make([]ListingRow, 0, limit)
 	for rows.Next() {
 		var r ListingRow
+		var (
+			action      *string
+			at          *time.Time
+			newRent     *float64
+			decisionTxt *string
+		)
 		if err := rows.Scan(&r.ID, &r.Channel, &r.AssetID, &r.HashName, &r.GoodsRef,
 			&r.DesiredState, &r.ActualState, &r.RentPrice, &r.LongRentPrice,
-			&r.MaxDays, &r.Deposit, &r.ListedAt, &r.LastRepriceAt); err != nil {
+			&r.MaxDays, &r.Deposit, &r.ListedAt, &r.LastRepriceAt, &r.Factor,
+			&action, &at, &newRent, &decisionTxt); err != nil {
 			return nil, 0, err
+		}
+		if action != nil {
+			d := &LastDecision{Action: *action, At: at, NewRent: newRent}
+			if decisionTxt != nil {
+				var dec struct {
+					Skip string `json:"skip"`
+				}
+				if json.Unmarshal([]byte(*decisionTxt), &dec) == nil {
+					d.Skip = dec.Skip
+				}
+			}
+			r.Last = d
 		}
 		out = append(out, r)
 	}

@@ -232,6 +232,20 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 	return nil
 }
 
+// SetTemplateBlacklist toggles the blacklist flag; blacklisted templates drop
+// out of routable inventory and value-anchor synthesis.
+func (s *Store) SetTemplateBlacklist(ctx context.Context, hashName string, blacklisted bool) error {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE templates SET blacklisted=$2 WHERE hash_name=$1`, hashName, blacklisted)
+	if err != nil {
+		return fmt.Errorf("set blacklist %s: %w", hashName, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func isTerminal(status string) bool {
 	switch status {
 	case "done", "bought_out", "cancelled", "breach":

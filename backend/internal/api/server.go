@@ -69,6 +69,7 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
 	protected.HandleFunc("GET /api/v1/templates", s.handleTemplates)
+	protected.HandleFunc("PUT /api/v1/templates/blacklist", s.handleTemplateBlacklist)
 	protected.HandleFunc("PUT /api/v1/inventory/{channel}/{asset_id}/cost", s.handleSetCost)
 	protected.HandleFunc("GET /api/v1/strategies", s.handleStrategiesList)
 	protected.HandleFunc("PUT /api/v1/strategies/global", s.handleStrategyUpdateGlobal)

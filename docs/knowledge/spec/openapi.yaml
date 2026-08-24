@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.3.0"
+  version: "0.4.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -154,6 +154,29 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Template" }
+  /templates/blacklist:
+    put:
+      summary: 切换模板拉黑状态（退出路由与锚点合成；审计 template.blacklist）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hash_name]
+              properties:
+                hash_name: { type: string }
+                blacklisted: { type: boolean }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "404": { $ref: "#/components/responses/Err400" }
   /inventory/{channel}/{asset_id}/cost:
     put:
       summary: 录入/修正成本价
@@ -219,7 +242,10 @@ paths:
       parameters:
         - { name: action, in: query, schema: { type: string }, description: 动作关键字过滤 }
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
-        - { name: page_size, in: query, schema: { type: integer, default: 100 } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Page"
+        - { name: page_size, in: query, schema: { type: integer, default: 50, maximum: 200 } }
       responses:
         "200":
           description: 分页审计
