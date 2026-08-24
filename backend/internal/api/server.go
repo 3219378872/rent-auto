@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,6 +36,8 @@ type Server struct {
 	logins       *loginLimiter
 	dummyOnce    sync.Once
 	dummyHashVal string
+	trustProxies []*net.IPNet // explicit TRUST_PROXY_CIDRS; empty = default private ranges
+	defaultTrust []*net.IPNet // lazily parsed defaultTrustCIDRs
 }
 
 type SteamService interface {
@@ -101,6 +104,61 @@ func withBodyLimit(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ---- client identity (trusted-proxy aware) ----
+
+// defaultTrustCIDRs: private/loopback peers may set X-Real-IP. In the
+// documented deployment the backend port is never published — only the Caddy
+// container (a private-range peer) can connect — so spoofing requires
+// compromising the proxy itself. Direct public exposure must tighten this via
+// TRUST_PROXY_CIDRS (e.g. to loopback only).
+var defaultTrustCIDRs = []string{
+	"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"::1/128", "fc00::/7",
+}
+
+// SetTrustProxies overrides the trusted peer CIDR list (from TRUST_PROXY_CIDRS).
+func (s *Server) SetTrustProxies(cidrs []string) {
+	s.trustProxies = parseCIDRs(cidrs)
+}
+
+func parseCIDRs(list []string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(list))
+	for _, c := range list {
+		if _, ipnet, err := net.ParseCIDR(c); err == nil {
+			out = append(out, ipnet)
+		}
+	}
+	return out
+}
+
+func (s *Server) trustList() []*net.IPNet {
+	if len(s.trustProxies) > 0 {
+		return s.trustProxies
+	}
+	if s.defaultTrust == nil {
+		s.defaultTrust = parseCIDRs(defaultTrustCIDRs)
+	}
+	return s.defaultTrust
+}
+
+// clientIP returns the rate-limit/audit identity: X-Real-IP only when the
+// transport peer is a trusted proxy, else the peer address itself.
+func (s *Server) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if v := r.Header.Get("X-Real-IP"); v != "" {
+		ip := net.ParseIP(host)
+		for _, n := range s.trustList() {
+			if ip != nil && n.Contains(ip) {
+				return v
+			}
+		}
+	}
+	return host
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {

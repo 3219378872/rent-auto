@@ -182,6 +182,7 @@ func run() error {
 	}
 
 	srv := api.NewServer(st, auth.NewJWT(cfg.JWTSecret), cfg.AdminUser, version, log)
+	srv.SetTrustProxies(cfg.TrustProxies)
 	srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
 	srv.Jobs = schedulerAdapter{sch}
 	srv.Channels = registry

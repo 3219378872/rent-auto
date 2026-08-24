@@ -145,21 +145,73 @@ func TestBodyLimitRejectsOversized(t *testing.T) {
 func TestLoginLimiterSweepEvictsExpired(t *testing.T) {
 	l := newLoginLimiter()
 	for i := 0; i < 2048; i++ {
-		l.fail(fmt.Sprintf("user-%d", i))
+		l.fail(fmt.Sprintf("user-%d", i), "203.0.113.7")
 	}
 	if len(l.fails) < 1024 {
 		t.Fatalf("setup: %d entries", len(l.fails))
 	}
 	// Age every slot past the window, then trigger eviction via allow().
-	for _, s := range l.fails {
-		s.start = time.Now().Add(-2 * loginFailWindow)
+	for _, m := range []map[string]*failSlot{l.fails, l.ipFails} {
+		for _, s := range m {
+			s.start = time.Now().Add(-2 * loginFailWindow)
+		}
 	}
-	if !l.allow("fresh-user") {
+	if !l.allow("fresh-user", "203.0.113.7") {
 		t.Fatal("fresh key must be allowed")
 	}
 	for k := range l.fails {
 		if strings.HasPrefix(k, "user-") {
 			t.Fatalf("expired slot %q survived sweep", k)
 		}
+	}
+}
+
+// Rotating usernames from one IP must hit the per-IP tier: global brute force
+// is capped regardless of how many (ip|username) buckets stay under their own
+// per-key limit.
+func TestLoginLimiterPerIPTier(t *testing.T) {
+	l := newLoginLimiter()
+	ip := "198.51.100.9"
+	blocked := false
+	for i := 0; i < loginIPMaxFails+5; i++ {
+		key := fmt.Sprintf("%s|victim-%d", ip, i)
+		if !l.allow(key, ip) {
+			blocked = true
+			break
+		}
+		l.fail(key, ip)
+	}
+	if !blocked {
+		t.Fatal("per-IP tier must engage before username rotation exhausts")
+	}
+	// A different IP is unaffected.
+	if !l.allow("10.0.0.1|x", "10.0.0.1") {
+		t.Fatal("other IPs must be unaffected by one IP's lockout")
+	}
+}
+
+// X-Real-IP is honored only from trusted private-range peers; spoofing from a
+// public peer must not influence the rate-limit identity.
+func TestClientIPTrustedProxy(t *testing.T) {
+	s := NewServer(nil, nil, "admin", "t", discardLogger())
+	mk := func(remote, realIP string) *http.Request {
+		r := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		r.RemoteAddr = remote
+		r.Header.Set("X-Real-IP", realIP)
+		return r
+	}
+	if got := s.clientIP(mk("10.1.2.3:5555", "203.0.113.5")); got != "203.0.113.5" {
+		t.Fatalf("trusted proxy header must win: %q", got)
+	}
+	if got := s.clientIP(mk("203.0.113.99:5555", "1.2.3.4")); got != "203.0.113.99" {
+		t.Fatalf("public peer must NOT set identity via header: %q", got)
+	}
+	// Explicit override replaces the default list entirely.
+	s.SetTrustProxies([]string{"203.0.113.0/24"})
+	if got := s.clientIP(mk("10.1.2.3:5555", "9.9.9.9")); got != "10.1.2.3" {
+		t.Fatalf("peer outside explicit trust list must be ignored: %q", got)
+	}
+	if got := s.clientIP(mk("203.0.113.20:5555", "9.9.9.9")); got != "9.9.9.9" {
+		t.Fatalf("explicitly trusted peer must be honored: %q", got)
 	}
 }

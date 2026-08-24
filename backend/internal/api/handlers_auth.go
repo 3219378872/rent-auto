@@ -3,7 +3,6 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -38,15 +37,17 @@ func (s *Server) internalError(w http.ResponseWriter, err error) {
 const (
 	loginMaxFails    = 5
 	loginFailWindow  = 10 * time.Minute
+	loginIPMaxFails  = 30                                      // per-IP tier: caps global brute force across usernames
 	loginDummyPrefix = "$2a$10$disabledaccountdisabledaccount" // never matches a real password
 )
 
-// loginLimiter is a fixed-window lockout per client IP + username.
-// After loginMaxFails failed attempts within loginFailWindow, further attempts
-// are rejected until the window elapses.
+// loginLimiter is a fixed-window lockout per client IP + username, with a
+// second per-IP-only tier so rotating usernames cannot extend an attack
+// indefinitely. Expired slots are swept once the maps grow past thresholds.
 type loginLimiter struct {
-	mu    sync.Mutex
-	fails map[string]*failSlot
+	mu      sync.Mutex
+	fails   map[string]*failSlot // ip|username
+	ipFails map[string]*failSlot // ip
 }
 
 type failSlot struct {
@@ -55,46 +56,51 @@ type failSlot struct {
 }
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{fails: map[string]*failSlot{}}
+	return &loginLimiter{fails: map[string]*failSlot{}, ipFails: map[string]*failSlot{}}
 }
 
-func (l *loginLimiter) slot(key string, now time.Time) *failSlot {
-	l.sweepLocked(now)
-	s := l.fails[key]
+func (l *loginLimiter) slot(m map[string]*failSlot, key string, now time.Time) *failSlot {
+	s := m[key]
 	if s == nil || now.Sub(s.start) > loginFailWindow {
 		s = &failSlot{start: now}
-		l.fails[key] = s
+		m[key] = s
 	}
 	return s
 }
 
-// sweepLocked evicts expired slots once the map grows past a threshold. Keys
-// embed user-controlled usernames, so without eviction random-username probing
-// grows the map without bound.
+// sweepLocked evicts expired slots once a map grows past a threshold. Keys
+// embed user-controlled usernames (and spoofable-without-trust IPs), so
+// without eviction probing grows the maps without bound.
 func (l *loginLimiter) sweepLocked(now time.Time) {
-	if len(l.fails) < 1024 {
-		return
-	}
-	for k, s := range l.fails {
-		if now.Sub(s.start) > loginFailWindow {
-			delete(l.fails, k)
+	for _, m := range []map[string]*failSlot{l.fails, l.ipFails} {
+		if len(m) < 1024 {
+			continue
+		}
+		for k, s := range m {
+			if now.Sub(s.start) > loginFailWindow {
+				delete(m, k)
+			}
 		}
 	}
 }
 
-// allow reports whether a login attempt may proceed.
-func (l *loginLimiter) allow(key string) bool {
+// allow reports whether a login attempt may proceed: the (ip,user) bucket and
+// the per-IP bucket must both be under their fail limits.
+func (l *loginLimiter) allow(key, ip string) bool {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.slot(key, now).count < loginMaxFails
+	l.sweepLocked(now)
+	return l.slot(l.fails, key, now).count < loginMaxFails &&
+		l.slot(l.ipFails, ip, now).count < loginIPMaxFails
 }
 
-func (l *loginLimiter) fail(key string) {
+func (l *loginLimiter) fail(key, ip string) {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.slot(key, now).count++
+	l.slot(l.fails, key, now).count++
+	l.slot(l.ipFails, ip, now).count++
 }
 
 func (l *loginLimiter) reset(key string) {
@@ -103,18 +109,7 @@ func (l *loginLimiter) reset(key string) {
 	delete(l.fails, key)
 }
 
-// clientIP prefers the reverse-proxy-set X-Real-IP (Caddy overwrites it),
-// falling back to the transport peer address.
-func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		return v
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// clientIP (trusted-proxy aware) lives on Server; see server.go.
 
 type loginRequest struct {
 	Username string `json:"username"`
@@ -143,8 +138,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid json")
 		return
 	}
-	key := clientIP(r) + "|" + req.Username
-	if !s.logins.allow(key) {
+	ip := s.clientIP(r)
+	key := ip + "|" + req.Username
+	if !s.logins.allow(key, ip) {
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
 		return
 	}
@@ -160,7 +156,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	pwOK := auth.CheckPassword(checkHash, req.Password)
 	if !userOK || !pwOK {
-		s.logins.fail(key)
+		s.logins.fail(key, ip)
 		s.audit(r, "login.failed", map[string]any{"username": req.Username})
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "bad credentials")
 		return

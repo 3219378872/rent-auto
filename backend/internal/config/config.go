@@ -19,8 +19,9 @@ type Config struct {
 	MasterKey     []byte // 32B AES-GCM key; empty disables credential encryption (dev only)
 	AdminUser     string
 	AdminPassHash string // bcrypt hash from env; empty -> bootstrap flow
-	DryRunDefault bool
+	DryRunDefault bool   // mirrors env DRY_RUN_DEFAULT
 	LogLevel      string
+	TrustProxies  []string // CIDR list allowed to set X-Real-IP (empty = API default private ranges)
 }
 
 func Load() (*Config, error) {
@@ -32,6 +33,13 @@ func Load() (*Config, error) {
 		AdminPassHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		DryRunDefault: os.Getenv("DRY_RUN_DEFAULT") != "false",
 		LogLevel:      strings.ToLower(envOr("LOG_LEVEL", "info")),
+	}
+	if v := os.Getenv("TRUST_PROXY_CIDRS"); v != "" {
+		for _, cidr := range strings.Split(v, ",") {
+			if cidr = strings.TrimSpace(cidr); cidr != "" {
+				c.TrustProxies = append(c.TrustProxies, cidr)
+			}
+		}
 	}
 	if c.DatabaseURL == "" {
 		return nil, errors.New("config: DATABASE_URL is required")
