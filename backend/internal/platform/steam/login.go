@@ -355,7 +355,7 @@ func encryptPassword(password, modHex, expHex string) (string, error) {
 		return "", errors.New("steam: bad rsa exponent")
 	}
 	pub := &rsa.PublicKey{N: mod, E: int(exp.Int64())}
-	enc, err := rsa.EncryptPKCS1v15(rand.Reader, pub, []byte(password))
+	enc, err := rsa.EncryptPKCS1v15(rand.Reader, pub, []byte(password)) //nolint:staticcheck // 平台线协议强制 PKCS#1 v1.5，服务端固定无法换 OAEP
 	if err != nil {
 		return "", fmt.Errorf("steam: rsa encrypt: %w", err)
 	}

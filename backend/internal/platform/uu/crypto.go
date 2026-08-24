@@ -103,7 +103,7 @@ func (c *Crypt) DecryptAES(encB64 string) ([]byte, error) {
 }
 
 func (c *Crypt) EncryptedAESKey() (string, error) {
-	enc, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, c.aesKey)
+	enc, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, c.aesKey) //nolint:staticcheck // 平台线协议强制 PKCS#1 v1.5，服务端固定无法换 OAEP
 	if err != nil {
 		return "", fmt.Errorf("%w: rsa encrypt: %v", errCrypt, err)
 	}
