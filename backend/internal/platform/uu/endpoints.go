@@ -98,6 +98,9 @@ func (c *Client) ListLeaseShelf(ctx context.Context, includeZeroCD bool) ([]Leas
 	for _, p := range paths {
 		pageIndex := 1
 		for {
+			if pageIndex > maxListPages {
+				break
+			}
 			data, err := c.do(ctx, "POST", p, map[string]any{
 				"pageIndex": pageIndex, "pageSize": 100,
 				"whetherMerge": 0, "Sessionid": c.device,
@@ -319,6 +322,11 @@ func (c *Client) GetMarketLeasePrice(ctx context.Context, templateID int64, minP
 	return out, nil
 }
 
+// maxListPages bounds every paginated fetch: a misbehaving server that
+// keeps returning full pages must degrade to a truncated snapshot instead of
+// an infinite rate-limited loop. 500 pages ≫ any realistic volume.
+const maxListPages = 500
+
 // ---- leased-out orders ----
 
 // LeasedOutOrder is one entry of the leased-out order list.
@@ -358,6 +366,9 @@ func (c *Client) GetLeasedOutOrders(ctx context.Context) ([]LeasedOutOrder, erro
 	pageIndex := 0
 	for {
 		pageIndex++
+		if pageIndex > maxListPages {
+			break
+		}
 		data, err := c.do(ctx, "POST", "/api/youpin/bff/trade/v1/order/lease/out/list", map[string]any{
 			"gameId": 730, "pageIndex": pageIndex, "pageSize": 50,
 			"sortType": 0, "keywords": "",

@@ -52,82 +52,134 @@ func (r *Registry) SetLimiter(ch domain.Channel, l platform.Limiter) {
 }
 
 // Refresh (re)builds adapters from whatever credentials are stored.
+// Network validation runs OUTSIDE the registry lock: a slow platform round
+// trip must not stall every Get/All reader (panel, scheduler) for seconds.
 func (r *Registry) Refresh(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// UU — token is stored encrypted; legacy plaintext rows are migrated lazily.
-	setting, err := r.st.GetSetting(ctx, keyUUToken)
-	if err != nil && err != store.ErrNotFound {
+	// Phase 1 — read + decrypt stored credentials (short lock hold).
+	uuToken := ""
+	if setting, err := r.st.GetSetting(ctx, keyUUToken); err != nil && err != store.ErrNotFound {
 		return err
-	}
-	if err == nil {
-		var payload struct {
-			Token string `json:"token"`
-		}
+	} else if err == nil {
 		switch {
 		case setting.ValueEnc != nil && r.box != nil:
-			plain, err := r.box.Open(string(setting.ValueEnc))
-			if err != nil {
-				r.log.Warn("uu token decrypt failed", "err", err)
+			plain, derr := r.box.Open(string(setting.ValueEnc))
+			if derr != nil {
+				r.log.Warn("uu token decrypt failed", "err", derr)
 				r.dropUU() // unreadable stored state ⇒ channel not configured
-			} else if json.Unmarshal(plain, &payload) == nil && payload.Token != "" {
-				r.buildUUAdapter(ctx, payload.Token)
+			} else {
+				var payload struct {
+					Token string `json:"token"`
+				}
+				if json.Unmarshal(plain, &payload) == nil && payload.Token != "" {
+					uuToken = payload.Token
+				}
 			}
 		case setting.ValuePlain != nil:
+			var payload struct {
+				Token string `json:"token"`
+			}
 			if json.Unmarshal([]byte(*setting.ValuePlain), &payload) == nil && payload.Token != "" {
-				if r.buildUUAdapter(ctx, payload.Token) && r.box != nil {
-					// Lazy migration: re-seal legacy plaintext into value_enc.
-					b, _ := json.Marshal(map[string]string{"token": payload.Token})
-					if enc, err := r.box.Seal(b); err == nil &&
-						r.st.UpsertSettingEnc(ctx, keyUUToken, []byte(enc)) == nil { // clears value_plain
-						r.log.Info("uu token migrated to encrypted storage")
-					}
-				}
+				uuToken = payload.Token
+				r.sealLegacyUUToken(ctx, payload.Token)
 			}
 		}
 	}
 
-	// ECO
-	ecoSetting, ecoErr := r.st.GetSetting(ctx, keyECOCreds)
-	switch {
-	case ecoErr == nil && ecoSetting.ValueEnc != nil && r.box != nil:
-		plain, err := r.box.Open(string(ecoSetting.ValueEnc))
+	ecoCredsOK := false
+	var ecoPartner, ecoKeyPEM, ecoSteamID string
+	if ecoSetting, err := r.st.GetSetting(ctx, keyECOCreds); err != nil && err != store.ErrNotFound {
+		return err
+	} else if err == nil && ecoSetting.ValueEnc != nil && r.box != nil {
+		plain, derr := r.box.Open(string(ecoSetting.ValueEnc))
+		if derr != nil {
+			r.log.Warn("eco creds decrypt failed", "err", derr)
+			r.dropECO()
+		} else {
+			var creds struct {
+				PartnerID     string `json:"partner_id"`
+				PrivateKeyPEM string `json:"private_key_pem"`
+			}
+			if json.Unmarshal(plain, &creds) == nil && creds.PartnerID != "" {
+				ecoPartner, ecoKeyPEM, ecoCredsOK = creds.PartnerID, creds.PrivateKeyPEM, true
+				ecoSteamID = r.loadECOSteamID(ctx)
+			}
+		}
+	}
+
+	// Phase 2 — construct clients (platform validation round trips, NO lock).
+	type builtUU struct {
+		ad platform.Adapter
+		c  *uu.Client
+	}
+	var newUU *builtUU
+	if uuToken != "" {
+		c, err := uu.NewClient(ctx, uuToken, r.uuOptions()...)
 		if err != nil {
-			r.log.Warn("eco creds decrypt failed", "err", err)
-			r.dropECO() // unreadable stored state ⇒ channel not configured
-			break
+			r.log.Warn("uu adapter build failed", "err", err)
+		} else {
+			newUU = &builtUU{ad: uu.NewAdapter(c), c: c}
 		}
-		var creds struct {
-			PartnerID     string `json:"partner_id"`
-			PrivateKeyPEM string `json:"private_key_pem"`
+	}
+	var newEcoAd platform.Adapter
+	var newEcoC *eco.Client
+	if ecoCredsOK {
+		opts := []eco.Option{}
+		if l, ok := r.lim[domain.ChannelECO]; ok {
+			opts = append(opts, eco.WithLimiter(l))
 		}
-		if json.Unmarshal(plain, &creds) == nil && creds.PartnerID != "" {
-			steamID := ""
-			if s, err := r.st.GetSetting(ctx, keyECOSteam); err == nil && s.ValuePlain != nil {
-				var p struct {
-					SteamID string `json:"steam_id"`
-				}
-				_ = json.Unmarshal([]byte(*s.ValuePlain), &p)
-				steamID = p.SteamID
-			}
-			opts := []eco.Option{}
-			if l, ok := r.lim[domain.ChannelECO]; ok {
-				opts = append(opts, eco.WithLimiter(l))
-			}
-			if c, err := eco.NewClient(creds.PartnerID, []byte(creds.PrivateKeyPEM), opts...); err == nil {
-				r.ad[domain.ChannelECO] = eco.NewAdapter(c, steamID)
-				r.ecoClient = c
-				r.ecoSteamID = steamID
-			} else {
-				r.log.Warn("eco adapter build failed", "err", err)
-				r.dropECO()
-			}
+		c, err := eco.NewClient(ecoPartner, []byte(ecoKeyPEM), opts...)
+		if err != nil {
+			r.log.Warn("eco adapter build failed", "err", err)
+		} else {
+			newEcoAd, newEcoC = eco.NewAdapter(c, ecoSteamID), c
 		}
-	case ecoErr != nil && ecoErr != store.ErrNotFound:
-		return ecoErr
+	}
+
+	// Phase 3 — install or drop atomically.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if uuToken != "" {
+		if newUU != nil {
+			r.ad[domain.ChannelUU] = newUU.ad
+			r.uuClient = newUU.c
+		} else {
+			r.dropUU()
+		}
+	}
+	if ecoCredsOK {
+		if newEcoC != nil {
+			r.ad[domain.ChannelECO] = newEcoAd
+			r.ecoClient = newEcoC
+			r.ecoSteamID = ecoSteamID
+		} else {
+			r.dropECO()
+		}
 	}
 	return nil
+}
+
+// sealLegacyUUToken re-seals a legacy plaintext token into encrypted storage
+// (lazy migration; best-effort).
+func (r *Registry) sealLegacyUUToken(ctx context.Context, token string) {
+	if r.box == nil {
+		return
+	}
+	b, _ := json.Marshal(map[string]string{"token": token})
+	if enc, err := r.box.Seal(b); err == nil &&
+		r.st.UpsertSettingEnc(ctx, keyUUToken, []byte(enc)) == nil { // clears value_plain
+		r.log.Info("uu token migrated to encrypted storage")
+	}
+}
+
+func (r *Registry) loadECOSteamID(ctx context.Context) string {
+	if s, err := r.st.GetSetting(ctx, keyECOSteam); err == nil && s.ValuePlain != nil {
+		var p struct {
+			SteamID string `json:"steam_id"`
+		}
+		_ = json.Unmarshal([]byte(*s.ValuePlain), &p)
+		return p.SteamID
+	}
+	return ""
 }
 
 func (r *Registry) Get(ch domain.Channel) (platform.Adapter, bool) {
@@ -216,19 +268,6 @@ func (r *Registry) dropECO() {
 	delete(r.ad, domain.ChannelECO)
 	r.ecoClient = nil
 	r.ecoSteamID = ""
-}
-
-// buildUUAdapter constructs the UU adapter from a raw token; reports success.
-func (r *Registry) buildUUAdapter(ctx context.Context, token string) bool {
-	c, err := uu.NewClient(ctx, token, r.uuOptions()...)
-	if err != nil {
-		r.log.Warn("uu adapter build failed", "err", err)
-		r.dropUU()
-		return false
-	}
-	r.ad[domain.ChannelUU] = uu.NewAdapter(c)
-	r.uuClient = c
-	return true
 }
 
 // SetECOCreds validates then persists ECO credentials (encrypted at rest).

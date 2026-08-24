@@ -76,11 +76,19 @@ type page struct {
 	PageResult  json.RawMessage `json:"PageResult"`
 }
 
+// maxListPages bounds every paginated fetch: a misbehaving server that keeps
+// returning full pages must degrade to a truncated snapshot instead of an
+// infinite rate-limited loop. 500 pages ≫ any realistic volume.
+const maxListPages = 500
+
 // QuerySelfRentGoods pages through our lease shelf. state: nil=all,1=listed,2=leased.
 func (c *Client) QuerySelfRentGoods(ctx context.Context, state *int) ([]RentGoods, error) {
 	var out []RentGoods
 	pageIndex := 1
 	for {
+		if pageIndex > maxListPages {
+			break
+		}
 		biz := map[string]any{
 			"SteamGameId": "730",
 			"PageIndex":   pageIndex,
@@ -162,6 +170,9 @@ func (c *Client) SellerRentOrderList(ctx context.Context, start, end time.Time, 
 	const layout = "2006-01-02 15:04:05"
 	pageIndex := 1
 	for {
+		if pageIndex > maxListPages {
+			break
+		}
 		biz := map[string]any{
 			"StartTime": start.Format(layout),
 			"EndTime":   end.Format(layout),
