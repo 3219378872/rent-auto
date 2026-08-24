@@ -67,3 +67,28 @@ func TestLoadErrors(t *testing.T) {
 		t.Fatal("bad APP_MASTER_KEY must fail")
 	}
 }
+
+// TRUST_PROXY_CIDRS parses a comma-separated CIDR allowlist; blank entries
+// and unset env yield an empty list (API falls back to private ranges).
+func TestTrustProxyCIDRsParsing(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("TRUST_PROXY_CIDRS", " 10.0.0.0/8, ,192.168.1.0/24 ")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.TrustProxies) != 2 ||
+		c.TrustProxies[0] != "10.0.0.0/8" || c.TrustProxies[1] != "192.168.1.0/24" {
+		t.Fatalf("trust proxies: %q", c.TrustProxies)
+	}
+
+	t.Setenv("TRUST_PROXY_CIDRS", "")
+	c2, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c2.TrustProxies) != 0 {
+		t.Fatalf("unset env must yield empty list, got %q", c2.TrustProxies)
+	}
+}
