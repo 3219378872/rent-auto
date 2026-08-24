@@ -84,12 +84,33 @@ export interface InventoryRow {
   mark_price: number; tradable: boolean; status: string; cost_basis: number
 }
 
+export interface LastDecision {
+  action: string
+  at: string | null
+  new_rent?: number
+  skip?: string
+}
+
 export interface ListingRow {
   id: number; channel: string; asset_id: string; hash_name: string; goods_ref: string
   desired_state: string; actual_state: string
   rent_price: number; long_rent_price: number; max_days: number; deposit: number
   listed_at: string | null; last_reprice_at: string | null
+  factor: number
+  last_decision?: LastDecision | null
 }
+
+export interface TemplateRow {
+  hash_name: string; display_name: string; category: string
+  uu_template_id: number | null
+  uu_mark_price: number | null; eco_ref_price: number | null
+  value_anchor: number | null
+  blacklisted: boolean
+  anchor_updated_at?: string | null
+}
+
+/** /channels 健康映射：ok | not_configured | error:… （含 steam） */
+export type ChannelHealth = Record<string, string>
 
 export interface OrderRow {
   id: number; channel: string; order_ref: string; hash_name: string

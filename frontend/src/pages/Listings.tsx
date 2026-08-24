@@ -65,7 +65,8 @@ export default function Listings() {
         <thead>
           <tr>
             <th>渠道</th><th>名称</th><th>实际状态</th><th>期望状态</th>
-            <th>租金/天</th><th>长租租金</th><th>押金</th><th>最大天数</th><th>最近改价</th>
+            <th>租金/天</th><th>长租租金</th><th>押金</th><th>最大天数</th>
+            <th title="反馈控制器因子 × 最近一次定价动作">决策依据</th><th>最近改价</th>
           </tr>
         </thead>
         <tbody>
@@ -79,6 +80,7 @@ export default function Listings() {
               <td>{r.long_rent_price > 0 ? `¥${r.long_rent_price.toFixed(2)}` : '—'}</td>
               <td>¥{r.deposit.toFixed(2)}</td>
               <td>{r.max_days || '—'}天</td>
+              <td className="muted" title={decisionTitle(r)}>{fmtDecision(r)}</td>
               <td className="muted">{fmtTime(r.last_reprice_at)}</td>
             </tr>
           ))}
@@ -99,4 +101,22 @@ export default function Listings() {
 function fmtTime(s: string | null): string {
   if (!s) return '—'
   return new Date(s).toLocaleString('zh-CN', { hour12: false })
+}
+
+// 决策依据摘要：因子 × 最近动作（US-LIST-02）。
+function fmtDecision(r: ListingRow): string {
+  const parts: string[] = [`×${(r.factor ?? 1).toFixed(2)}`]
+  const d = r.last_decision
+  if (d) {
+    if (d.action === 'skip' && d.skip) parts.push(`跳过:${d.skip}`)
+    else if (d.action === 'reprice' && d.new_rent != null) parts.push(`→¥${d.new_rent.toFixed(2)}`)
+    else parts.push(d.action)
+  }
+  return parts.join(' ')
+}
+
+function decisionTitle(r: ListingRow): string {
+  const d = r.last_decision
+  if (!d?.at) return '暂无定价动作记录'
+  return `${d.action} @ ${fmtTime(d.at)}`
 }

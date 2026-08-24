@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { StrategyRow } from '../api/client'
+import type { StrategyRow, TemplateRow } from '../api/client'
 
 interface StrategyParams {
   baseline: { topn: number; k1: number; k2: number; k3: number; min_lease_ratio: number }
@@ -168,6 +168,24 @@ export default function Strategies() {
   const [real, setReal] = useState(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const [templates, setTemplates] = useState<TemplateRow[]>([])
+
+  const loadTemplates = useCallback(() => {
+    api.get<TemplateRow[]>('/templates').then(setTemplates).catch(() => undefined)
+  }, [])
+
+  const toggleBlacklist = async (t: TemplateRow) => {
+    setErr(''); setMsg('')
+    try {
+      await api.put('/templates/blacklist', { hash_name: t.hash_name, blacklisted: !t.blacklisted })
+      setMsg(t.blacklisted ? `已解除拉黑：${t.display_name || t.hash_name}` : `已拉黑：${t.display_name || t.hash_name}（将退出上架路由与锚点合成）`)
+      loadTemplates()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  useEffect(loadTemplates, [loadTemplates])
 
   const load = useCallback(() => {
     api.get<StrategyRow[]>('/strategies').then((rows) => {
@@ -413,6 +431,35 @@ export default function Strategies() {
                 <td>{s.priority}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="section">
+        <h3 style={{ marginTop: 0 }}>模板黑名单（US-STRAT-05）</h3>
+        <p className="hint" style={{ marginTop: 0 }}>
+          拉黑后的模板立即退出可路由库存与价值锚点合成；已在架商品由 reconcile 在宽限期后下架。
+        </p>
+        <table className="grid">
+          <thead><tr><th>名称</th><th>品类</th><th>锚点价</th><th>UU 商品类目</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            {templates.map((t) => (
+              <tr key={t.hash_name}>
+                <td title={t.hash_name}>{t.display_name || t.hash_name}</td>
+                <td>{t.category || '—'}</td>
+                <td>{t.value_anchor != null ? `¥${t.value_anchor.toFixed(2)}` : '—'}</td>
+                <td>{t.uu_template_id ?? '—'}</td>
+                <td>{t.blacklisted ? <span className="badge bad">已拉黑</span> : <span className="badge ok">正常</span>}</td>
+                <td>
+                  <button className="ghost small" onClick={() => toggleBlacklist(t)}>
+                    {t.blacklisted ? '解除拉黑' : '拉黑'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {templates.length === 0 && (
+              <tr><td colSpan={6} className="muted">暂无模板数据（待库存/订单同步产出）</td></tr>
+            )}
           </tbody>
         </table>
       </div>

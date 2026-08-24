@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { scaleY } from './Dashboard.helpers'
+import { channelIssues, scaleY } from './Dashboard.helpers'
 import { api, DashboardData } from '../api/client'
 
 function Sparkline({ points }: { points: number[] }) {
@@ -32,11 +32,19 @@ const fmtPct = (n: number) => `${(n * 100).toFixed(2)}%`
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
+  const [health, setHealth] = useState<Record<string, string>>({})
   const [err, setErr] = useState('')
 
   useEffect(() => {
     api.get<DashboardData>('/dashboard').then(setData).catch((e) => setErr(e.message))
+    // 渠道健康告警条数据源；失败不阻塞仪表盘本体
+    api
+      .get<Record<string, string>>('/channels')
+      .then(setHealth)
+      .catch(() => undefined)
   }, [])
+
+  const issues = channelIssues(health)
 
   if (err) return <div><h2>仪表盘</h2><div className="error">{err}</div></div>
   if (!data) return <div className="muted">加载中…</div>
@@ -44,6 +52,11 @@ export default function Dashboard() {
   return (
     <div>
       <h2>仪表盘</h2>
+      {issues.length > 0 && (
+        <div className="error" role="alert">
+          ⚠ 渠道异常：{issues.join('；')} —— 请到「渠道账号」页检查凭证或风控状态
+        </div>
+      )}
       <div className="cards">
         <Card label="总资产" value={fmtMoney(data.assets.total)}
           sub={`库存 ${fmtMoney(data.assets.inventory)}`} />
