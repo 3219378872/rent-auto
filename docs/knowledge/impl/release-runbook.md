@@ -15,6 +15,14 @@ docker compose logs -f backend        # 观察启动迁移与健康检查
 
 升级：替换镜像 tag → compose up -d（启动时迁移自动前滚；回滚=旧镜像+手工 migrate down 一步）
 
+### 数据库端口纪律（2026-08-24 起）
+
+- compose 中 Postgres 宿主机端口**固定绑定 `127.0.0.1:` 回环**（security-spec：
+  数据库不暴露非本机网络）；`PG_HOST_PORT` 只改宿主机端口号，不改绑定点
+- `POSTGRES_PASSWORD` 的 `rentauto` 弱默认仅因回环绑定而可接受；
+  任何跨机访问需求一律走 backend 容器内网（`postgres:5432`），禁止改绑 `0.0.0.0`
+- ⚠️ 未设置 `SITE_ADDRESS` 时 Caddy 退化为 :80 明文——仅限内网调试，公网部署必须设置
+
 ## 备份
 
 - Postgres 每日 dump（compose 内置 cron 服务）保留14天；恢复演练每月一次
