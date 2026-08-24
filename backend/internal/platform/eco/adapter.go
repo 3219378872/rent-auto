@@ -2,6 +2,7 @@ package eco
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
@@ -165,8 +166,9 @@ func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeas
 	results, err := a.c.PublishRentAndSale(ctx, a.steamID, PublishTypeMod, payload)
 	out := make([]platform.RepriceLeaseResult, len(items))
 	for i := range items {
-		out[i].GoodsRef = items[i].GoodsRef
-		out[i].Success = true
+		// default-deny: an item with no explicit per-item result is a FAILURE,
+		// never optimistic success (mirrors PublishLease above).
+		out[i] = platform.RepriceLeaseResult{GoodsRef: items[i].GoodsRef}
 	}
 	for i, r := range results {
 		if i >= len(out) {
@@ -174,6 +176,13 @@ func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeas
 		}
 		out[i].Success = r.IsSuccess
 		out[i].Error = r.ErrorMsg
+	}
+	if len(results) != len(items) {
+		for i := len(results); i < len(out); i++ {
+			out[i].Error = "eco: missing per-item reprice result"
+		}
+		return out, fmt.Errorf("%w: %d/%d reprice results returned",
+			platform.ErrPartialFailure, len(results), len(items))
 	}
 	return out, err
 }

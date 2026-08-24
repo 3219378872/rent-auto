@@ -185,6 +185,37 @@ func TestAcceptOfferWithConfirmation(t *testing.T) {
 	}
 }
 
+// creator_id that is merely a numeric suffix of the offer id must never be
+// confirmed — matching is exact only (upstream steampy match_end=False).
+func TestAcceptOfferConfirmationExactMatchOnly(t *testing.T) {
+	var ajaxopCalled bool
+	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			_, _ = w.Write([]byte(`{"needs_mobile_confirmation":true}`))
+		case r.URL.Path == "/mobileconf/getlist":
+			// 456 is a suffix of 123456 — an unrelated confirmation that must
+			// NOT be allowed just because its digits line up.
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"cx","nonce":"nx","creator_id":456}]}`))
+		case r.URL.Path == "/mobileconf/ajaxop":
+			ajaxopCalled = true
+			_, _ = w.Write([]byte(`{"success":true}`))
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	old := sleepShort
+	sleepShort = func() {}
+	defer func() { sleepShort = old }()
+	ok, err := s.AcceptOfferWithPartner(context.Background(), "123456", "76561198000000001")
+	if ok || err == nil || !strings.Contains(err.Error(), "confirmation not found") {
+		t.Fatalf("suffix-only creator must not be confirmed: ok=%v err=%v", ok, err)
+	}
+	if ajaxopCalled {
+		t.Fatal("unrelated confirmation must never be allowed")
+	}
+}
+
 func TestAcceptRejectsCostlyOffer(t *testing.T) {
 	offers := []rawOffer{
 		{TradeOfferID: "1", ItemsToGive: []interface{}{map[string]any{"id": "x"}}},

@@ -93,11 +93,13 @@ POST → resp.needs_mobile_confirmation == true 时进入确认器 ↓
 GET  steamcommunity.com/mobileconf/getlist?p=<device_id>&a=<steamid>&k=<confirmation_key(tag="conf")>&t=<ts>&m=android&tag=conf
      → conf[]{id, nonce, creator_id}
 GET  .../mobileconf/details/{id}?...tag="details{id}"   ← 从HTML提取 tradeoffer id 匹配目标
-     （bs4 选 .tradeoffer[0].id.split("_")[1]；Go 用正则等价实现）
+     （bs4 选 .tradeoffer[0].id.split("_")[1]；Go 尚未实现此步，见 §5）
 GET  .../mobileconf/ajaxop?op=allow&cid=<conf.id>&ck=<nonce>&<同款签名参数 tag="allow">
 ```
 确认器错误语义：`Incorrect Steam Guard codes` 文案=identity_secret 错误；
 三次重试后仍找不到匹配确认项 → ConfirmationExpected 放弃本轮。
+**creator_id 匹配必须精确相等**（上游 steampy 默认 match_end=False）——
+2026-08-24 起移除无条件后缀匹配（曾可能误确认 creator_id 恰为报价号数字后缀的无关交易）。
 
 ## 4. UU 发货链路（uu/delivery.go）
 
@@ -112,5 +114,6 @@ POST /api/youpin/bff/trade/todo/v1/orderTodo/list {userId,pageIndex,pageSize:20,
 ## 5. 本项目实现边界
 
 - 不做：出售发货(BUFF/C5)、市场挂刀、聊天、库存快照(get_my_inventory 仅排障用途)
-- 确认器 details 页 HTML 解析用正则近似 bs4 选择器，真实页面回归留待真机校订
+- 确认器 details 页 HTML 解析（§3.3 第3步）**未实现**：当前仅 getlist 的 creator_id
+  与报价号精确匹配；details 正则校验留待真机校订后补齐
 - 七天暂挂检测保留文案匹配

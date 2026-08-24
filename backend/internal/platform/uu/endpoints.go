@@ -247,10 +247,19 @@ func (c *Client) OffShelf(ctx context.Context, commodityIDs []string) error {
 		}
 		joined += id
 	}
-	_, err := c.do(ctx, "PUT", "/api/commodity/Commodity/OffShelf", map[string]any{
+	data, err := c.do(ctx, "PUT", "/api/commodity/Commodity/OffShelf", map[string]any{
 		"Ids": joined, "IsDeleteCommodityCache": 1, "IsForceOffline": true,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	env, err := decodeEnvelope(data)
+	if err != nil {
+		return err
+	}
+	// A 200 envelope carrying a business error code is a FAILED delist; treating
+	// it as success strands ghost shelves that the reprice loop keeps touching.
+	return checkEnv(env, "offshelf")
 }
 
 // ---- market lease quotes ----
@@ -390,6 +399,15 @@ func (c *Client) GetZeroCDList(ctx context.Context) ([]ZeroCDOrder, error) {
 }
 
 func (c *Client) EnableZeroCD(ctx context.Context, orderIDs []int64) error {
-	_, err := c.do(ctx, "POST", "/api/youpin/bff/order/sublet/open", map[string]any{"orderIds": orderIDs})
-	return err
+	data, err := c.do(ctx, "POST", "/api/youpin/bff/order/sublet/open", map[string]any{"orderIds": orderIDs})
+	if err != nil {
+		return err
+	}
+	env, err := decodeEnvelope(data)
+	if err != nil {
+		return err
+	}
+	// same failure-determination rule as OffShelf: business code ≠ 0 must not
+	// read as success, or the audit log records a zeroCD enable that never happened.
+	return checkEnv(env, "zerocd-open")
 }

@@ -72,7 +72,7 @@ func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 
 func timeNow() int64 { return time.Now().Unix() }
 
-func sleepShort() { time.Sleep(3 * time.Second) }
+var sleepShort = func() { time.Sleep(3 * time.Second) }
 
 func (s *Session) get(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -191,11 +191,10 @@ func (s *Session) confirmTradeOffer(ctx context.Context, offerID string) error {
 			return fmt.Errorf("steam: confirmlist decode: %w", err)
 		}
 		for _, c := range list.Conf {
-			id := strconv.FormatInt(c.CreatorID, 10)
-			if id == "" || len(id) < 3 {
-				continue
-			}
-			if id == offerID || strings.HasSuffix(offerID, id) {
+			// Exact creator_id == offer id only (upstream steampy default,
+			// match_end=False): a loose suffix match once allowed confirming an
+			// unrelated trade whose creator_id happened to end with our digits.
+			if strconv.FormatInt(c.CreatorID, 10) == offerID {
 				return s.allowConfirmation(ctx, c.ID, c.Nonce)
 			}
 		}

@@ -81,6 +81,71 @@ func TestOffShelfPayload(t *testing.T) {
 	}
 }
 
+// A 200 response carrying a business error code is a FAILED delist — it must
+// surface as an error (and never be audited as applied), or ghost shelves keep
+// being repriced/delisted forever.
+func TestOffShelfBusinessFailureEnvelope(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want error  // non-nil: errors.Is target; nil: match wantMsg instead
+		msg  string // substring expected when want == nil
+	}{
+		{"auth-expired", `{"Code":84101,"Msg":"login required"}`, platform.ErrAuthExpired, ""},
+		{"risk-control", `{"Code":84104,"Msg":"blocked"}`, platform.ErrPlatformBlocked, ""},
+		{"generic-biz-code", `{"Code":84103,"Msg":"commodity busy"}`, nil, "offshelf code=84103"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
+				switch r.URL.Path {
+				case "/api/user/Account/getUserInfo":
+					okUserInfo(w)
+				case "/api/commodity/Commodity/OffShelf":
+					_, _ = w.Write([]byte(tc.body))
+				default:
+					w.WriteHeader(404)
+				}
+				return true
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = NewAdapter(c).Delist(context.Background(), []string{"11"})
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("want %v, got %v", tc.want, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("want failure containing %q, got %v", tc.msg, err)
+			}
+		})
+	}
+}
+
+func TestEnableZeroCDBusinessFailureEnvelope(t *testing.T) {
+	c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/api/user/Account/getUserInfo":
+			okUserInfo(w)
+		case "/api/youpin/bff/order/sublet/open":
+			_, _ = w.Write([]byte(`{"Code":1,"Msg":"order not sublettable"}`))
+		default:
+			w.WriteHeader(404)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.EnableZeroCD(context.Background(), []int64{555})
+	if err == nil || !strings.Contains(err.Error(), "zerocd-open code=1") {
+		t.Fatalf("zeroCD business failure must fail loudly, got %v", err)
+	}
+}
+
 func TestLeasedOutOrdersPaging(t *testing.T) {
 	first := true
 	c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {

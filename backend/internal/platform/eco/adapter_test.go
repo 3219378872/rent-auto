@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -62,6 +63,29 @@ func TestAdapterPublishAndReprice(t *testing.T) {
 	}
 	if !strings.Contains(string(modAssets), `"AssetId":"b1"`) {
 		t.Fatalf("mod assets must address by AssetId: %s", modAssets)
+	}
+}
+
+func TestRepriceMissingResultsFailClosed(t *testing.T) {
+	// ResultData null / shorter than request must NEVER read as success —
+	// items without an explicit per-item result stay Success=false.
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		return okEnv(`null`)
+	})
+	rep, err := NewAdapter(c, "sid").RepriceLease(context.Background(), []platform.RepriceLeaseRequest{
+		{AssetRef: "b1", GoodsRef: "GN1", RentPrice: 1.3, MaxDays: 30, Deposit: 140},
+		{AssetRef: "b2", GoodsRef: "GN2", RentPrice: 2.5, MaxDays: 30, Deposit: 150},
+	})
+	if !errors.Is(err, platform.ErrPartialFailure) {
+		t.Fatalf("want ErrPartialFailure, got %v", err)
+	}
+	for i, r := range rep {
+		if r.Success {
+			t.Fatalf("rep[%d] must fail closed: %+v", i, r)
+		}
+		if r.Error == "" {
+			t.Fatalf("rep[%d] must carry an error message: %+v", i, r)
+		}
 	}
 }
 

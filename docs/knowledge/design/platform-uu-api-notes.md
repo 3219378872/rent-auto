@@ -57,9 +57,9 @@
 | /api/homepage/v3/detail/commodity/list/lease | **租赁行情** | templateId+价格区间+cnt，返回 CommodityName/LeaseUnitPrice/LongLeaseUnitPrice/LeaseDeposit 列表 |
 | /api/commodity/Inventory/SellInventoryWithLeaseV2 | 上架(可租) | 批量，含 IsCanLease/LeaseDeposit(str!)/LeaseMaxDays/CompensationType |
 | /api/commodity/Commodity/PriceChangeWithLeaseV2 | 改价 | 先 `pre_change_lease_price_post` 拿初始化信息再提交 |
-| /api/commodity/Commodity/OffShelf | 下架 | 出售/租赁通用 |
+| /api/commodity/Commodity/OffShelf | 下架 | 出售/租赁通用；响应信封 Code≠0 必须判失败（2026-08-24 起 fail-closed，mock 反例固化） |
 | /api/youpin/bff/trade/v1/order/lease/out/list | 出租订单 | 分页50，sortType=0 |
-| /api/youpin/bff/order/sublet/open + sublet/canEnable/list | 0CD转租 | 每日一次 |
+| /api/youpin/bff/order/sublet/open + sublet/canEnable/list | 0CD转租 | 每日一次；open 响应信封同样 fail-closed（同上） |
 | /api/youpin/bff/trade/v1/order/query/detail | 订单详情 | 模板ID回查 |
 
 ## 已知坑（必须遵守）

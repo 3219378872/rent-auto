@@ -47,6 +47,9 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
 3. QuerySelfRentGoods 返回 GoodsNum(string) 为下架接口定位键；改价(PublishType=2)按 **AssetId** 定位（无 GoodsNum 字段）
 4. 长租阈值 21 天为平台当前实现（文档注明"目前为"），需配置化
 5. 6001 频率错误：指数退避重试≤3；全局限频默认 2rps
+6. PublishRentAndSaleGoods 的逐项结果数组**不保证与请求等长/非空**：
+   缺省项必须按失败处理（fail-closed → ErrPartialFailure），禁止乐观置成功——
+   2026-08-24 起 RepriceLease 已按此固化并带 mock 反例
 
 ## Go 实现补充约定（M2b 落地结论）
 
