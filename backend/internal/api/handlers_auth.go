@@ -166,7 +166,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logins.reset(key)
-	tok, exp, err := s.JWT.Sign(req.Username, s.TTL)
+	tok, exp, err := s.JWT.Sign(req.Username, s.sessionEpoch(r.Context()), s.TTL)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "sign token")
 		return
@@ -177,4 +177,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.Version})
+}
+
+// handleLogout revokes every outstanding token by bumping the session epoch
+// (ADR-0006). The client discards its local copy regardless; the audit trail
+// records who logged out.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	ver := s.bumpSessionEpoch(r.Context())
+	s.audit(r, "auth.logout", map[string]any{"epoch": ver})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

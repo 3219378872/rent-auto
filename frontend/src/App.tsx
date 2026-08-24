@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
-import { clearToken, getToken } from './api/client'
+import { api, clearToken, getToken } from './api/client'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
@@ -13,8 +13,15 @@ import Audit from './pages/Audit'
 function Shell({ children }: { children: React.ReactNode }) {
   const nav = useNavigate()
   const logout = () => {
-    clearToken()
-    nav('/login')
+    // Revoke server-side first (epoch bump kills every token), then discard
+    // the local copy; navigation happens either way.
+    api
+      .post('/auth/logout', {})
+      .catch(() => undefined)
+      .finally(() => {
+        clearToken()
+        nav('/login')
+      })
   }
   return (
     <div className="shell">

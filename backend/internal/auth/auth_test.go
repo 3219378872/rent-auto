@@ -9,7 +9,7 @@ const testSecret = "0123456789abcdef0123456789abcdef"
 
 func TestJWTRoundTrip(t *testing.T) {
 	j := NewJWT([]byte(testSecret))
-	tok, exp, err := j.Sign("admin", time.Minute)
+	tok, exp, err := j.Sign("admin", 0, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestJWTRoundTrip(t *testing.T) {
 
 func TestJWTExpired(t *testing.T) {
 	j := NewJWT([]byte(testSecret))
-	tok, _, _ := j.Sign("admin", -time.Second)
+	tok, _, _ := j.Sign("admin", 0, -time.Second)
 	if _, err := j.Verify(tok); err != ErrExpiredToken {
 		t.Fatalf("want ErrExpiredToken, got %v", err)
 	}
@@ -35,12 +35,12 @@ func TestJWTExpired(t *testing.T) {
 
 func TestJWTTampered(t *testing.T) {
 	j := NewJWT([]byte(testSecret))
-	tok, _, _ := j.Sign("admin", time.Minute)
+	tok, _, _ := j.Sign("admin", 0, time.Minute)
 	if _, err := j.Verify(tok + "x"); err != ErrInvalidToken {
 		t.Fatalf("want ErrInvalidToken, got %v", err)
 	}
 	other := NewJWT([]byte("ffffffffffffffffffffffffffffffff"))
-	tok2, _, _ := other.Sign("admin", time.Minute)
+	tok2, _, _ := other.Sign("admin", 0, time.Minute)
 	if _, err := j.Verify(tok2); err != ErrInvalidToken {
 		t.Fatalf("cross-secret verify must fail, got %v", err)
 	}

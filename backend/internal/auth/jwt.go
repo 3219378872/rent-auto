@@ -18,6 +18,7 @@ var (
 
 type Claims struct {
 	Sub       string `json:"sub"`
+	Ver       int64  `json:"ver"` // session epoch; mismatch = revoked server-side
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -28,10 +29,12 @@ type JWT struct {
 
 func NewJWT(secret []byte) *JWT { return &JWT{secret: secret} }
 
-func (j *JWT) Sign(sub string, ttl time.Duration) (token string, exp time.Time, err error) {
+// Sign issues a token bound to the given session epoch. Bumping the epoch
+// server-side (logout) instantly invalidates every earlier token.
+func (j *JWT) Sign(sub string, ver int64, ttl time.Duration) (token string, exp time.Time, err error) {
 	now := time.Now()
 	exp = now.Add(ttl)
-	c := Claims{Sub: sub, IssuedAt: now.Unix(), ExpiresAt: exp.Unix()}
+	c := Claims{Sub: sub, Ver: ver, IssuedAt: now.Unix(), ExpiresAt: exp.Unix()}
 	header := base64URL([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payload, err := json.Marshal(c)
 	if err != nil {

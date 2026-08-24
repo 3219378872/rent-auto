@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -60,6 +61,7 @@ func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *s
 func (s *Server) Routes() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /api/v1/auth/me", s.handleMe)
+	protected.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	protected.HandleFunc("GET /api/v1/inventory", s.handleInventory)
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
@@ -150,9 +152,48 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "invalid token")
 			return
 		}
+		// Revocation (ADR-0006): tokens carry the session epoch they were
+		// issued in; a bumped epoch (logout) invalidates every earlier token.
+		if claims.Ver != s.sessionEpoch(r.Context()) {
+			writeErr(w, http.StatusUnauthorized, "unauthorized", "token revoked")
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxUser, claims.Sub)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// keyJWTEpoch stores the current session epoch in app_settings.
+const keyJWTEpoch = "jwt_session_epoch"
+
+// sessionEpoch returns the active session epoch; 0 when unset or store-less
+// (tests). A per-request DB read is acceptable at single-admin scale.
+func (s *Server) sessionEpoch(ctx context.Context) int64 {
+	if s.Store == nil {
+		return 0
+	}
+	setting, err := s.Store.GetSetting(ctx, keyJWTEpoch)
+	if err != nil || setting.ValuePlain == nil {
+		return 0
+	}
+	var v int64
+	if json.Unmarshal([]byte(*setting.ValuePlain), &v) != nil {
+		return 0
+	}
+	return v
+}
+
+// bumpSessionEpoch invalidates every outstanding token by advancing the epoch;
+// returns the new epoch.
+func (s *Server) bumpSessionEpoch(ctx context.Context) int64 {
+	next := s.sessionEpoch(ctx) + 1
+	if s.Store != nil {
+		if err := s.Store.UpsertSettingPlain(ctx, keyJWTEpoch, next); err != nil {
+			s.Log.Error("session epoch bump failed", "err", err)
+			return s.sessionEpoch(ctx)
+		}
+	}
+	return next
 }
 
 func withRecover(log *slog.Logger) func(http.Handler) http.Handler {
