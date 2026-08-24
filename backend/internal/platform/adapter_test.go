@@ -30,3 +30,12 @@ func TestPartialErrorMessage(t *testing.T) {
 		t.Fatal("wrapping semantics broken")
 	}
 }
+
+// Every *PartialError must satisfy errors.Is(err, ErrPartialFailure) so
+// callers can branch on the sentinel uniformly across channels.
+func TestPartialErrorUnwrapsToSentinel(t *testing.T) {
+	var err error = &PartialError{Ref: "G1", Msg: "busy"}
+	if !errors.Is(err, ErrPartialFailure) {
+		t.Fatal("PartialError must unwrap to ErrPartialFailure")
+	}
+}

@@ -267,3 +267,18 @@ func TestClientRejectsMissingResultCode(t *testing.T) {
 		t.Fatal("envelope without ResultCode must fail closed")
 	}
 }
+
+// Credential-class failures (4004 IP whitelist / 5005 identity invalid) map
+// to the unified ErrAuthExpired sentinel so scheduler risk-control cooldowns
+// engage instead of blind per-cycle retries.
+func TestCredentialFailuresMapToAuthExpired(t *testing.T) {
+	for _, code := range []string{"4004", "5005"} {
+		c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
+			return `{"ResultCode":"` + code + `","ResultMsg":"denied"}`
+		})
+		_, err := c.GetWalletBalance(context.Background())
+		if !errors.Is(err, platform.ErrAuthExpired) {
+			t.Fatalf("code %s: want ErrAuthExpired, got %v", code, err)
+		}
+	}
+}

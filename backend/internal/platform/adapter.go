@@ -23,12 +23,15 @@ type Limiter interface {
 }
 
 // PartialError reports a per-item failure inside an otherwise successful call.
+// It always unwraps to ErrPartialFailure so callers can branch on the sentinel
+// uniformly across channels (UU RepriceLease wraps the same sentinel).
 type PartialError struct {
 	Ref string
 	Msg string
 }
 
 func (e *PartialError) Error() string { return "platform: item " + e.Ref + ": " + e.Msg }
+func (e *PartialError) Unwrap() error { return ErrPartialFailure }
 
 // Capabilities describes channel-specific behavioral differences that upper
 // layers must respect (ADR-0003).

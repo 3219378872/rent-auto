@@ -20,6 +20,8 @@ const defaultBase = "https://openapi.ecosteam.cn"
 const (
 	codeOK          = 0
 	codeRateLimited = 6001
+	codeIPWhitelist = 4004 // credential/env-class: merchant IP not whitelisted
+	codeIdentityID  = 5005 // credential-class: identity id invalid
 )
 
 // Client is the ECOSteam open API client.
@@ -102,6 +104,10 @@ func (c *Client) checkEnv(e *envelope, path string) error {
 		return nil
 	case codeRateLimited:
 		return fmt.Errorf("%w at %s", platform.ErrRateLimited, path)
+	case codeIPWhitelist, codeIdentityID:
+		// Credential-class failures: without a unified sentinel the scheduler's
+		// risk-control cooldown never engages and every cycle retries blind.
+		return fmt.Errorf("%w at %s code=%d msg=%s", platform.ErrAuthExpired, path, e.Code, e.Msg)
 	default:
 		return fmt.Errorf("eco: %s code=%d msg=%s", path, e.Code, e.Msg)
 	}
