@@ -99,9 +99,10 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
-**M0–M11 全部交付；三轮全面审查修复完成（2026-08-23/24）；遗留清欠轮 round4 完成
-（JWT 纪元吊销 ADR-0006 / 哨兵统一 / openapi 20/20 / Refresh 锁外构建 /
-分页上限，见 evidence/2026-08-24-round4-leftovers.md）**。纯逻辑域逐包覆盖率
+**M0–M11 全部交付；三轮全面审查修复完成（2026-08-23/24）；遗留清欠轮 round4/round5 完成
+（JWT 纪元吊销 ADR-0006 / 哨兵统一 / openapi 20/20 / Refresh 锁外构建 / 分页上限 /
+可信代理判定+per-IP 限流 / 空货架熔断 / 迁移 0006 状态 CHECK / CI 加固，
+见 evidence/2026-08-24-round{4,5}-leftovers.md）**。纯逻辑域逐包覆盖率
 （make gate 数值卡点 ≥70%）：pricing 91% / platform 100% / uu 77% / eco 78% /
 steam 76% / recon 80% / analytics 81% / auth 90% / secrets 79% / config 76%
 
@@ -114,9 +115,8 @@ steam 76% / recon 80% / analytics 81% / auth 90% / secrets 79% / config 76%
   永不触碰开发库 rentauto（迁移检查会 DROP 全表）
 - 待真机校订项（见各 api-notes「待办」）：UU 订单状态码映射与资产字段、
   QuerySteamStock 字段、ECO 订单时间窗上限、ECO 改价边界、CSP 下 TCaptcha 域白名单核对
-- 后续迭代入口：X-Real-IP 可信代理判定、空货架同步熔断、模板级策略 UI、
-  ECO 回调/WebSocket、出售域适配器、因子参数面板化、CI 强化
-  （golangci 版本锁定/react-hooks 插件/Vite7 升级）——完整清单见 round4 证据文档遗留节
+- 后续迭代入口：模板级策略 UI、ECO 回调/WebSocket、出售域适配器、因子参数面板化、
+  Vite7 升级与 gosec 评估——完整清单见 round5 证据文档遗留节
 - 里程碑进度与证据索引见 [docs/knowledge/evidence/README.md](docs/knowledge/evidence/README.md)
   （含三轮综合审查+round4 归档）
 - 事故复盘归档于 [evidence/incidents/](docs/knowledge/evidence/incidents/)
