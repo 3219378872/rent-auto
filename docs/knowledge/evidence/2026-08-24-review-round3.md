@@ -72,3 +72,14 @@ make gate   # 修复后：GATE PASSED（fmt/lint/vet/build/unit+integration -rac
    permissions/pre-push 钩子接线文档化
 9. api-notes 回写：Steam 刷新节奏 Go 版简化偏离未记录；两平台 HTTP 状态码
    处理约定缺席文档
+
+## 附：推送后 CI 修复（同轮）
+
+合并推送时发现 main 上 CI 此前已红（前端 job 必败）+本轮暴露的集成竞态：
+
+| 问题 | 修复 | 验证 |
+|---|---|---|
+| pnpm/action-setup 在仓库根找不到 packageManager（字段在 frontend/ 下）→ 前端 job 必败 | `package_json_file: frontend/package.json` | run 32731619571 frontend ✓ |
+| 集成步缺 -p 1：多包并行对共享单库跑迁移升降级→pg_type 竞争/死锁/迁移残留 | 两处集成步补 `-p 1` 对齐 make test 约定 | run 32731619571 backend ✓ |
+
+最终 CI：**frontend ✓ backend ✓**（Node20 deprecation 警告属上游 action，非阻塞）。
