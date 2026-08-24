@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
 )
@@ -119,5 +121,45 @@ func TestLoginBruteForceLockout(t *testing.T) {
 	rec = do(t, h, "POST", "/api/v1/auth/login", "", `{"username":"nobody","password":"x"}`)
 	if rec.Code != 401 {
 		t.Fatalf("other username should not be locked: got %d", rec.Code)
+	}
+}
+
+// Oversized bodies must be rejected by the transport guard, not decoded —
+// the public login endpoint previously accepted unbounded JSON (DoS).
+func TestBodyLimitRejectsOversized(t *testing.T) {
+	s := newTestServer(t)
+	big := `{"username":"admin","password":"` + strings.Repeat("x", 2<<20) + `"}`
+	rec := do(t, s.Routes(), "POST", "/api/v1/auth/login", "", big)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Normal-sized requests keep working.
+	ok := do(t, s.Routes(), "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"hunter2"}`)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("normal login broken: %d", ok.Code)
+	}
+}
+
+// Expired limiter slots must be evicted once the map grows; usernames are
+// user-controlled keys and would otherwise accumulate forever.
+func TestLoginLimiterSweepEvictsExpired(t *testing.T) {
+	l := newLoginLimiter()
+	for i := 0; i < 2048; i++ {
+		l.fail(fmt.Sprintf("user-%d", i))
+	}
+	if len(l.fails) < 1024 {
+		t.Fatalf("setup: %d entries", len(l.fails))
+	}
+	// Age every slot past the window, then trigger eviction via allow().
+	for _, s := range l.fails {
+		s.start = time.Now().Add(-2 * loginFailWindow)
+	}
+	if !l.allow("fresh-user") {
+		t.Fatal("fresh key must be allowed")
+	}
+	for k := range l.fails {
+		if strings.HasPrefix(k, "user-") {
+			t.Fatalf("expired slot %q survived sweep", k)
+		}
 	}
 }

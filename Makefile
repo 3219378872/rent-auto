@@ -40,7 +40,7 @@ build:
 test:
 	cd $(BACKEND) && if [ -n "$$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/$(PG_HOST_PORT)) 2>/dev/null; then \
 		echo ">> unit + integration tests"; \
-		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:$(PG_HOST_PORT)/rentauto?sslmode=disable} \
+		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:$(PG_HOST_PORT)/rentauto_test?sslmode=disable} \
 			go test -tags=integration -p 1 ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
 	else \
 		echo ">> unit tests only (no database detected)"; \
@@ -95,8 +95,16 @@ migrate-up:
 migrate-down:
 	cd $(BACKEND) && go run ./cmd/migrate down 1
 
+# migrate-check exercises the full up→down-all→up chain against a database.
+# It MUST carry -tags=integration (the test file is build-tagged) and MUST
+# point at a disposable test database — never the dev `rentauto` database,
+# because down-all drops every table.
 migrate-check:
-	@if [ "$(HAS_BACKEND)" = "yes" ]; then cd $(BACKEND) && go test ./internal/store -run TestMigrationsUpDown -count=1; fi
+	@if [ "$(HAS_BACKEND)" = "yes" ]; then cd $(BACKEND) && \
+	if [ -n "$$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/$(PG_HOST_PORT)) 2>/dev/null; then \
+		TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:$(PG_HOST_PORT)/rentauto_test?sslmode=disable} \
+			go test -tags=integration ./internal/store -run TestMigrationsUpDown -count=1 -v; \
+	else echo ">> migrate-check skipped (no database detected)"; fi; fi
 
 migrate-new:
 	@test -n "$(NAME)" || { echo "usage: make migrate-new NAME=add_xxx"; exit 1; }

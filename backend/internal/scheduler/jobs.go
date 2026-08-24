@@ -183,8 +183,8 @@ func (d *Deps) orderSyncSince(ctx context.Context) time.Time {
 	if lo := earliest.Add(-orderSyncMargin); lo.Before(since) {
 		since = lo
 	}
-	if min := now.Add(-orderSyncMaxWindow); since.Before(min) {
-		since = min
+	if floor := now.Add(-orderSyncMaxWindow); since.Before(floor) {
+		since = floor
 	}
 	return since
 }

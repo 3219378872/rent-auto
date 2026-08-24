@@ -200,6 +200,9 @@ func run() error {
 		Addr:              cfg.Addr,
 		Handler:           srv.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	rootCtx, stopCtx := context.WithCancel(context.Background())

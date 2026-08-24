@@ -12,10 +12,11 @@ func TestPBReaderRoundTrip(t *testing.T) {
 	w.u64(2, 300)
 	w.b32(3, true)
 	r := newPBReader(w.buf)
-	f, wire, payload, num, err := r.next()
+	f, wire, payload, _, err := r.next()
 	if err != nil || f != 1 || wire != 2 || string(payload) != "hello" {
 		t.Fatalf("field1: f=%d wire=%d payload=%q err=%v", f, wire, payload, err)
 	}
+	var num uint64
 	f, wire, payload, num, err = r.next()
 	if err != nil || f != 2 || wire != 0 || num != 300 || payload != nil {
 		t.Fatalf("field2: f=%d wire=%d num=%d err=%v", f, wire, num, err)

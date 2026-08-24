@@ -13,7 +13,12 @@ import (
 
 // Round2 rounds money to two decimals, half away from zero.
 // All monetary outputs of this package MUST pass through Round2.
+// Non-finite or out-of-range inputs collapse to 0 — a NaN must never become
+// an int64-undefined price on its way to the platform.
 func Round2(v float64) float64 {
+	if !finite(v) || v >= 1e15 || v <= -1e15 {
+		return 0
+	}
 	if v >= 0 {
 		return float64(int64(v*100+0.5)) / 100
 	}
@@ -151,13 +156,15 @@ func Baseline(quotes []Quote, p BaselineParams, V float64) (Base, bool) {
 	}
 	var shorts, longs, deps []float64
 	for i, q := range quotes {
-		if q.Short > 0 && i < 10 {
+		// Non-finite market data (float8 'Infinity' upstream) is absent data,
+		// never a price.
+		if posFinite(q.Short) && i < 10 {
 			shorts = append(shorts, q.Short)
-			if q.Deposit > 0 {
+			if posFinite(q.Deposit) {
 				deps = append(deps, q.Deposit)
 			}
 		}
-		if q.Long > 0 {
+		if posFinite(q.Long) {
 			longs = append(longs, q.Long)
 		}
 	}
@@ -165,7 +172,7 @@ func Baseline(quotes []Quote, p BaselineParams, V float64) (Base, bool) {
 		return Base{}, false
 	}
 	short := clampF(mean(shorts)*p.K1, math.Max(shorts[0], 0.01), math.Inf(1))
-	if p.MinLeaseRatio > 0 && V > 0 {
+	if p.MinLeaseRatio > 0 && V > 0 && finite(p.MinLeaseRatio*V) {
 		short = math.Max(short, p.MinLeaseRatio*V)
 	}
 	var long float64
@@ -207,6 +214,12 @@ func minF(v []float64) float64 {
 
 func clampF(v, lo, hi float64) float64 { return math.Min(math.Max(v, lo), hi) }
 
+// finite reports v ∈ ℝ (excludes NaN and ±Inf).
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// posFinite reports a usable positive price: strictly positive AND real.
+func posFinite(v float64) bool { return v > 0 && finite(v) }
+
 // ---- feedback controller ----
 
 type FactorEvent string
@@ -219,8 +232,14 @@ const (
 )
 
 // NextFactor advances the controller factor; result clamped to [FMin,FMax].
+// A non-finite incoming factor (corrupted storage) recovers at FMin.
 func NextFactor(cur float64, ev FactorEvent, p ControllerParams) (float64, string) {
 	reason := ""
+	if !finite(cur) {
+		cur = p.FMin
+		ev = EventReset
+		reason = "non_finite_recovered"
+	}
 	switch ev {
 	case EventRentSuccess:
 		cur += p.StepUp
@@ -287,6 +306,13 @@ func Decide(in Input) Decision {
 	}
 	if !in.HasBase || in.Base.Short <= 0 {
 		return Decision{SkipReason: "no_baseline"}
+	}
+	// Finite guards: one NaN/Inf anywhere in the numeric inputs must abort the
+	// decision instead of poisoning prices downstream (Round2 would clamp it
+	// to a bogus value and the platform would receive it).
+	if !finite(in.V) || !finite(in.Base.Short) || !finite(in.Base.Long) ||
+		!finite(in.Base.Deposit) || !finite(in.Factor) {
+		return Decision{SkipReason: "non_finite_input"}
 	}
 	g := in.P.Guard
 

@@ -84,7 +84,21 @@ func (s *Server) Routes() http.Handler {
 	root.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "unknown endpoint")
 	})
-	return withRecover(s.Log)(withRequestLog(s.Log)(root))
+	return withRecover(s.Log)(withRequestLog(s.Log)(withBodyLimit(root)))
+}
+
+// maxBodyBytes caps request bodies — the largest legitimate payload is a small
+// credentials JSON. Without this, the unauthenticated login endpoint doubles
+// as an unbounded-decode memory amplifier.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+func withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {

@@ -221,3 +221,36 @@ func TestParseParamsDeepMerge(t *testing.T) {
 		t.Fatal("bad json must error")
 	}
 }
+
+// NaN/Inf must never reach a price: Baseline treats non-finite quotes as
+// absent, Decide rejects non-finite inputs outright (2026-08-24 round 3).
+func TestNonFiniteDefenseLines(t *testing.T) {
+	if b, ok := Baseline([]Quote{q(math.Inf(1), 0, 0), q(1, 0, 0)}, DefaultParams().Baseline, 100); !ok || b.Short <= 0 || math.IsInf(b.Short, 0) {
+		t.Fatalf("inf quote must be skipped: ok=%v base=%+v", ok, b)
+	}
+	if _, ok := Baseline([]Quote{q(math.NaN(), 0, 0)}, DefaultParams().Baseline, 100); ok {
+		t.Fatal("all-NaN shorts must yield no baseline")
+	}
+	in := baseInput()
+	in.Factor = math.NaN()
+	if d := Decide(in); d.OK || d.SkipReason != "non_finite_input" {
+		t.Fatalf("NaN factor must abort: %+v", d)
+	}
+	in = baseInput()
+	in.V = math.Inf(1)
+	if d := Decide(in); d.OK || d.SkipReason != "non_finite_input" {
+		t.Fatalf("inf V must abort: %+v", d)
+	}
+	// Round2 hardening: undefined conversions collapse to 0.
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 1e300} {
+		if got := Round2(v); got != 0 {
+			t.Fatalf("Round2(%v) = %v, want 0", v, got)
+		}
+	}
+	// Controller recovery: corrupted stored factor resets to neutral instead
+	// of spreading NaN through the controller.
+	f, reason := NextFactor(math.NaN(), EventRentSuccess, DefaultParams().Ctrl)
+	if !finite(f) || f != 1.0 || reason == "" {
+		t.Fatalf("NaN factor recovery: f=%v reason=%q", f, reason)
+	}
+}

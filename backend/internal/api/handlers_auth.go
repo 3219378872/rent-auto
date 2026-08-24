@@ -59,12 +59,27 @@ func newLoginLimiter() *loginLimiter {
 }
 
 func (l *loginLimiter) slot(key string, now time.Time) *failSlot {
+	l.sweepLocked(now)
 	s := l.fails[key]
 	if s == nil || now.Sub(s.start) > loginFailWindow {
 		s = &failSlot{start: now}
 		l.fails[key] = s
 	}
 	return s
+}
+
+// sweepLocked evicts expired slots once the map grows past a threshold. Keys
+// embed user-controlled usernames, so without eviction random-username probing
+// grows the map without bound.
+func (l *loginLimiter) sweepLocked(now time.Time) {
+	if len(l.fails) < 1024 {
+		return
+	}
+	for k, s := range l.fails {
+		if now.Sub(s.start) > loginFailWindow {
+			delete(l.fails, k)
+		}
+	}
 }
 
 // allow reports whether a login attempt may proceed.

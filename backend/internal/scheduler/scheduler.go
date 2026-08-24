@@ -127,13 +127,13 @@ func (s *Scheduler) runDue(ctx context.Context, now time.Time) {
 		e := s.jobs[name]
 		if !e.running && !e.next.After(now) {
 			e.running = true
+			s.done.Add(1) // under mu: Stop cannot Wait-and-miss this count
 			due = append(due, e)
 		}
 	}
 	s.mu.Unlock()
 	for _, e := range due {
 		e := e
-		s.done.Add(1)
 		go func() {
 			defer s.done.Done()
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -166,12 +166,24 @@ func safeCall(ctx context.Context, fn func(context.Context) (err error)) (err er
 	return fn(ctx)
 }
 
-func (s *Scheduler) Stop() { close(s.stop); s.done.Wait() }
+// Stop stops the tick loop and waits for all in-flight job executions —
+// including manually triggered ones — so a platform write cut mid-shutdown is
+// impossible. Idempotent.
+func (s *Scheduler) Stop() {
+	s.mu.Lock()
+	select {
+	case <-s.stop:
+	default:
+		close(s.stop)
+	}
+	s.mu.Unlock()
+	s.done.Wait()
+}
 
 // Trigger runs one job immediately (manual run from the panel). The job runs
 // on a detached context: a browser refresh or disconnect cancels the request
 // context, and a platform call cut mid-flight is worse than letting it finish.
-// Same 10-minute budget as scheduled runs.
+// Same 10-minute budget as scheduled runs; Stop() waits for it.
 func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 	s.mu.Lock()
 	e, ok := s.jobs[name]
@@ -184,8 +196,14 @@ func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 		return errors.New("scheduler: job already running")
 	}
 	e.running = true
+	s.done.Add(1) // under mu: Stop cannot Wait-and-miss this execution
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); e.running = false; s.mu.Unlock() }()
+	defer func() {
+		s.done.Done()
+		s.mu.Lock()
+		e.running = false
+		s.mu.Unlock()
+	}()
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 	defer cancel()
 	err := safeCall(cctx, e.job.Fn)
