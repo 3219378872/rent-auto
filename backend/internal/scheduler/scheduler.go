@@ -168,7 +168,10 @@ func safeCall(ctx context.Context, fn func(context.Context) (err error)) (err er
 
 func (s *Scheduler) Stop() { close(s.stop); s.done.Wait() }
 
-// Trigger runs one job immediately (manual run from the panel).
+// Trigger runs one job immediately (manual run from the panel). The job runs
+// on a detached context: a browser refresh or disconnect cancels the request
+// context, and a platform call cut mid-flight is worse than letting it finish.
+// Same 10-minute budget as scheduled runs.
 func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 	s.mu.Lock()
 	e, ok := s.jobs[name]
@@ -183,7 +186,9 @@ func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 	e.running = true
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); e.running = false; s.mu.Unlock() }()
-	err := safeCall(ctx, e.job.Fn)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	defer cancel()
+	err := safeCall(cctx, e.job.Fn)
 	s.mu.Lock()
 	t := time.Now()
 	e.last = &t

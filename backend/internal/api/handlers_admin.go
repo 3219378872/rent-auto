@@ -105,35 +105,31 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		s.internalError(w, err)
 		return
 	}
+	if req.Params != nil && !json.Valid(*req.Params) {
+		writeErr(w, http.StatusBadRequest, "bad_request", "params must be valid json")
+		return
+	}
+	patch := store.StrategyGlobalPatch{}
+	detail := map[string]any{"target": strconv.FormatInt(id, 10)}
 	if req.Params != nil {
-		if !json.Valid(*req.Params) {
-			writeErr(w, http.StatusBadRequest, "bad_request", "params must be valid json")
-			return
-		}
-		if _, err := s.Store.Pool.Exec(ctx,
-			`UPDATE strategies SET params=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, []byte(*req.Params)); err != nil {
-			s.internalError(w, err)
-			return
-		}
+		patch.Params = []byte(*req.Params)
 	}
 	if req.Route != nil {
-		if _, err := s.Store.Pool.Exec(ctx,
-			`UPDATE strategies SET channel_route=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, *req.Route); err != nil {
-			s.internalError(w, err)
-			return
-		}
+		patch.Route = req.Route
+		detail["channel_route"] = *req.Route
 	}
 	if req.RealEnabled != nil {
-		if _, err := s.Store.Pool.Exec(ctx,
-			`UPDATE strategies SET real_execution_enabled=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, *req.RealEnabled); err != nil {
-			s.internalError(w, err)
-			return
-		}
+		patch.RealEnabled = req.RealEnabled
+		detail["real_execution_enabled"] = *req.RealEnabled
 	}
-	s.audit(r, "strategy.update_global", map[string]any{"target": strconv.FormatInt(id, 10)})
+	// one transaction: params/route/real_execution_enabled drive live repricing
+	// together — a partial update (e.g. new params but old real flag) is worse
+	// than a rejected one.
+	if err := s.Store.UpdateGlobalStrategy(ctx, id, patch); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	s.audit(r, "strategy.update_global", detail)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

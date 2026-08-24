@@ -56,6 +56,42 @@ func (s *Store) MarkFactorApplied(ctx context.Context, orderIDs []int64) error {
 	return err
 }
 
+// FactorFold is one computed controller step awaiting atomic application.
+type FactorFold struct {
+	OrderID   int64
+	ListingID int64
+	Factor    float64
+}
+
+// ApplyFactorFolds persists per-listing factors and flips the orders'
+// factor_applied markers inside ONE transaction. A crash between folding and
+// marking would otherwise replay already-folded orders on the next pass and
+// double-step the factor (e.g. repeated +3% on chained rentals).
+func (s *Store) ApplyFactorFolds(ctx context.Context, folds []FactorFold) error {
+	if len(folds) == 0 {
+		return nil
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin factor tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	ids := make([]int64, 0, len(folds))
+	for _, f := range folds {
+		if _, err := tx.Exec(ctx,
+			`UPDATE listings SET factor=$2, last_factor_event_at=now() WHERE id=$1`,
+			f.ListingID, f.Factor); err != nil {
+			return fmt.Errorf("apply factor to listing %d: %w", f.ListingID, err)
+		}
+		ids = append(ids, f.OrderID)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE lease_orders SET factor_applied=true WHERE id = ANY($1)`, ids); err != nil {
+		return fmt.Errorf("mark factor applied: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // StaleCandidate is an active listing with its factor and the age of its last
 // controller event anchor (last_factor_event_at → last_reprice_at → listed_at).
 type StaleCandidate struct {

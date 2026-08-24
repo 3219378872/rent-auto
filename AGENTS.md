@@ -99,7 +99,9 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
-**M0–M11 全部交付；综合审查修复轮完成（2026-08-23）**。纯逻辑域逐包覆盖率
+**M0–M11 全部交付；综合审查修复轮完成（2026-08-23）；第二轮全面审查修复完成（2026-08-24，
+见 evidence/2026-08-24-review-and-fixes.md：compose 端口回环绑定、写操作 fail-closed×4、
+factor/advisory/策略事务化×3）**。纯逻辑域逐包覆盖率
 （make gate 数值卡点 ≥70%）：pricing 91% / platform 100% / uu 77% / eco 77% /
 steam 75% / recon 75% / analytics 81% / auth 90% / secrets 79% / config 76%
 

@@ -150,17 +150,22 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 }
 
 // AdvisoryLock prevents double instances (single-instance deployment model).
+// The session-level lock must be taken and released on the SAME connection:
+// pg_try_advisory_lock via the pool grabs an arbitrary pooled connection, and
+// unlocking from another one is a silent no-op.
 func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool) (unlock func(), ok bool, err error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("advisory lock acquire: %w", err)
+	}
 	var got bool
-	if err = pool.QueryRow(ctx, `SELECT pg_try_advisory_lock(918273645)`).Scan(&got); err != nil {
+	if err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(918273645)`).Scan(&got); err != nil {
+		conn.Release()
 		return nil, false, fmt.Errorf("advisory lock: %w", err)
 	}
 	if !got {
+		conn.Release()
 		return nil, false, errors.New("another instance holds the advisory lock")
-	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, err
 	}
 	return func() {
 		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(918273645)`)

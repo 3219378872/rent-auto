@@ -137,6 +137,46 @@ func (s *Store) EnsureGlobalStrategy(ctx context.Context, defaultParams string) 
 	return id, params, err
 }
 
+// StrategyGlobalPatch carries optional field updates; nil fields stay unchanged.
+type StrategyGlobalPatch struct {
+	Params      []byte // raw JSON, validated by the caller
+	Route       *string
+	RealEnabled *bool
+}
+
+// UpdateGlobalStrategy applies every requested field change in ONE transaction.
+// Strategies drive live repricing directly — a half-applied patch (new params
+// with a stale real_execution_enabled) must be impossible.
+func (s *Store) UpdateGlobalStrategy(ctx context.Context, id int64, p StrategyGlobalPatch) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin strategy tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if p.Params != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE strategies SET params=$2, updated_by='user', updated_at=now() WHERE id=$1`,
+			id, p.Params); err != nil {
+			return err
+		}
+	}
+	if p.Route != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE strategies SET channel_route=$2, updated_by='user', updated_at=now() WHERE id=$1`,
+			id, *p.Route); err != nil {
+			return err
+		}
+	}
+	if p.RealEnabled != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE strategies SET real_execution_enabled=$2, updated_by='user', updated_at=now() WHERE id=$1`,
+			id, *p.RealEnabled); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 type EffectiveStrategy struct {
 	ID           int64
 	Params       json.RawMessage

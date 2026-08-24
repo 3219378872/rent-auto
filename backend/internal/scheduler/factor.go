@@ -11,6 +11,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
+	"github.com/3219378872/rent-auto/backend/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,14 +30,16 @@ func (d *Deps) RunFactorEvents(ctx context.Context) error {
 	return d.runStaleScan(ctx)
 }
 
-// foldOrderEvents applies rent_success/bought_out signals.
+// foldOrderEvents applies rent_success/bought_out signals. Factor updates and
+// their factor_applied markers commit in one transaction (ApplyFactorFolds):
+// a crash can never leave folded orders unmarked for replay.
 func (d *Deps) foldOrderEvents(ctx context.Context) error {
 	orders, err := d.Store.UnhandledFactorOrders(ctx, time.Now().Add(-factorOrderWindow), factorOrderBatch)
 	if err != nil {
 		return err
 	}
 	paramsCache := map[string]*pricing.Params{}
-	applied := make([]int64, 0, len(orders))
+	folds := make([]store.FactorFold, 0, len(orders))
 	for _, o := range orders {
 		p, ok := paramsCache[o.HashName]
 		if !ok {
@@ -69,17 +72,13 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 		if ev != "" {
 			next, _ = pricing.NextFactor(cur, ev, p.Ctrl)
 		}
-		if err := d.Store.SetListingFactor(ctx, o.ListingID, next); err != nil {
-			d.Log.Warn("factor update failed", "listing", o.ListingID, "err", err)
-			continue
-		}
-		applied = append(applied, o.OrderID)
+		folds = append(folds, store.FactorFold{OrderID: o.OrderID, ListingID: o.ListingID, Factor: next})
 		if ev != "" {
-			d.Log.Info("factor event applied", "listing", o.ListingID,
+			d.Log.Info("factor event planned", "listing", o.ListingID,
 				"event", string(ev), "from", cur, "to", next)
 		}
 	}
-	return d.Store.MarkFactorApplied(ctx, applied)
+	return d.Store.ApplyFactorFolds(ctx, folds)
 }
 
 // runStaleScan steps down factors for listings idle past their stale window.
