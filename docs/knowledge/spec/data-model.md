@@ -61,7 +61,8 @@ factor_applied bool             -- 是否已折算进 listing 因子（0005，�
 ```
 
 **统一状态机**：pending_payment → delivering → leasing → returning → done | bought_out | cancelled | arbitrating | breach
-（UU/ECO 原始状态码映射表存 design/platform-*-api-notes.md）
+（UU/ECO 原始状态码映射表存 design/platform-*-api-notes.md；
+未知码显式落 `unknown` 并由 0006 CHECK 约束兜底——不再允许空串静默入库）
 
 ### market_snapshots — 行情快照
 ```

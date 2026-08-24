@@ -63,3 +63,10 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
 10. 押金派生公式在服务端重算；客户端提交的 RentDeposits 仅为预估提示，
     护栏校验以 QuerySelfRentGoods 回读的 Deposits 为准（M3 落地）
 
+
+## HTTP 状态码处理约定
+
+2026-08-24 起 ECO 客户端与 UU 对齐为严格策略：非 HTTP 200 一律 fail-closed；
+200 响应信封缺 `ResultCode` 键视为协议错误（此前默认 code=0 曾致幽灵下架，
+round3 修复并固化反例）。凭据级失败码 4004/5005 映射 `ErrAuthExpired` 哨兵，
+调度器风控冷却得以介入（round4）；5004 验签失败保留 generic（可能是本地 bug）。

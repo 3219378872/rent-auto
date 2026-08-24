@@ -50,7 +50,11 @@ POST steamcommunity.com/trade/new/acknowledge {sessionid, message=1}   ← 新�
   `{steamid, refresh_token}` → access_token → 重写 steamLoginSecure
 - JWT exp：access_token 是 JWT，解析 payload.exp 得过期时间；
   后台刷新节奏（>6h→3h后再查；1~6h→1h；<1h→10min；已过期→5min重试）
-- 持久化：token 三元组 + 过期时间戳存 `app_settings`(AES-GCM 加密)
+- **Go 版实现偏离（有意简化，2026-08-24 记录）**：不做三级后台轮询，
+  采用单一阈值惰性刷新——每次访问会话时检查 `exp-now < 3600s` 则同步刷新；
+  steam_offers 任务每 5 分钟运行，实际效果≈到期前 1 小时内完成续期。
+  已知盲区（round3 备案）：`jwtExp` 解析失败返回 0 时刷新条件被永久短路，
+  直到硬失败才恢复。持久化：token 三元组 + 过期时间戳存 `app_settings`(AES-GCM 加密)
 
 ## 2. Steam Guard 双算法（guard.py，已做 Python 向量交叉验证）
 

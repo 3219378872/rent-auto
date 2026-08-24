@@ -107,3 +107,12 @@
     该字段映射 listing；字段确认后收敛为单一解析并删除本条
 15. 订单状态码映射仍只有 {0:leasing, 2:done, 3:bought_out}，未知→""
     （静默不可见）；真机抓包补全后同步 `mapUUOrderStatus`
+
+## HTTP 状态码处理约定（两平台统一策略，2026-08-24 round5 成文）
+
+- UU 客户端（`uu/client.go`）：**严格 200 + JSON body** 才进入信封解码；
+  非 200/非 JSON 一律 fail-closed 报错
+- ECO 客户端（`eco/client.go`，round3 起）：**严格 200** 且信封必须含
+  `ResultCode` 键——缺失视为协议错误而非 code=0（防代理错误页伪装成功）
+- 传输层失败不产生业务副作用；写操作调用方以 `err != nil || !res[i].Success`
+  双重判定为准（round2/3 fail-closed 系列修复的总结约定）

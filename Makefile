@@ -116,6 +116,9 @@ migrate-new:
 	echo "created $(BACKEND)/migrations/$${ver}_$(NAME).{up,down}.sql"
 
 # ---- git workflow helpers ----
+hooks:
+	@git config core.hooksPath .githooks && echo "pre-push gate hook wired (git config core.hooksPath=.githooks)"
+
 worktree-new:
 	@test -n "$(NAME)" || { echo "usage: make worktree-new NAME=feat-xxx"; exit 1; }
 	git worktree add ../rent-auto-wt/$(NAME) -b feat/$(NAME)
