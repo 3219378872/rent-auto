@@ -120,13 +120,29 @@ func TestCollectorPipeline(t *testing.T) {
 	if err != nil || total != 1 || listings[0].ActualState != "active" {
 		t.Fatalf("listings: %v %d %+v", err, total, listings)
 	}
-	ua.shelf = nil
+	// Empty payload while an active listing exists → breaker skips marking.
 	if _, err := bench.SyncShelf(ctx, ua, st, log); err != nil {
 		t.Fatal(err)
 	}
 	listings, _, _ = st.ListListings(ctx, store.ListingFilter{Channel: domain.ChannelUU})
-	if listings[0].ActualState != "none" {
-		t.Fatalf("expected none after disappearance, got %s", listings[0].ActualState)
+	if listings[0].ActualState != "active" {
+		t.Fatalf("empty-shelf breaker must keep state, got %s", listings[0].ActualState)
+	}
+
+	// A NON-empty shelf without the row prunes it (normal disappearance).
+	ua.shelf = []domain.ShelfListing{
+		{Channel: domain.ChannelUU, GoodsRef: "88", AssetID: "u2", HashName: "Other Item", RentPrice: 2.0, Deposit: 60, MaxDays: 60},
+	}
+	if _, err := bench.SyncShelf(ctx, ua, st, log); err != nil {
+		t.Fatal(err)
+	}
+	listings, _, _ = st.ListListings(ctx, store.ListingFilter{Channel: domain.ChannelUU})
+	states := map[string]string{}
+	for _, l := range listings {
+		states[l.GoodsRef] = l.ActualState
+	}
+	if states["77"] != "none" || states["88"] != "active" {
+		t.Fatalf("expected 77→none 88→active, got %v", states)
 	}
 
 	// orders upsert + terminal income flag

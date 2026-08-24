@@ -79,6 +79,16 @@ func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) 
 	return out, rows.Err()
 }
 
+// CountActiveListings returns how many rows are currently active/leased for
+// the channel (empty-shelf breaker input).
+func (s *Store) CountActiveListings(ctx context.Context, channel domain.Channel) (int64, error) {
+	var n int64
+	err := s.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM listings
+		 WHERE channel=$1 AND actual_state IN ('active','leased')`, channel).Scan(&n)
+	return n, err
+}
+
 // RecordPublishedListing inserts/refreshes a listing row after a successful publish.
 func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, hashName, goodsRef string, rent, long, deposit float64, days int) error {
 	_, err := s.Pool.Exec(ctx,

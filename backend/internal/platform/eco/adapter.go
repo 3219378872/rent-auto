@@ -265,7 +265,8 @@ func mapECOOrderStatus(code int) string {
 	case 10, 11:
 		return "breach"
 	default:
-		return ""
+		// 未知码显式落 'unknown'（0006 CHECK 允许），不再以空串隐身
+		return "unknown"
 	}
 }
 

@@ -66,6 +66,13 @@ func pricePtr(v float64) *float64 {
 }
 
 // SyncShelf pulls the channel lease shelf into listings (actual state).
+//
+// Empty-shelf circuit breaker: a SUCCESSFUL empty payload while the DB still
+// tracks active listings for the channel is almost always an upstream anomaly
+// (risk-control soft block, partial API outage) — blindly marking everything
+// missing cascades into reconcile re-publishing the entire shelf next cycle.
+// Such cycles are skipped; genuine disappearances are caught by any later
+// non-empty sync, which prunes by seen-refs as usual.
 func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *slog.Logger) (int, error) {
 	shelf, err := ad.LeaseShelf(ctx)
 	if err != nil {
@@ -80,6 +87,13 @@ func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *s
 			return len(seen), err
 		}
 		seen[l.GoodsRef] = true
+	}
+	if len(seen) == 0 {
+		if active, cerr := st.CountActiveListings(ctx, ad.Channel()); cerr == nil && active > 0 {
+			log.Warn("empty shelf ignored by breaker",
+				"channel", string(ad.Channel()), "active_listings", active)
+			return 0, nil
+		}
 	}
 	missing, err := st.MarkMissingListings(ctx, ad.Channel(), seen)
 	if err != nil {
