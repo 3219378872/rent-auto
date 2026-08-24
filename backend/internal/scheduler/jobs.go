@@ -53,7 +53,7 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 			}},
 		{Name: "orders_sync", Kind: KindInterval, Every: 10 * time.Minute, Jitter: 30 * time.Second,
 			Fn: func(ctx context.Context) error {
-				since := time.Now().Add(-24 * time.Hour)
+				since := d.orderSyncSince(ctx)
 				var errs []error
 				for _, ad := range adapters() {
 					if !d.channelReady(ad.Channel(), time.Now()) {
@@ -153,4 +153,38 @@ func runMarketSnapshot(ctx context.Context, st *store.Store, fetch func(ctx cont
 	}
 	log.Info("market snapshot done", "templates", len(tpls), "points", captured)
 	return nil
+}
+
+// Order-sync lookback bounds (ADR-0003): the window must cover every order
+// that can still turn terminal. A fixed 24h lookback silently dropped
+// long-lease (≤90d) terminal states, so their income was never recorded.
+const (
+	orderSyncFloor     = 24 * time.Hour       // default coverage for brand-new orders
+	orderSyncMargin    = 24 * time.Hour       // clock-skew / timezone safety around the anchor
+	orderSyncMaxWindow = 100 * 24 * time.Hour // hard cap: > max rent term (90d) + margins
+)
+
+// orderSyncSince computes the orders_sync lookback anchor: the default floor,
+// extended down to (earliest open order start − margin) when an unfinished
+// long lease would otherwise age out of the upstream query window. The result
+// is capped at orderSyncMaxWindow so one stuck non-terminal row cannot make
+// the sync unbounded.
+func (d *Deps) orderSyncSince(ctx context.Context) time.Time {
+	now := time.Now()
+	since := now.Add(-orderSyncFloor)
+	earliest, err := d.Store.EarliestOpenOrderStart(ctx)
+	if err != nil {
+		d.Log.Warn("order sync window anchor lookup failed; using default lookback", "err", err)
+		return since
+	}
+	if earliest == nil || earliest.IsZero() {
+		return since
+	}
+	if lo := earliest.Add(-orderSyncMargin); lo.Before(since) {
+		since = lo
+	}
+	if min := now.Add(-orderSyncMaxWindow); since.Before(min) {
+		since = min
+	}
+	return since
 }

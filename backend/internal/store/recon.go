@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 )
@@ -51,12 +52,17 @@ type ActiveListing struct {
 	Channel  domain.Channel `json:"channel"`
 	HashName string         `json:"hash_name"`
 	GoodsRef string         `json:"goods_ref"`
+	AssetID  string         `json:"asset_id"`
+	State    string         `json:"state"`     // actual_state: active | leased
+	SyncedAt time.Time      `json:"synced_at"` // last actual-state sync (grace anchor); zero = unknown
 }
 
 // AllActiveListings lists rows whose actual state is active/leased.
 func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, channel, hash_name, goods_ref FROM listings
+		`SELECT id, channel, hash_name, goods_ref, asset_id, actual_state,
+		        COALESCE(actual_synced_at, listed_at)
+		 FROM listings
 		 WHERE actual_state IN ('active','leased')`)
 	if err != nil {
 		return nil, fmt.Errorf("active listings: %w", err)
@@ -65,7 +71,7 @@ func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) 
 	var out []ActiveListing
 	for rows.Next() {
 		var l ActiveListing
-		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef); err != nil {
+		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef, &l.AssetID, &l.State, &l.SyncedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, l)

@@ -101,8 +101,11 @@ func run() error {
 
 	// Reconcile pipeline: plan desired-vs-actual shelf state, then execute.
 	planner := &recon.Planner{Store: st, Log: log, Health: registry.Health}
-	executor := &recon.Executor{DryRun: cfg.DryRunDefault, Log: log,
-		Audit: func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) }}
+	executor := &recon.Executor{Log: log,
+		Audit:    func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) },
+		Store:    st,
+		Penalize: deps.NoteChannelError,
+	}
 	steamSess := channels.NewSteamSession(st, box, log)
 	if err := steamSess.Restore(ctx); err != nil {
 		log.Warn("steam session restore", "err", err)
@@ -144,17 +147,31 @@ func run() error {
 	}
 
 	reconcileFn := func(ctx context.Context) error {
-		ads := map[domain.Channel]platform.Adapter{}
+		adapters := map[domain.Channel]platform.Adapter{}
+		caps := map[domain.Channel]platform.Capabilities{}
 		for _, a := range registry.All() {
-			ads[a.Channel()] = a
+			adapters[a.Channel()] = a
+			caps[a.Channel()] = a.Caps()
 		}
-		executor.Adapters = ads
+		executor.Adapters = adapters
+		planner.Caps = caps
+		// Strategy-level dry-run gate (AC-T1), mirroring the reprice job:
+		// effective dry-run = global default OR strategy not real-enabled;
+		// unknown strategy state fails closed.
+		executor.DryRun = cfg.DryRunDefault || !globalRealEnabled(ctx, st, log)
 		plan, err := planner.Plan(ctx)
 		if err != nil {
 			return err
 		}
-		applied, failed := executor.Execute(ctx, plan)
-		log.Info("reconcile done", "plan", len(plan), "applied", applied, "failed", failed)
+		kept := plan[:0]
+		for _, a := range plan {
+			if deps.ChannelReady(a.Channel) { // risk-control cooldown discipline
+				kept = append(kept, a)
+			}
+		}
+		applied, failed := executor.Execute(ctx, kept)
+		log.Info("reconcile done", "plan", len(kept), "applied", applied, "failed", failed,
+			"cooldown_skipped", len(plan)-len(kept), "dry_run", executor.DryRun)
 		return nil
 	}
 
@@ -208,6 +225,18 @@ func run() error {
 }
 
 func newLimiter(rps float64) platform.Limiter { return ratelimit.New(rps) }
+
+// globalRealEnabled reports the global strategy's real_execution_enabled flag.
+// Lookup failure fails closed (dry-run) — reconcile must never go live on an
+// unreadable gate.
+func globalRealEnabled(ctx context.Context, st *store.Store, log *slog.Logger) bool {
+	es, err := st.GetEffectiveStrategy(ctx, "")
+	if err != nil {
+		log.Warn("reconcile strategy gate lookup failed; forcing dry-run", "err", err)
+		return false
+	}
+	return es.RealEnabled
+}
 
 // liveECOClient forwards ECO order calls to whatever client is currently
 // configured in the registry, so panel credential updates take effect on the

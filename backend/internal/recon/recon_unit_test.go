@@ -29,8 +29,8 @@ func TestPlanFromMatrix(t *testing.T) {
 			{AssetID: "a-delisted", HashName: "WrongShelf", V: &v, Route: "eco_only"},
 		},
 		Listings: []store.ActiveListing{
-			{Channel: domain.ChannelUU, HashName: "WrongShelf", GoodsRef: "G1"}, // on wrong channel
-			{Channel: domain.ChannelECO, HashName: "EcoOnly", GoodsRef: "G2"},   // already correct
+			{Channel: domain.ChannelUU, HashName: "WrongShelf", GoodsRef: "G1", State: "active"}, // on wrong channel
+			{Channel: domain.ChannelECO, HashName: "EcoOnly", GoodsRef: "G2", State: "active"},   // already correct
 		},
 		Health: map[string]string{"uu": "error: expired", "eco": "ok"},
 	}
@@ -39,7 +39,7 @@ func TestPlanFromMatrix(t *testing.T) {
 		decided = append(decided, string(ch)+"/"+it.HashName)
 		return okDecision(1.5)
 	}
-	plan := PlanFrom(snap, time.Now(), decide)
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide)
 
 	var pubs, dels []Action
 	for _, a := range plan {
@@ -63,9 +63,145 @@ func TestPlanFromMatrix(t *testing.T) {
 	if len(pubs) != len(wantPubs) {
 		t.Fatalf("extra publishes: %+v", pubs)
 	}
-	// delist: WrongShelf on uu (failover reason since route=fallback... it's eco_only → not_routed)
+	// delist: WrongShelf on uu (route=eco_only → not_routed)
 	if len(dels) != 1 || dels[0].GoodsRef != "G1" || !strings.Contains(dels[0].Reason, "not_routed") {
 		t.Fatalf("delists: %+v", dels)
+	}
+}
+
+// Multi-copy inventory must produce exactly the deficit of publishes per
+// channel, keyed by distinct assets; assets already carrying a listing on the
+// channel are never re-planned (cross-cycle idempotency).
+func TestPlanFromMultiCopyDeficit(t *testing.T) {
+	v := 100.0
+	items := []store.RoutableItem{
+		{AssetID: "a1", HashName: "H", V: &v, Route: "both"},
+		{AssetID: "a2", HashName: "H", V: &v, Route: "both"},
+		{AssetID: "a3", HashName: "H", V: &v, Route: "both"},
+	}
+	snap := Snapshot{
+		Items:    items,
+		Listings: []store.ActiveListing{{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G1", AssetID: "a1", State: "active"}},
+		Health:   map[string]string{"uu": "ok", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+
+	type pc struct {
+		ch  domain.Channel
+		ass string
+		n   int
+	}
+	counts := map[pc]int{}
+	for _, a := range plan {
+		if a.Kind != "publish" {
+			t.Fatalf("unexpected delist: %+v", a)
+		}
+		counts[pc{a.Channel, a.AssetID, 0}]++
+	}
+	// uu: a1 already listed → deficit 2 (a2,a3); eco: deficit 3 (a1..a3)
+	for _, want := range []pc{{domain.ChannelUU, "a2", 0}, {domain.ChannelUU, "a3", 0},
+		{domain.ChannelECO, "a1", 0}, {domain.ChannelECO, "a2", 0}, {domain.ChannelECO, "a3", 0}} {
+		if counts[want] != 1 {
+			t.Fatalf("expected exactly one publish %s/%s, got %d (%+v)", want.ch, want.ass, counts[want], counts)
+		}
+	}
+	if len(plan) != 5 {
+		t.Fatalf("plan size = %d, want 5", len(plan))
+	}
+
+	// Idempotency: after write-back records every listing, the same inventory replans empty.
+	listings := make([]store.ActiveListing, 0, 6)
+	for _, a := range plan {
+		listings = append(listings, store.ActiveListing{
+			ID: int64(len(listings) + 1), Channel: a.Channel, HashName: a.HashName,
+			GoodsRef: "G" + a.AssetID + string(a.Channel), AssetID: a.AssetID, State: "active",
+			SyncedAt: time.Now(),
+		})
+	}
+	snap.Listings = append(snap.Listings, listings...)
+	replan := PlanFrom(context.Background(), snap, time.Now().Add(time.Minute), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+	if len(replan) != 0 {
+		t.Fatalf("recorded state must replan to zero actions, got %+v", replan)
+	}
+}
+
+// Failover/route-change delists must never touch leased listings.
+func TestPlanFromDelistSkipsLeased(t *testing.T) {
+	v := 100.0
+	old := time.Now().Add(-48 * time.Hour)
+	snap := Snapshot{
+		Items: []store.RoutableItem{{AssetID: "a1", HashName: "H", V: &v, Route: "uu_primary_eco_fallback"}},
+		Listings: []store.ActiveListing{
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G-leased", State: "leased", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G-active", State: "active", SyncedAt: old},
+		},
+		Health: map[string]string{"uu": "error", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+	var dels []Action
+	for _, a := range plan {
+		if a.Kind == "delist" {
+			dels = append(dels, a)
+		}
+	}
+	if len(dels) != 1 || dels[0].GoodsRef != "G-active" || dels[0].Reason != "uu_unhealthy_failover" {
+		t.Fatalf("leased must be spared, active delisted: %+v", dels)
+	}
+}
+
+// Orphaned listings (hash no longer routable) delist only after the grace
+// window persisted; unknown sync age fails safe.
+func TestPlanFromOrphanGrace(t *testing.T) {
+	old := time.Now().Add(-48 * time.Hour)
+	fresh := time.Now().Add(-time.Hour)
+	base := func() Snapshot {
+		return Snapshot{
+			Items: []store.RoutableItem{}, // ghost hash has no routable anchor
+			Listings: []store.ActiveListing{
+				{Channel: domain.ChannelECO, HashName: "Ghost", GoodsRef: "G1", State: "active"},
+			},
+			Health: map[string]string{"uu": "ok", "eco": "ok"},
+		}
+	}
+	decide := func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return nil }
+
+	snap := base()
+	snap.Listings[0].SyncedAt = old
+	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 1 ||
+		plan[0].Reason != "orphan_not_routable" {
+		t.Fatalf("aged orphan must delist: %+v", plan)
+	}
+	snap = base()
+	snap.Listings[0].SyncedAt = fresh
+	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 0 {
+		t.Fatalf("fresh orphan must be spared within grace: %+v", plan)
+	}
+	snap = base()
+	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 0 {
+		t.Fatalf("unknown sync age must fail safe: %+v", plan)
+	}
+}
+
+// Surplus live listings beyond the wanted copy count are pruned (after grace).
+func TestPlanFromSurplusCopies(t *testing.T) {
+	v := 100.0
+	old := time.Now().Add(-48 * time.Hour)
+	snap := Snapshot{
+		Items: []store.RoutableItem{{AssetID: "a1", HashName: "H", V: &v, Route: "uu_only"}},
+		Listings: []store.ActiveListing{
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "keep", AssetID: "a1", State: "active", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "extra", State: "active", SyncedAt: old},
+		},
+		Health: map[string]string{"uu": "ok", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return nil })
+	if len(plan) != 1 || plan[0].Kind != "delist" || plan[0].GoodsRef != "extra" ||
+		plan[0].Reason != "surplus_copies" {
+		t.Fatalf("surplus prune mismatch: %+v", plan)
 	}
 }
 
@@ -73,11 +209,11 @@ func TestPlanFromFailoverDelistReason(t *testing.T) {
 	v := 100.0
 	snap := Snapshot{
 		Items:    []store.RoutableItem{{AssetID: "a1", HashName: "H", V: &v, Route: "uu_primary_eco_fallback"}},
-		Listings: []store.ActiveListing{{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G9"}},
+		Listings: []store.ActiveListing{{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G9", State: "active"}},
 		Health:   map[string]string{"uu": "error", "eco": "ok"},
 	}
 	decide := func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(2) }
-	plan := PlanFrom(snap, time.Now(), decide)
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide)
 	delistFound := false
 	for _, a := range plan {
 		if a.Kind == "delist" && a.Reason == "uu_unhealthy_failover" {
@@ -98,7 +234,7 @@ func TestPlanFromSkipsWhenDecideFails(t *testing.T) {
 	decide := func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision {
 		return &pricing.Decision{OK: false, SkipReason: "no_baseline"}
 	}
-	if plan := PlanFrom(snap, time.Now(), decide); len(plan) != 0 {
+	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 0 {
 		t.Fatalf("failing decision must gate publish: %+v", plan)
 	}
 }
@@ -106,12 +242,13 @@ func TestPlanFromSkipsWhenDecideFails(t *testing.T) {
 // ---- executor ----
 
 type stubAdapter struct {
-	ch       domain.Channel
-	pubCalls []platform.PublishLeaseRequest
-	delCalls int
-	pubErr   error
-	delErr   error
-	failPub  bool
+	ch          domain.Channel
+	pubCalls    []platform.PublishLeaseRequest
+	delCalls    int
+	pubErr      error
+	delErr      error
+	failPub     bool
+	pubGoodsRef string // echoed goods ref on success
 }
 
 func (s *stubAdapter) Channel() domain.Channel                                   { return s.ch }
@@ -126,7 +263,7 @@ func (s *stubAdapter) PublishLease(_ context.Context, items []platform.PublishLe
 	}
 	out := make([]platform.PublishLeaseResult, len(items))
 	for i := range items {
-		out[i] = platform.PublishLeaseResult{AssetRef: items[i].AssetRef, Success: !s.failPub, Error: pubErrMsg(s.failPub)}
+		out[i] = platform.PublishLeaseResult{AssetRef: items[i].AssetRef, GoodsRef: s.pubGoodsRef, Success: !s.failPub, Error: pubErrMsg(s.failPub)}
 	}
 	return out, nil
 }
@@ -150,6 +287,20 @@ func (s *stubAdapter) LeaseOrders(context.Context, time.Time) ([]domain.LeaseOrd
 }
 func (s *stubAdapter) Wallet(context.Context) (float64, error) { return 0, nil }
 
+type fakeWriteBack struct {
+	published []string // channel|goodsRef
+	delisted  []string
+}
+
+func (f *fakeWriteBack) RecordPublishedListing(_ context.Context, channel, _, _, goodsRef string, _ float64, _ float64, _ float64, _ int) error {
+	f.published = append(f.published, channel+"|"+goodsRef)
+	return nil
+}
+func (f *fakeWriteBack) MarkListingDelisted(_ context.Context, channel, goodsRef string) error {
+	f.delisted = append(f.delisted, channel+"|"+goodsRef)
+	return nil
+}
+
 func TestExecutorPaths(t *testing.T) {
 	uu := &stubAdapter{ch: domain.ChannelUU}
 	audits := 0
@@ -170,7 +321,7 @@ func TestExecutorPaths(t *testing.T) {
 	if len(uu.pubCalls) != 1 || uu.delCalls != 1 {
 		t.Fatalf("adapter calls: pub=%d del=%d", len(uu.pubCalls), uu.delCalls)
 	}
-	if audits != 2 { // missing-adapter action short-circuits before audit
+	if audits != 3 { // missing-adapter anomaly is audited too
 		t.Fatalf("audits=%d", audits)
 	}
 }
@@ -188,6 +339,79 @@ func TestExecutorFailurePaths(t *testing.T) {
 	applied, failed := e.Execute(context.Background(), plan)
 	if applied != 0 || failed != 2 {
 		t.Fatalf("applied=%d failed=%d", applied, failed)
+	}
+}
+
+// Successful executions must write back so the next cycle plans a no-op;
+// failures and dry-runs must not persist anything. Transport errors feed the
+// risk-control hook.
+func TestExecutorWriteBackAndPenalize(t *testing.T) {
+	uu := &stubAdapter{ch: domain.ChannelUU, pubGoodsRef: "GR-1"}
+	wb := &fakeWriteBack{}
+	var penalties []domain.Channel
+	e := &Executor{
+		DryRun: false, Log: discardLogger(),
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu},
+		Store:    wb,
+		Penalize: func(_ context.Context, ch domain.Channel, _ error) { penalties = append(penalties, ch) },
+	}
+	plan := []Action{
+		{Kind: "publish", Channel: domain.ChannelUU, AssetID: "a1", HashName: "H", Decision: okDecision(1.5)},
+		{Kind: "delist", Channel: domain.ChannelUU, GoodsRef: "G9", ListingID: 7, HashName: "H"},
+	}
+	applied, failed := e.Execute(context.Background(), plan)
+	if applied != 2 || failed != 0 {
+		t.Fatalf("applied=%d failed=%d", applied, failed)
+	}
+	if len(wb.published) != 1 || wb.published[0] != "uu|GR-1" {
+		t.Fatalf("publish write-back missing: %+v", wb.published)
+	}
+	if len(wb.delisted) != 1 || wb.delisted[0] != "uu|G9" {
+		t.Fatalf("delist write-back missing: %+v", wb.delisted)
+	}
+	if len(penalties) != 0 {
+		t.Fatalf("no penalty expected on clean run: %+v", penalties)
+	}
+
+	// Transport failure → penalized, nothing persisted.
+	uu2 := &stubAdapter{ch: domain.ChannelUU, pubErr: errors.New("net down")}
+	wb2 := &fakeWriteBack{}
+	e2 := &Executor{
+		DryRun: false, Log: discardLogger(),
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu2},
+		Store:    wb2,
+		Penalize: func(_ context.Context, ch domain.Channel, err error) {
+			penalties = append(penalties, ch)
+			_ = err
+		},
+	}
+	applied, failed = e2.Execute(context.Background(), plan[:1])
+	if applied != 0 || failed != 1 || len(penalties) != 1 || len(wb2.published) != 0 {
+		t.Fatalf("failure path: applied=%d failed=%d penalties=%v wb=%v", applied, failed, penalties, wb2.published)
+	}
+
+	// Dry-run: audit-only, store untouched.
+	wb3 := &fakeWriteBack{}
+	e3 := &Executor{DryRun: true, Log: discardLogger(),
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu}, Store: wb3}
+	applied, failed = e3.Execute(context.Background(), plan)
+	if applied != 2 || failed != 0 || len(wb3.published)+len(wb3.delisted) != 0 {
+		t.Fatalf("dry-run must not persist: applied=%d failed=%d wb=%+v", applied, failed, wb3)
+	}
+}
+
+// A publish whose platform response omits goods_ref cannot be durably keyed —
+// it counts as applied but must not fabricate a write-back.
+func TestExecutorPublishWithoutGoodsRefSkipsWriteBack(t *testing.T) {
+	uu := &stubAdapter{ch: domain.ChannelUU, pubGoodsRef: ""}
+	wb := &fakeWriteBack{}
+	e := &Executor{DryRun: false, Log: discardLogger(),
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu}, Store: wb}
+	applied, _ := e.Execute(context.Background(), []Action{
+		{Kind: "publish", Channel: domain.ChannelUU, AssetID: "a1", HashName: "H", Decision: okDecision(1)},
+	})
+	if applied != 1 || len(wb.published) != 0 {
+		t.Fatalf("applied=%d wb=%+v", applied, wb.published)
 	}
 }
 
@@ -230,6 +454,24 @@ func TestExecutorDryRunMissingAdapterFails(t *testing.T) {
 	applied, failed := e.Execute(context.Background(), plan)
 	if applied != 0 || failed != 1 {
 		t.Fatalf("applied=%d failed=%d", applied, failed)
+	}
+}
+
+// Unknown action kinds must be counted and audited, never silently dropped.
+func TestExecutorUnknownKindCountedFailed(t *testing.T) {
+	var audited []domain.AuditEntry
+	e := &Executor{Log: discardLogger(),
+		Audit:    func(_ context.Context, en domain.AuditEntry) { audited = append(audited, en) },
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: &stubAdapter{ch: domain.ChannelUU}},
+	}
+	applied, failed := e.Execute(context.Background(), []Action{
+		{Kind: "teleport", Channel: domain.ChannelUU, HashName: "H"},
+	})
+	if applied != 0 || failed != 1 || len(audited) != 1 {
+		t.Fatalf("unknown kind: applied=%d failed=%d audits=%d", applied, failed, len(audited))
+	}
+	if msg, _ := audited[0].Detail["err"].(string); msg != "unknown_kind" {
+		t.Fatalf("audit detail err=%v", audited[0].Detail["err"])
 	}
 }
 

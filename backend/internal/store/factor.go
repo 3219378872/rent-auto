@@ -57,8 +57,9 @@ func (s *Store) MarkFactorApplied(ctx context.Context, orderIDs []int64) error {
 }
 
 // FactorFold is one computed controller step awaiting atomic application.
+// Multiple orders folding into the same listing collapse into a single fold
+// carrying the sequentially-accumulated factor.
 type FactorFold struct {
-	OrderID   int64
 	ListingID int64
 	Factor    float64
 }
@@ -67,8 +68,8 @@ type FactorFold struct {
 // factor_applied markers inside ONE transaction. A crash between folding and
 // marking would otherwise replay already-folded orders on the next pass and
 // double-step the factor (e.g. repeated +3% on chained rentals).
-func (s *Store) ApplyFactorFolds(ctx context.Context, folds []FactorFold) error {
-	if len(folds) == 0 {
+func (s *Store) ApplyFactorFolds(ctx context.Context, folds []FactorFold, orderIDs []int64) error {
+	if len(folds) == 0 && len(orderIDs) == 0 {
 		return nil
 	}
 	tx, err := s.Pool.Begin(ctx)
@@ -76,18 +77,18 @@ func (s *Store) ApplyFactorFolds(ctx context.Context, folds []FactorFold) error 
 		return fmt.Errorf("begin factor tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	ids := make([]int64, 0, len(folds))
 	for _, f := range folds {
 		if _, err := tx.Exec(ctx,
 			`UPDATE listings SET factor=$2, last_factor_event_at=now() WHERE id=$1`,
 			f.ListingID, f.Factor); err != nil {
 			return fmt.Errorf("apply factor to listing %d: %w", f.ListingID, err)
 		}
-		ids = append(ids, f.OrderID)
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE lease_orders SET factor_applied=true WHERE id = ANY($1)`, ids); err != nil {
-		return fmt.Errorf("mark factor applied: %w", err)
+	if len(orderIDs) > 0 {
+		if _, err := tx.Exec(ctx,
+			`UPDATE lease_orders SET factor_applied=true WHERE id = ANY($1)`, orderIDs); err != nil {
+			return fmt.Errorf("mark factor applied: %w", err)
+		}
 	}
 	return tx.Commit(ctx)
 }

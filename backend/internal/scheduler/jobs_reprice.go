@@ -70,6 +70,14 @@ func (d *Deps) penalize(ch domain.Channel, err error) {
 		"channel", string(ch), "until", until.Format(time.RFC3339), "err", err.Error())
 }
 
+// ChannelReady reports whether ch has served out its risk-control cooldown.
+func (d *Deps) ChannelReady(ch domain.Channel) bool { return d.channelReady(ch, time.Now()) }
+
+// NoteChannelError feeds a platform transport error into risk-control backoff.
+// Write pipelines outside the reprice job (the reconcile executor) use this to
+// respect the same per-channel cooldown discipline.
+func (d *Deps) NoteChannelError(_ context.Context, ch domain.Channel, err error) { d.penalize(ch, err) }
+
 // quoteWindow bounds how old market snapshots may be for baselines.
 const quoteWindow = 30 * time.Minute
 

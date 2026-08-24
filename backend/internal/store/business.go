@@ -240,6 +240,22 @@ func isTerminal(status string) bool {
 	return false
 }
 
+// EarliestOpenOrderStart returns the oldest started_at among non-terminal
+// lease orders (nil when none exist). The order-sync job anchors its lookback
+// window on this value so a long-running lease (up to 90 days) can never slide
+// out of the upstream query window before it reaches a terminal state —
+// a fixed 24h lookback permanently lost those orders' income records.
+func (s *Store) EarliestOpenOrderStart(ctx context.Context) (*time.Time, error) {
+	var t *time.Time
+	err := s.Pool.QueryRow(ctx,
+		`SELECT MIN(started_at) FROM lease_orders
+		 WHERE status NOT IN ('done','bought_out','cancelled','breach')`).Scan(&t)
+	if err != nil {
+		return nil, fmt.Errorf("earliest open order start: %w", err)
+	}
+	return t, nil
+}
+
 func finishedAt(o domain.LeaseOrder, terminal bool) *time.Time {
 	if !terminal {
 		return nil

@@ -33,13 +33,21 @@ func (d *Deps) RunFactorEvents(ctx context.Context) error {
 // foldOrderEvents applies rent_success/bought_out signals. Factor updates and
 // their factor_applied markers commit in one transaction (ApplyFactorFolds):
 // a crash can never leave folded orders unmarked for replay.
+//
+// Multiple orders mapping to the same listing within one batch are folded
+// sequentially in memory (each NextFactor consumes the previous result) and
+// collapse into a single UPDATE per listing — reading cur from the DB per
+// order would make every order see the same base value and only the last
+// fold would survive the write.
 func (d *Deps) foldOrderEvents(ctx context.Context) error {
 	orders, err := d.Store.UnhandledFactorOrders(ctx, time.Now().Add(-factorOrderWindow), factorOrderBatch)
 	if err != nil {
 		return err
 	}
 	paramsCache := map[string]*pricing.Params{}
-	folds := make([]store.FactorFold, 0, len(orders))
+	foldIdx := map[int64]int{} // listingID → index into folds
+	var folds []store.FactorFold
+	var orderIDs []int64
 	for _, o := range orders {
 		p, ok := paramsCache[o.HashName]
 		if !ok {
@@ -54,10 +62,17 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 			p = &pp
 			paramsCache[o.HashName] = p
 		}
-		cur, err := d.listingFactor(ctx, o.ListingID)
-		if err != nil {
-			continue
+		cur, ok := foldIdx[o.ListingID]
+		if !ok {
+			base, err := d.listingFactor(ctx, o.ListingID)
+			if err != nil {
+				continue
+			}
+			cur = len(folds)
+			foldIdx[o.ListingID] = cur
+			folds = append(folds, store.FactorFold{ListingID: o.ListingID, Factor: base})
 		}
+		f := &folds[cur]
 		var ev pricing.FactorEvent
 		switch {
 		case o.Status == "bought_out":
@@ -68,17 +83,15 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 		default:
 			// full-term completion: spec defines no signal — fold silently
 		}
-		next := cur
 		if ev != "" {
-			next, _ = pricing.NextFactor(cur, ev, p.Ctrl)
-		}
-		folds = append(folds, store.FactorFold{OrderID: o.OrderID, ListingID: o.ListingID, Factor: next})
-		if ev != "" {
+			next, _ := pricing.NextFactor(f.Factor, ev, p.Ctrl)
 			d.Log.Info("factor event planned", "listing", o.ListingID,
-				"event", string(ev), "from", cur, "to", next)
+				"event", string(ev), "from", f.Factor, "to", next)
+			f.Factor = next
 		}
+		orderIDs = append(orderIDs, o.OrderID)
 	}
-	return d.Store.ApplyFactorFolds(ctx, folds)
+	return d.Store.ApplyFactorFolds(ctx, folds, orderIDs)
 }
 
 // runStaleScan steps down factors for listings idle past their stale window.
