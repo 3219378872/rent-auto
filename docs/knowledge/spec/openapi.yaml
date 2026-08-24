@@ -1,19 +1,24 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.2.0"
+  version: "0.3.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
     - 前缀 /api/v1；除 health/login 外全部需要 Bearer JWT
     - 分页：query page(1-based) & page_size(<=100)；响应 {items,total}
     - 错误体：{code,message}；金额两位小数
+    - 401 body code 恒为 `unauthorized`：前端据此清 token 回登录页
+      （含登出吊销后的旧 token —— 会话纪元机制见 ADR-0006）
 servers:
   - url: /api/v1
+security:
+  - bearerAuth: []
 paths:
   /health:
     get:
       summary: 健康检查（公开）
+      security: []
       responses:
         "200":
           description: ok
@@ -26,7 +31,8 @@ paths:
                   version: { type: string }
   /auth/login:
     post:
-      summary: 登录获取 JWT
+      summary: 登录获取 JWT（公开）
+      security: []
       requestBody:
         required: true
         content:
@@ -39,7 +45,7 @@ paths:
                 password: { type: string }
       responses:
         "200":
-          description: token
+          description: token（绑定当前会话纪元）
           content:
             application/json:
               schema:
@@ -48,35 +54,528 @@ paths:
                   token: { type: string }
                   expires_at: { type: string, format: date-time }
         "401": { $ref: "#/components/responses/Err401" }
+        "429": { $ref: "#/components/responses/Err429" }
   /auth/me:
     get:
-      security: [{ bearerAuth: [] }]
       summary: 当前会话信息
       responses:
         "200":
           description: 当前用户
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username: { type: string }
+  /auth/logout:
+    post:
+      summary: 登出并吊销全部既有 token（会话纪元 +1，ADR-0006）
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+  /inventory:
+    get:
+      summary: 库存列表（分页）
+      parameters:
+        - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string }, description: 关键字（市场名模糊匹配） }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 分页库存
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/InventoryItem" }
+  /listings:
+    get:
+      summary: 上架列表（分页）
+      parameters:
+        - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
+        - { name: state, in: query, schema: { type: string }, description: 实际状态过滤 }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 分页上架
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/ListingRow" }
+  /orders:
+    get:
+      summary: 租赁订单（分页）
+      parameters:
+        - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
+        - { name: status, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 分页订单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/OrderRow" }
+  /templates:
+    get:
+      summary: 模板清单（全量，含锚点/黑名单标记）
+      responses:
+        "200":
+          description: 模板数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Template" }
+  /inventory/{channel}/{asset_id}/cost:
+    put:
+      summary: 录入/修正成本价
+      parameters:
+        - { name: channel, in: path, required: true, schema: { type: string, enum: [uu, eco] } }
+        - { name: asset_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cost]
+              properties:
+                cost: { type: number, format: double, minimum: 0 }
+      responses:
+        "200":
+          description: 回显成本
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cost: { type: number, format: double }
+        "400": { $ref: "#/components/responses/Err400" }
+  /strategies:
+    get:
+      summary: 策略行列表（global+template，只读）
+      responses:
+        "200":
+          description: 策略数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/StrategyView" }
+  /strategies/global:
+    put:
+      summary: 更新全局策略（参数/路由/真实执行开关，单事务生效）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                params: { type: object, description: 策略参数 JSON（深合并默认值） }
+                route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback] }
+                real_execution_enabled: { type: boolean, description: false=策略级 dry-run }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/Err400" }
+  /audit:
+    get:
+      summary: 审计日志（最近 N 条）
+      parameters:
+        - { name: action, in: query, schema: { type: string }, description: 动作关键字过滤 }
+        - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
+        - { name: page_size, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        "200":
+          description: 分页审计
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/AuditEntry" }
+  /dashboard:
+    get:
+      summary: 仪表盘聚合（资产/收益/年化/曲线）
+      responses:
+        "200":
+          description: Dashboard
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dashboard" }
+  /jobs:
+    get:
+      summary: 任务状态列表
+      responses:
+        "200":
+          description: 任务数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/JobStatus" }
+  /jobs/{name}/run:
+    post:
+      summary: 手动触发一次任务（立即执行，10 分钟预算，停机前会被等待）
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 已触发
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400":
+          description: 任务未知或正在运行
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /channels:
+    get:
+      summary: 渠道健康状态
+      responses:
+        "200":
+          description: "渠道 → 状态（ok / not_configured / error:…；含 steam）"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+  /channels/uu/sms:
+    post:
+      summary: 发起 UU 短信登录（三种模式：下行验证码 / 上行短信指引 / 图形验证码）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: { type: string }
+                session_id: { type: string, description: 重试时回传上次返回值 }
+                captcha:
+                  type: object
+                  description: captcha 模式重试时携带 TCaptcha 结果
+                  properties:
+                    ticket: { type: string }
+                    randstr: { type: string }
+                    req_ticket: { type: string }
+      responses:
+        "200":
+          description: 发送结果
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UUSmsResponse" }
+        "400": { $ref: "#/components/responses/Err400" }
+        "502": { $ref: "#/components/responses/Err502" }
+  /channels/uu/sms-verify:
+    post:
+      summary: 提交短信验证码完成登录并保存凭证
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, phone, code]
+              properties:
+                session_id: { type: string }
+                phone: { type: string }
+                code: { type: string }
+                login_req_ticket: { type: string, description: 下行模式成功响应携带的关联票据 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400":
+          description: 验证码错误等上游拒绝（非面板会话失效）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /channels/eco:
+    put:
+      summary: 保存 ECO 凭证（加密落库并即时重建适配器）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [partner_id, private_key_pem]
+              properties:
+                partner_id: { type: string }
+                private_key_pem: { type: string, description: PKCS8 PEM }
+                steam_id: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/Err400" }
+  /channels/steam:
+    put:
+      summary: 保存 Steam 凭证（触发真实登录与会话持久化）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, shared_secret, identity_secret]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                shared_secret: { type: string }
+                identity_secret: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/Err400" }
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, default: 50, maximum: 100 }
   responses:
-    Err401:
-      description: 未认证
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
     Err400:
       description: 参数错误
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
+          schema: { $ref: "#/components/schemas/Error" }
+    Err401:
+      description: 未认证/已吊销
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Err429:
+      description: 登录尝试过多（固定窗口锁定）
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Err502:
+      description: 上游平台失败
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
     Error:
       type: object
       properties:
         code: { type: string }
         message: { type: string }
+    PagedEnvelope:
+      type: object
+      properties:
+        total: { type: integer }
+    Channel:
+      type: string
+      enum: [uu, eco]
+    InventoryItem:
+      type: object
+      properties:
+        channel: { $ref: "#/components/schemas/Channel" }
+        asset_id: { type: string }
+        hash_name: { type: string }
+        display_name: { type: string }
+        template_id: { type: integer, format: int64 }
+        mark_price: { type: number, format: double }
+        tradable: { type: boolean }
+        status: { type: string, enum: [in_stock, listed, leased, locked, sold] }
+        abrade: { type: number, format: double }
+    ListingRow:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        channel: { $ref: "#/components/schemas/Channel" }
+        asset_id: { type: string }
+        hash_name: { type: string }
+        goods_ref: { type: string }
+        desired_state: { type: string, enum: [none, active, delisted] }
+        actual_state: { type: string, enum: [unknown, none, active, leased, stale] }
+        rent_price: { type: number, format: double }
+        long_rent_price: { type: number, format: double, nullable: true }
+        max_days: { type: integer, nullable: true }
+        deposit: { type: number, format: double, nullable: true }
+        listed_at: { type: string, format: date-time, nullable: true }
+        last_reprice_at: { type: string, format: date-time, nullable: true }
+    OrderRow:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        channel: { $ref: "#/components/schemas/Channel" }
+        order_ref: { type: string }
+        hash_name: { type: string }
+        order_type: { type: string, enum: [short, long, buyout] }
+        status: { type: string }
+        rent_days: { type: integer }
+        rent_price: { type: number, format: double }
+        order_amount: { type: number, format: double }
+        deposits: { type: number, format: double }
+        started_at: { type: string, format: date-time, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+    Template:
+      type: object
+      properties:
+        hash_name: { type: string }
+        display_name: { type: string }
+        category: { type: string }
+        uu_template_id: { type: integer, format: int64, nullable: true }
+        uu_mark_price: { type: number, format: double, nullable: true }
+        eco_ref_price: { type: number, format: double, nullable: true }
+        value_anchor: { type: number, format: double, nullable: true }
+        blacklisted: { type: boolean }
+        anchor_updated_at: { type: string, format: date-time, nullable: true }
+    StrategyView:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        scope: { type: string, enum: [global, template] }
+        channel_route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback] }
+        params: { type: object }
+        real_execution_enabled: { type: boolean }
+        priority: { type: integer }
+        updated_at: { type: string, format: date-time }
+    AuditEntry:
+      type: object
+      properties:
+        ts: { type: string, format: date-time }
+        actor: { type: string, description: "system | user:<name>" }
+        action: { type: string }
+        channel: { type: string }
+        target: { type: string }
+        detail: { type: object, additionalProperties: true }
+    Dashboard:
+      type: object
+      properties:
+        assets:
+          type: object
+          properties:
+            total: { type: number, format: double }
+            inventory: { type: number, format: double }
+            deposits:
+              type: object
+              additionalProperties: { type: number, format: double }
+            wallets:
+              type: object
+              additionalProperties: { type: number, format: double }
+        income:
+          type: object
+          properties:
+            total: { type: number, format: double }
+            today: { type: number, format: double }
+            by_channel:
+              type: array
+              items:
+                type: object
+                properties:
+                  channel: { $ref: "#/components/schemas/Channel" }
+                  total: { type: number, format: double }
+        leased_out: { type: integer }
+        annualized_roi: { type: number, format: double }
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              income: { type: number, format: double }
+              yield_ratio: { type: number, format: double }
+        series_30d:
+          type: array
+          items:
+            type: object
+            properties:
+              day: { type: string, format: date }
+              income: { type: number, format: double }
+    JobStatus:
+      type: object
+      properties:
+        name: { type: string }
+        next_run: { type: string, format: date-time }
+        last_run: { type: string, format: date-time, nullable: true }
+        last_ok: { type: boolean }
+        last_error: { type: string }
+        running: { type: boolean }
+    UUSmsResponse:
+      type: object
+      properties:
+        session_id: { type: string }
+        mode:
+          type: string
+          enum: [downlink, uplink, captcha]
+          description: 下行=收验证码；上行=用户自发短信；captcha=需人工过图形验证
+        msg: { type: string }
+        req_ticket: { type: string, description: captcha 模式的关联票据 }
+        secs: { type: integer, description: 冷却秒数（0=未知） }
+        sms_up_content: { type: string, description: 上行模式短信内容 }
+        sms_up_number: { type: string, description: 上行模式目标号码 }

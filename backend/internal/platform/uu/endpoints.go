@@ -97,10 +97,7 @@ func (c *Client) ListLeaseShelf(ctx context.Context, includeZeroCD bool) ([]Leas
 	}
 	for _, p := range paths {
 		pageIndex := 1
-		for {
-			if pageIndex > maxListPages {
-				break
-			}
+		for pageIndex <= maxListPages {
 			data, err := c.do(ctx, "POST", p, map[string]any{
 				"pageIndex": pageIndex, "pageSize": 100,
 				"whetherMerge": 0, "Sessionid": c.device,

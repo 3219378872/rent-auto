@@ -28,10 +28,7 @@ func (c *Client) SellerOrderList(ctx context.Context, start, end time.Time, deta
 	const layout = "2006-01-02"
 	var out []SellerOrder
 	pageIndex := 1
-	for {
-		if pageIndex > maxListPages {
-			break
-		}
+	for pageIndex <= maxListPages {
 		biz := map[string]any{
 			"StartTime": start.Format(layout),
 			"EndTime":   end.Format(layout),

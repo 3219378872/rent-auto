@@ -85,10 +85,7 @@ const maxListPages = 500
 func (c *Client) QuerySelfRentGoods(ctx context.Context, state *int) ([]RentGoods, error) {
 	var out []RentGoods
 	pageIndex := 1
-	for {
-		if pageIndex > maxListPages {
-			break
-		}
+	for pageIndex <= maxListPages {
 		biz := map[string]any{
 			"SteamGameId": "730",
 			"PageIndex":   pageIndex,
@@ -169,10 +166,7 @@ func (c *Client) SellerRentOrderList(ctx context.Context, start, end time.Time, 
 	var out []SellerRentOrder
 	const layout = "2006-01-02 15:04:05"
 	pageIndex := 1
-	for {
-		if pageIndex > maxListPages {
-			break
-		}
+	for pageIndex <= maxListPages {
 		biz := map[string]any{
 			"StartTime": start.Format(layout),
 			"EndTime":   end.Format(layout),

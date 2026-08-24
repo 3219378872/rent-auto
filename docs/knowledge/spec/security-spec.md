@@ -18,6 +18,14 @@
 - 禁止：凭证写入日志、审计 detail、错误信息、API 响应
 - 凭证变更必须产生 audit_log（动作+操作者+尾号指纹，不含明文）
 
+## 会话与吊销（ADR-0006）
+
+- 面板 JWT 为 HS256 + exp(≤24h)，claims 携带会话纪元 `ver`
+- 吊销机制：`POST /api/v1/auth/logout` 使 `jwt_session_epoch` +1，
+  全部旧 token 立即 401（单管理员语义=登出所有会话）
+- 登录限流：per-(IP,username) 固定窗口锁定；条目超阈值自动清扫
+  （2026-08-24 第三轮落地）
+
 ## 传输与部署
 
 - 生产部署必须 TLS：deploy/Caddyfile 设置 `SITE_ADDRESS=<域名>` 后由 Caddy 自动

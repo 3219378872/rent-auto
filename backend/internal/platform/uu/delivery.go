@@ -19,10 +19,7 @@ type TodoOrder struct {
 func (c *Client) GetWaitDeliverList(ctx context.Context) ([]TodoOrder, error) {
 	var out []TodoOrder
 	pageIndex := 1
-	for {
-		if pageIndex > maxListPages {
-			break
-		}
+	for pageIndex <= maxListPages {
 		data, err := c.do(ctx, "POST", "/api/youpin/bff/trade/todo/v1/orderTodo/list", map[string]any{
 			"userId": c.userID, "pageIndex": pageIndex, "pageSize": 20,
 			"Sessionid": c.device,
