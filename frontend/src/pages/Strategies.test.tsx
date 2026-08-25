@@ -1,11 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Strategies from './Strategies'
 
-const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }))
+const { getMock, putMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn(), postMock: vi.fn() }))
 
 vi.mock('../api/client', () => ({
-  api: { get: getMock, put: putMock },
+  api: { get: getMock, put: putMock, post: postMock, del: vi.fn() },
 }))
 
 function globalRow(params: Record<string, unknown>) {
@@ -19,7 +19,9 @@ function globalRow(params: Record<string, unknown>) {
 beforeEach(() => {
   getMock.mockReset()
   putMock.mockReset()
+  postMock.mockReset()
   putMock.mockResolvedValue({ status: 'ok' })
+  postMock.mockResolvedValue({ id: 99 })
 })
 
 describe('Strategies page', () => {
@@ -85,5 +87,43 @@ describe('Strategies page', () => {
     expect(screen.getByDisplayValue(42)).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '恢复默认值' }))
     expect(screen.getByDisplayValue(15)).toBeDefined()
+  })
+})
+
+// 模板级覆盖策略（US-STRAT-02）：列表渲染 + 新建表单 + 保存载荷。
+describe('template strategy editor', () => {
+  it('lists template rows and opens the create form with template picker', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/templates') {
+        return Promise.resolve([
+          { hash_name: 'AK-47 | Redline (FT)', display_name: 'AK 红线', category: 'rifle', blacklisted: false },
+          { hash_name: 'Ghost', display_name: 'Ghost', category: 'knife', blacklisted: true },
+        ])
+      }
+      return Promise.resolve([
+        globalRow({}),
+        {
+          id: 7, name: 'tpl:AK-47 | Redline (FT)', scope: 'template',
+          channel_route: 'eco_only', params: { baseline: { k1: 0.9 } },
+          real_execution_enabled: true, priority: 0, updated_at: '2026-08-24T00:00:00Z',
+        },
+      ])
+    })
+    render(<Strategies />)
+    expect(await screen.findByText('AK-47 | Redline (FT)')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '新建模板策略' }))
+    // 黑名单模板不可选
+    const options = screen.getAllByRole('option').map((o) => o.textContent)
+    if (options.includes('Ghost')) throw new Error('blacklisted template must not be selectable')
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: '模板渠道路由' })).getByRole('radio', { name: '仅 ECO' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存模板策略' }))
+    await waitFor(() => expect(postMock).toHaveBeenCalled())
+    const [path, body] = postMock.mock.calls[0]
+    if (path !== '/strategies/template') throw new Error(`post path ${path}`)
+    if (body.channel_route !== 'eco_only') throw new Error('route payload')
+    if (body.real_execution_enabled !== false) throw new Error('new row must default dry-run flag explicitly')
+    if ((body.params as { baseline?: { k1?: number } }).baseline?.k1 === undefined) {
+      throw new Error('params payload should carry grouped structure')
+    }
   })
 })

@@ -160,118 +160,23 @@ const HELP_ROWS: { group: string; name: string; def: string; desc: string }[] = 
   { group: '租期', name: 'eco_max_days ECO 最长租期', def: '30 天', desc: 'ECO 渠道允许的最长租赁天数，参与 ECO 押金派生公式，最低 8 天。' },
 ]
 
-export default function Strategies() {
-  const [list, setList] = useState<StrategyRow[]>([])
-  const [globalRow, setGlobalRow] = useState<StrategyRow | null>(null)
-  const [form, setForm] = useState<StrategyParams>(cloneDefaults)
-  const [route, setRoute] = useState('both')
-  const [real, setReal] = useState(false)
-  const [err, setErr] = useState('')
-  const [msg, setMsg] = useState('')
-  const [templates, setTemplates] = useState<TemplateRow[]>([])
 
-  const loadTemplates = useCallback(() => {
-    api.get<TemplateRow[]>('/templates').then(setTemplates).catch(() => undefined)
-  }, [])
-
-  const toggleBlacklist = async (t: TemplateRow) => {
-    setErr(''); setMsg('')
-    try {
-      await api.put('/templates/blacklist', { hash_name: t.hash_name, blacklisted: !t.blacklisted })
-      setMsg(t.blacklisted ? `已解除拉黑：${t.display_name || t.hash_name}` : `已拉黑：${t.display_name || t.hash_name}（将退出上架路由与锚点合成）`)
-      loadTemplates()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  useEffect(loadTemplates, [loadTemplates])
-
-  const load = useCallback(() => {
-    api.get<StrategyRow[]>('/strategies').then((rows) => {
-      setList(rows)
-      const g = rows.find((r) => r.scope === 'global')
-      if (g) {
-        setGlobalRow(g)
-        setForm(normalizeParams(g.params ?? {}))
-        setRoute(g.channel_route)
-        setReal(g.real_execution_enabled)
-      }
-    }).catch((e) => setErr(e.message))
-  }, [])
-
-  useEffect(load, [load])
-
-  const patchGroup = (group: GroupKey, key: string, value: number) =>
-    setForm((f) => ({ ...f, [group]: { ...f[group], [key]: value } }) as StrategyParams)
-
-  const patchInt = (key: 'uu_max_days' | 'eco_max_days', value: number) =>
-    setForm((f) => ({ ...f, [key]: Math.round(value) }))
-
-  const validate = (f: StrategyParams): string => {
-    if (f.factor.min >= f.factor.max) return '反馈因子下限必须小于上限'
-    if (f.guardrails.min_rent >= f.guardrails.max_rent) return '租金下限必须小于上限'
-    if (f.guardrails.max_change_ratio <= 0) return '单次改价幅度上限必须大于 0'
-    if (f.eco_max_days < 8) return 'ECO 最长租期不可低于 8 天'
-    if (f.baseline.topn < 1) return '行情取样条数至少为 1'
-    return ''
-  }
-
-  const save = async () => {
-    setErr(''); setMsg('')
-    const invalid = validate(form)
-    if (invalid) { setErr(invalid); return }
-    try {
-      await api.put('/strategies/global', {
-        params: form,
-        channel_route: route,
-        real_execution_enabled: real,
-      })
-      setMsg('策略已保存')
-      load()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
+// ParamGroupsEditor renders the four parameter sections (baseline / factor /
+// guardrails / rent terms). Shared by the global strategy form and the
+// template-override editor so both stay in lockstep (US-STRAT-02).
+function ParamGroupsEditor(props: {
+  form: StrategyParams
+  patchGroup: (group: GroupKey, key: string, value: number) => void
+  patchInt: (key: 'uu_max_days' | 'eco_max_days', value: number) => void
+}) {
+  const { form, patchGroup, patchInt } = props
   const b = form.baseline
   const c = form.factor
   const g = form.guardrails
 
   return (
-    <div>
-      <h2>上架 / 改价策略</h2>
-      {err && <div className="error">{err}</div>}
-      {msg && <div className="ok-msg">{msg}</div>}
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>渠道与执行</h3>
-        <div className="row" style={{ flexWrap: 'wrap' }}>
-          <span className="field-label">渠道路由</span>
-          <div className="seg" role="radiogroup" aria-label="渠道路由">
-            {ROUTES.map((r) => (
-              <button
-                key={r.value} type="button" role="radio" aria-checked={route === r.value}
-                className={route === r.value ? 'active' : ''}
-                onClick={() => setRoute(r.value)}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <label className="switch">
-            <input type="checkbox" checked={real} onChange={(e) => setReal(e.target.checked)} />
-            <span className="track" />
-            允许真实执行（关闭 = 永远 dry-run）
-          </label>
-        </div>
-        <div className="hint" style={{ marginTop: 8 }}>
-          新策略首次执行必须保持 dry-run：完整走决策链但只写模拟记录、不调平台接口；
-          在「审计」页核对模拟决策无误后再开启真实执行。
-        </div>
-      </div>
-
-      <div className="section">
+    <>
+            <div className="section">
         <h3 style={{ marginTop: 0 }}>基线定价</h3>
         <div className="form-grid">
           <NumField
@@ -389,6 +294,172 @@ export default function Strategies() {
           />
         </div>
       </div>
+    </>
+  )
+}
+
+export default function Strategies() {
+  const [list, setList] = useState<StrategyRow[]>([])
+  const [globalRow, setGlobalRow] = useState<StrategyRow | null>(null)
+  const [form, setForm] = useState<StrategyParams>(cloneDefaults)
+  const [route, setRoute] = useState('both')
+  const [real, setReal] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [templates, setTemplates] = useState<TemplateRow[]>([])
+  const [tplEditing, setTplEditing] = useState<{
+    id?: number
+    hashName: string
+    route: string
+    real: boolean
+    form: StrategyParams
+  } | null>(null)
+
+  const tplPatchGroup = (group: GroupKey, key: string, value: number) =>
+    setTplEditing((t) => (t ? { ...t, form: { ...t.form, [group]: { ...t.form[group], [key]: value } } as StrategyParams } : t))
+  const tplPatchInt = (key: 'uu_max_days' | 'eco_max_days', value: number) =>
+    setTplEditing((t) => (t ? { ...t, form: { ...t.form, [key]: Math.round(value) } } : t))
+
+  const openNewTpl = () => {
+    setErr(''); setMsg('')
+    const usable = templates.filter((x) => !x.blacklisted)
+    if (usable.length === 0) {
+      setErr('暂无可用模板（待库存同步产出后再创建模板级策略）')
+      return
+    }
+    setTplEditing({ hashName: usable[0].hash_name, route: 'both', real: false, form: cloneDefaults() })
+  }
+
+  const saveTpl = async () => {
+    if (!tplEditing) return
+    setErr(''); setMsg('')
+    const invalid = validate(tplEditing.form)
+    if (invalid) { setErr(invalid); return }
+    try {
+      await api.post('/strategies/template', {
+        hash_name: tplEditing.hashName,
+        channel_route: tplEditing.route,
+        params: tplEditing.form,
+        ...(tplEditing.id ? {} : { real_execution_enabled: tplEditing.real }),
+      })
+      setMsg(`模板策略已保存：${tplEditing.hashName}`)
+      setTplEditing(null)
+      load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const deleteTpl = async (row: StrategyRow) => {
+    if (!window.confirm(`删除模板「${row.name}」的覆盖策略？该模板将立即回落全局策略。`)) return
+    setErr(''); setMsg('')
+    try {
+      await api.del(`/strategies/template/${row.id}`)
+      setMsg(`已删除覆盖策略：${row.name}（回落全局）`)
+      load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const loadTemplates = useCallback(() => {
+    api.get<TemplateRow[]>('/templates').then(setTemplates).catch(() => undefined)
+  }, [])
+
+  const toggleBlacklist = async (t: TemplateRow) => {
+    setErr(''); setMsg('')
+    try {
+      await api.put('/templates/blacklist', { hash_name: t.hash_name, blacklisted: !t.blacklisted })
+      setMsg(t.blacklisted ? `已解除拉黑：${t.display_name || t.hash_name}` : `已拉黑：${t.display_name || t.hash_name}（将退出上架路由与锚点合成）`)
+      loadTemplates()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  useEffect(loadTemplates, [loadTemplates])
+
+  const load = useCallback(() => {
+    api.get<StrategyRow[]>('/strategies').then((rows) => {
+      setList(rows)
+      const g = rows.find((r) => r.scope === 'global')
+      if (g) {
+        setGlobalRow(g)
+        setForm(normalizeParams(g.params ?? {}))
+        setRoute(g.channel_route)
+        setReal(g.real_execution_enabled)
+      }
+    }).catch((e) => setErr(e.message))
+  }, [])
+
+  useEffect(load, [load])
+
+  const patchGroup = (group: GroupKey, key: string, value: number) =>
+    setForm((f) => ({ ...f, [group]: { ...f[group], [key]: value } }) as StrategyParams)
+
+  const patchInt = (key: 'uu_max_days' | 'eco_max_days', value: number) =>
+    setForm((f) => ({ ...f, [key]: Math.round(value) }))
+
+  const validate = (f: StrategyParams): string => {
+    if (f.factor.min >= f.factor.max) return '反馈因子下限必须小于上限'
+    if (f.guardrails.min_rent >= f.guardrails.max_rent) return '租金下限必须小于上限'
+    if (f.guardrails.max_change_ratio <= 0) return '单次改价幅度上限必须大于 0'
+    if (f.eco_max_days < 8) return 'ECO 最长租期不可低于 8 天'
+    if (f.baseline.topn < 1) return '行情取样条数至少为 1'
+    return ''
+  }
+
+  const save = async () => {
+    setErr(''); setMsg('')
+    const invalid = validate(form)
+    if (invalid) { setErr(invalid); return }
+    try {
+      await api.put('/strategies/global', {
+        params: form,
+        channel_route: route,
+        real_execution_enabled: real,
+      })
+      setMsg('策略已保存')
+      load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <div>
+      <h2>上架 / 改价策略</h2>
+      {err && <div className="error">{err}</div>}
+      {msg && <div className="ok-msg">{msg}</div>}
+
+      <div className="section">
+        <h3 style={{ marginTop: 0 }}>渠道与执行</h3>
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <span className="field-label">渠道路由</span>
+          <div className="seg" role="radiogroup" aria-label="渠道路由">
+            {ROUTES.map((r) => (
+              <button
+                key={r.value} type="button" role="radio" aria-checked={route === r.value}
+                className={route === r.value ? 'active' : ''}
+                onClick={() => setRoute(r.value)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <label className="switch">
+            <input type="checkbox" checked={real} onChange={(e) => setReal(e.target.checked)} />
+            <span className="track" />
+            允许真实执行（关闭 = 永远 dry-run）
+          </label>
+        </div>
+        <div className="hint" style={{ marginTop: 8 }}>
+          新策略首次执行必须保持 dry-run：完整走决策链但只写模拟记录、不调平台接口；
+          在「审计」页核对模拟决策无误后再开启真实执行。
+        </div>
+      </div>
+
+      <ParamGroupsEditor form={form} patchGroup={patchGroup} patchInt={patchInt} />
 
       <div className="toolbar">
         <button onClick={save}>保存全局策略</button>
@@ -431,6 +502,97 @@ export default function Strategies() {
                 <td>{s.priority}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="section">
+        <div className="toolbar" style={{ marginBottom: 8 }}>
+          <h3 style={{ margin: 0 }}>模板级覆盖策略（US-STRAT-02）</h3>
+          <div className="grow" />
+          <button onClick={openNewTpl} disabled={tplEditing !== null}>新建模板策略</button>
+        </div>
+        {tplEditing && (
+          <div className="section" style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: 12, marginTop: 0 }}>
+            <div className="row" style={{ flexWrap: 'wrap' }}>
+              <span className="field-label">目标模板</span>
+              {tplEditing.id ? (
+                <strong>{tplEditing.hashName}</strong>
+              ) : (
+                <select
+                  value={tplEditing.hashName}
+                  onChange={(e) => setTplEditing({ ...tplEditing, hashName: e.target.value })}
+                >
+                  {templates.filter((t) => !t.blacklisted).map((t) => (
+                    <option key={t.hash_name} value={t.hash_name}>
+                      {t.display_name || t.hash_name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="seg" role="radiogroup" aria-label="模板渠道路由">
+                {ROUTES.map((rt) => (
+                  <button
+                    key={rt.value} type="button" role="radio" aria-checked={tplEditing.route === rt.value}
+                    className={tplEditing.route === rt.value ? 'active' : ''}
+                    onClick={() => setTplEditing({ ...tplEditing, route: rt.value })}
+                  >
+                    {rt.label}
+                  </button>
+                ))}
+              </div>
+              {!tplEditing.id && (
+                <label className="switch">
+                  <input type="checkbox" checked={tplEditing.real}
+                    onChange={(e) => setTplEditing({ ...tplEditing, real: e.target.checked })} />
+                  <span className="track" />
+                  允许真实执行（关闭 = 永远 dry-run）
+                </label>
+              )}
+            </div>
+            {!tplEditing.id && (
+              <div className="hint">已有覆盖的模板再次保存会整行替换；更新时留空真实执行开关则保留原值。</div>
+            )}
+            <ParamGroupsEditor form={tplEditing.form} patchGroup={tplPatchGroup} patchInt={tplPatchInt} />
+            <div className="toolbar">
+              <button onClick={saveTpl}>保存模板策略</button>
+              <button className="ghost" onClick={() => setTplEditing(null)}>取消</button>
+            </div>
+          </div>
+        )}
+        <table className="grid">
+          <thead><tr><th>模板</th><th>路由</th><th>真实执行</th><th>优先级</th><th>更新时间</th><th>操作</th></tr></thead>
+          <tbody>
+            {list.filter((s) => s.scope === 'template').map((s) => (
+              <tr key={s.id}>
+                <td title={s.name}>{s.name.replace(/^tpl:/, '')}</td>
+                <td>{s.channel_route}</td>
+                <td>{s.real_execution_enabled ? '是' : '否（dry-run）'}</td>
+                <td>{s.priority}</td>
+                <td className="muted">{new Date(s.updated_at).toLocaleString('zh-CN')}</td>
+                <td>
+                  <button className="ghost small"
+                    onClick={() => {
+                      const tpl = templates.find((t) => t.hash_name === s.name.replace(/^tpl:/, ''))
+                      setTplEditing({
+                        id: s.id,
+                        hashName: tpl?.hash_name ?? s.name.replace(/^tpl:/, ''),
+                        route: s.channel_route,
+                        real: s.real_execution_enabled,
+                        form: normalizeParams(s.params ?? {}),
+                      })
+                    }}
+                    disabled={tplEditing !== null}>
+                    编辑
+                  </button>
+                  {' '}
+                  <button className="ghost small" onClick={() => deleteTpl(s)} disabled={tplEditing !== null}>删除</button>
+                </td>
+              </tr>
+            ))}
+            {list.filter((s) => s.scope === 'template').length === 0 && (
+              <tr><td colSpan={6} className="muted">暂无模板级覆盖 —— 所有商品按全局策略执行</td></tr>
+            )}
           </tbody>
         </table>
       </div>
