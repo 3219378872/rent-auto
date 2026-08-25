@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
@@ -131,6 +132,81 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.audit(r, "strategy.update_global", detail)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ---- template-scope strategy CRUD ----
+
+type templateStrategyRequest struct {
+	HashName    string           `json:"hash_name"`
+	Route       string           `json:"channel_route"`
+	Params      *json.RawMessage `json:"params,omitempty"`
+	RealEnabled *bool            `json:"real_execution_enabled,omitempty"`
+	Priority    *int             `json:"priority,omitempty"`
+}
+
+func (s *Server) handleTemplateStrategyUpsert(w http.ResponseWriter, r *http.Request) {
+	var req templateStrategyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.HashName == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "hash_name required")
+		return
+	}
+	if !validRoutes[req.Route] {
+		writeErr(w, http.StatusBadRequest, "bad_request", "invalid channel_route")
+		return
+	}
+	params := json.RawMessage("{}")
+	if req.Params != nil {
+		if !json.Valid(*req.Params) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "params must be valid json")
+			return
+		}
+		params = *req.Params
+	}
+	// Deep-parse validation: type errors (e.g. k1 as string) must be rejected
+	// here instead of silently degrading to skip reasons at reprice time.
+	if _, err := pricing.ParseParams([]byte("{}"), params); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "invalid strategy params: "+err.Error())
+		return
+	}
+	priority := 0
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+	id, err := s.Store.UpsertTemplateStrategy(r.Context(), store.TemplateStrategy{
+		HashName:    req.HashName,
+		Route:       req.Route,
+		Params:      params,
+		RealEnabled: req.RealEnabled,
+		Priority:    priority,
+	})
+	if err != nil {
+		s.audit(r, "strategy.template_upsert_failed", map[string]any{"hash": req.HashName, "error": err.Error()})
+		writeErr(w, http.StatusBadRequest, "upsert_failed", "unknown template or invalid payload")
+		return
+	}
+	s.audit(r, "strategy.template_upsert", map[string]any{
+		"id": id, "hash": req.HashName, "channel_route": req.Route,
+		"real_execution_enabled": req.RealEnabled != nil && *req.RealEnabled,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+func (s *Server) handleTemplateStrategyDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	if err := s.Store.DeleteTemplateStrategy(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "no such template strategy")
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	s.audit(r, "strategy.template_delete", map[string]any{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

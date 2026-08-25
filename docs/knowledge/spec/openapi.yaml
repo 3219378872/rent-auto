@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.4.0"
+  version: "0.5.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -213,6 +213,49 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/StrategyView" }
+  /strategies/template:
+    post:
+      summary: 创建/替换模板级覆盖策略（每模板一行；新建行默认 dry-run）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hash_name, channel_route]
+              properties:
+                hash_name: { type: string }
+                channel_route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback] }
+                params:
+                  type: object
+                  description: 分组结构（baseline/factor/guardrails/uu_max_days/eco_max_days），深覆盖全局
+                real_execution_enabled: { type: boolean, description: 更新时缺省=保留原值 }
+                priority: { type: integer }
+      responses:
+        "200":
+          description: 行 id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer, format: int64 }
+        "400": { $ref: "#/components/responses/Err400" }
+  /strategies/template/{id}:
+    delete:
+      summary: 删除模板级覆盖（立即回落全局策略）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "404": { $ref: "#/components/responses/Err400" }
   /strategies/global:
     put:
       summary: 更新全局策略（参数/路由/真实执行开关，单事务生效）

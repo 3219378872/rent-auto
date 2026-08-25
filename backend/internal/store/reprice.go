@@ -185,9 +185,60 @@ type EffectiveStrategy struct {
 	Route        string
 }
 
+// TemplateStrategy is one template-scope strategy override payload.
+type TemplateStrategy struct {
+	HashName    string
+	Route       string
+	Params      json.RawMessage // partial object; deep-merges over global
+	RealEnabled *bool           // nil = keep existing on update / false on insert
+	Priority    int
+}
+
+// UpsertTemplateStrategy creates or replaces the template-scope override for
+// one hash (uniq_template_strategy allows at most one row per hash).
+// A brand-new override starts dry-run (real_execution_enabled=false) unless
+// explicitly requested — AC-T1 applies per strategy row.
+func (s *Store) UpsertTemplateStrategy(ctx context.Context, ts TemplateStrategy) (int64, error) {
+	var id int64
+	err := s.Pool.QueryRow(ctx,
+		`INSERT INTO strategies(name, scope, hash_name, channel_route, params, priority,
+		                        real_execution_enabled, updated_by)
+		 VALUES($1,'template',$2,$3,$4,$5,COALESCE($6,false),'user')
+		 ON CONFLICT (scope, hash_name) WHERE scope='template' DO UPDATE SET
+		   channel_route=EXCLUDED.channel_route,
+		   params=EXCLUDED.params,
+		   priority=EXCLUDED.priority,
+		   real_execution_enabled=COALESCE($6, strategies.real_execution_enabled),
+		   enabled=true,
+		   updated_by='user', updated_at=now()
+		 RETURNING id`,
+		"tpl:"+ts.HashName, ts.HashName, ts.Route, []byte(ts.Params), ts.Priority, ts.RealEnabled).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("upsert template strategy %s: %w", ts.HashName, err)
+	}
+	return id, nil
+}
+
+// DeleteTemplateStrategy removes a template-scope override; the hash falls
+// back to the global strategy immediately.
+func (s *Store) DeleteTemplateStrategy(ctx context.Context, id int64) error {
+	tag, err := s.Pool.Exec(ctx,
+		`DELETE FROM strategies WHERE id=$1 AND scope='template'`, id)
+	if err != nil {
+		return fmt.Errorf("delete template strategy %d: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) GetEffectiveStrategy(ctx context.Context, hash string) (*EffectiveStrategy, error) {
 	row := s.Pool.QueryRow(ctx,
-		`SELECT g.id, g.params::text, g.real_execution_enabled, g.channel_route,
+		`SELECT g.id,
+		        g.params::text,
+		        COALESCE(t.real_execution_enabled, g.real_execution_enabled),
+		        COALESCE(t.channel_route, g.channel_route),
 		        COALESCE(t.params::text,'')
 		 FROM strategies g
 		 LEFT JOIN LATERAL (

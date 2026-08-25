@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
@@ -204,5 +206,124 @@ func TestAuditSinceUntilPaging(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &pf)
 	if pf.Total != 0 {
 		t.Fatalf("since filter: %s", rec.Body.String())
+	}
+}
+
+// Template-scope strategy lifecycle: upsert → effective merge → replace same
+// row → delete → global fallback (US-STRAT-02 backend contract).
+func TestTemplateStrategyLifecycle(t *testing.T) {
+	st, cleanup := openAPIDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := store.MigrateUp(ctx, st.Pool); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = st.Pool.Exec(ctx, `TRUNCATE strategies, templates`) })
+	if err := st.UpsertTemplate(ctx, store.Template{HashName: "H-TS"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.EnsureGlobalStrategy(ctx, "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newAuthedServer(t, st)
+	routes := s.Routes()
+	tok := tokenFor(t, routes)
+
+	rec := do(t, routes, "POST", "/api/v1/strategies/template", tok,
+		`{"hash_name":"H-TS","channel_route":"eco_only","params":{"baseline":{"k1":0.9}},"real_execution_enabled":true}`)
+	if rec.Code != 200 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("create body: %s", rec.Body.String())
+	}
+
+	// Effective strategy must merge the template layer over global.
+	es, err := st.GetEffectiveStrategy(ctx, "H-TS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.Route != "eco_only" || !es.RealEnabled {
+		t.Fatalf("effective: route=%s real=%v", es.Route, es.RealEnabled)
+	}
+	pp, err := pricing.ParseParams(es.GlobalParams, es.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pp.Baseline.K1 != 0.9 {
+		t.Fatalf("merged k1 = %v, want 0.9", pp.Baseline.K1)
+	}
+
+	// Re-upsert replaces the SAME row (unique per hash).
+	rec = do(t, routes, "POST", "/api/v1/strategies/template", tok,
+		`{"hash_name":"H-TS","channel_route":"uu_only","params":{"baseline":{"k1":0.95}}}`)
+	if rec.Code != 200 {
+		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
+	}
+	var rows int
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM strategies WHERE scope='template' AND hash_name='H-TS'`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows=%d err=%v", rows, err)
+	}
+	// real_execution_enabled omitted on update → keeps previous value.
+	es, _ = st.GetEffectiveStrategy(ctx, "H-TS")
+	if es.Route != "uu_only" || !es.RealEnabled {
+		t.Fatalf("after replace: route=%s real=%v", es.Route, es.RealEnabled)
+	}
+
+	// Delete → falls back to global.
+	rec = do(t, routes, "DELETE", fmt.Sprintf("/api/v1/strategies/template/%d", created.ID), tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	es, err = st.GetEffectiveStrategy(ctx, "H-TS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.Route != "both" {
+		t.Fatalf("fallback route = %s", es.Route)
+	}
+
+	// Deleting again is a clean 404.
+	rec = do(t, routes, "DELETE", fmt.Sprintf("/api/v1/strategies/template/%d", created.ID), tok, "")
+	if rec.Code != 404 {
+		t.Fatalf("re-delete: %d", rec.Code)
+	}
+}
+
+// Validation matrix: bad route / invalid json / wrong-typed param value /
+// unknown template hash must all be rejected with 400-class errors.
+func TestTemplateStrategyValidation(t *testing.T) {
+	st, cleanup := openAPIDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := store.MigrateUp(ctx, st.Pool); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = st.Pool.Exec(ctx, `TRUNCATE strategies, templates`) })
+
+	s := newAuthedServer(t, st)
+	routes := s.Routes()
+	tok := tokenFor(t, routes)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"bad route", `{"hash_name":"X","channel_route":"sideways"}`},
+		{"invalid json params", `{"hash_name":"X","channel_route":"both","params":{"k1":}}`},
+		{"wrong-typed param", `{"hash_name":"X","channel_route":"both","params":{"baseline":{"topn":"many"}}}`},
+		{"unknown hash violates FK", `{"hash_name":"no-such-tpl","channel_route":"both"}`},
+		{"missing hash", `{"channel_route":"both"}`},
+	}
+	for _, tc := range cases {
+		rec := do(t, routes, "POST", "/api/v1/strategies/template", tok, tc.body)
+		if rec.Code < 400 || rec.Code >= 500 {
+			t.Fatalf("%s: want 4xx got %d (%s)", tc.name, rec.Code, rec.Body.String())
+		}
 	}
 }
