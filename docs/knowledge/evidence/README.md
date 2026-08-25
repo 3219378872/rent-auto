@@ -1,7 +1,7 @@
 # 证据索引（Evidence）
 
 > 每个里程碑完成时归档验证证据于此。规则：无证据不合并。
-> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；遗留清欠、面板缺口、工程收口与模板级策略已归档（2026-08-24 round4–8）**。
+> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；迭代打磨轮已归档至 round9（2026-08-24 round4–9）**。
 
 | 里程碑 | 证据文档 | 结论 |
 |---|---|---|
@@ -27,6 +27,7 @@
 | 2026-08-24 面板缺口清欠（round6） | [2026-08-24-round6-frontend-gaps.md](2026-08-24-round6-frontend-gaps.md) | 告警条/决策依据列/模板黑名单/审计时间过滤；openapi v0.4.0 21 路由 |
 | 2026-08-24 工程收口（round7） | [2026-08-24-round7-hardening.md](2026-08-24-round7-hardening.md) | PublishLease 哨兵统一/gosec 零告警/Vite7+Vitest3 升级 |
 | 2026-08-24 模板级策略（round8） | [2026-08-24-round8-template-strategy.md](2026-08-24-round8-template-strategy.md) | US-STRAT-02 全栈落地；GetEffectiveStrategy 深覆盖缺陷修复；openapi v0.5.0 23 路由 |
+| 2026-08-24 收尾打磨（round9） | [2026-08-24-round9-polish.md](2026-08-24-round9-polish.md) | golangci v2.13.1 收敛/熔断审计事件化/审计抗断连/任务错误卫生 |
 
 ## 事故复盘
 

@@ -99,13 +99,14 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
-**M0–M11 全部交付；迭代清欠轮 round4–8 完成
+**M0–M11 全部交付；迭代打磨轮 round4–9 完成
 （JWT 纪元吊销 ADR-0006 / 哨兵统一 / openapi 全量回写 / Refresh 锁外构建 / 分页上限 /
 可信代理判定+per-IP 限流 / 空货架熔断 / 迁移 0006 状态 CHECK / CI 加固 /
 面板四缺口（告警条·决策依据列·模板黑名单·审计时间过滤，openapi v0.4.0）/
 PublishLease 哨兵统一 / gosec 门控零告警 / Vite7+Vitest3 升级 /
 模板级策略 UI（US-STRAT-02，openapi v0.5.0；含 GetEffectiveStrategy
-route/real 深覆盖缺陷修复），见 evidence/2026-08-24-round{4,5,6,7,8}-*.md）**。纯逻辑域逐包覆盖率
+route/real 深覆盖缺陷修复）/ lint 工具链收敛 v2.13.1 / 熔断审计事件化 /
+审计抗断连，见 evidence/2026-08-24-round{4,5,6,7,8,9}-*.md）**。纯逻辑域逐包覆盖率
 （make gate 数值卡点 ≥70%）：pricing 91% / platform 100% / uu 77% / eco 78% /
 steam 76% / recon 80% / analytics 81% / auth 90% / secrets 79% / config 76%
 
