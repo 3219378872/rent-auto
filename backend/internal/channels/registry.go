@@ -21,7 +21,7 @@ import (
 
 const (
 	keyUUToken  = "uu_token"     // value_enc: {"token":"..."} (legacy rows may still hold value_plain)
-	keyECOCreds = "eco_creds"    // value_enc: {"partner_id":"...","private_key_pem":"..."}
+	keyECOCreds = "eco_creds"    //nolint:gosec // G101：app_settings 的存储键名，非凭证本体（凭证在 value_enc 密文内）
 	keyECOSteam = "eco_steam_id" // value_plain: {"steam_id":"..."}
 )
 

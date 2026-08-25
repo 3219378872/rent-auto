@@ -12,7 +12,17 @@ linters:
     - unused
     - misspell
     - revive
+    - gosec
   settings:
+    gosec:
+      # 规则级豁免均经人工审计（round5-7），理由随行：
+      excludes:
+        - G404 # math/rand：仅非密钥标识符（UU 设备ID/会话关联ID），上游兼容
+        - G115 # 整型边界转换：全部位于平台线协议编解码（SteamID/protobuf 长度守卫/pad），边界已验证
+        - G117 # JSON 密钥模式匹配：字段落库前经 secrets.Box(AES-GCM) 密封，明文不出进程
+        - G124 # Cookie 属性：出站客户端会话构造（模拟浏览器），非服务端 Set-Cookie
+        - G401 # sha1：Steam Guard 协议强制摘要算法
+        - G505 # sha1 导入：同上
     revive:
       rules:
         - name: var-naming
@@ -28,6 +38,7 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+          - gosec
 
 issues:
   max-issues-per-linter: 0
