@@ -67,12 +67,12 @@ func (s *Session) AttachTokens(tokens SessionTokens) {
 func (s *Session) setLoginSecure() {
 	val := url.QueryEscape(s.Tokens.SteamID + "||" + s.Tokens.AccessToken)
 	for _, domain := range []string{"steamcommunity.com", "store.steampowered.com"} {
-		s.http.Jar.SetCookies(mustURL("https://"+domain), []*http.Cookie{{
+		s.http.Jar.SetCookies(mustURL("https://"+domain), []*http.Cookie{{ //nolint:gosec // G124：出站客户端会话构造（模拟浏览器 jar），非服务端 Set-Cookie
 			Name: "steamLoginSecure", Value: val, Domain: domain, Path: "/",
 		}})
 	}
 	if s.Tokens.RefreshToken != "" {
-		s.http.Jar.SetCookies(mustURL("https://steamcommunity.com"), []*http.Cookie{{
+		s.http.Jar.SetCookies(mustURL("https://steamcommunity.com"), []*http.Cookie{{ //nolint:gosec // G124：出站客户端会话构造，非服务端 Set-Cookie
 			Name:   "steamRefresh_steam",
 			Value:  url.QueryEscape(s.Tokens.SteamID + "||" + s.Tokens.RefreshToken),
 			Domain: "steamcommunity.com", Path: "/",

@@ -100,7 +100,7 @@ func (s *SteamSession) SetCredentials(ctx context.Context,
 	if err := sess.Login(ctx); err != nil {
 		return fmt.Errorf("steam login failed: %w", err)
 	}
-	b, _ := json.Marshal(creds)
+	b, _ := json.Marshal(creds) //nolint:gosec // G117：序列化仅为 AES-GCM 密封做准备，密文落库明文不出进程
 	if s.box == nil {
 		return fmt.Errorf("APP_MASTER_KEY not configured")
 	}
@@ -108,7 +108,7 @@ func (s *SteamSession) SetCredentials(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	tok, _ := json.Marshal(sess.Tokens)
+	tok, _ := json.Marshal(sess.Tokens) //nolint:gosec // G117：同上，Seal 后才持久化
 	tokEnc, err := s.box.Seal(tok)
 	if err != nil {
 		return err
@@ -153,7 +153,7 @@ func (s *SteamSession) persistTokensLocked(ctx context.Context, sess *steam.Sess
 	if s.box == nil {
 		return
 	}
-	tok, _ := json.Marshal(sess.Tokens)
+	tok, _ := json.Marshal(sess.Tokens) //nolint:gosec // G117：Seal 后才持久化，明文不出进程
 	enc, err := s.box.Seal(tok)
 	if err != nil {
 		return
