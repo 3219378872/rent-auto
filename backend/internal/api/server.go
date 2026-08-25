@@ -185,11 +185,13 @@ func auditEntry(r *http.Request, action string, detail map[string]any) domain.Au
 }
 
 // audit writes an entry best-effort; nil store (tests) and write errors are non-fatal.
+// The request context is detached: a browser disconnect mid-write must not
+// silently drop the audit trail of a real write operation.
 func (s *Server) audit(r *http.Request, action string, detail map[string]any) {
 	if s.Store == nil {
 		return
 	}
-	if err := s.Store.InsertAudit(r.Context(), auditEntry(r, action, detail)); err != nil {
+	if err := s.Store.InsertAudit(context.WithoutCancel(r.Context()), auditEntry(r, action, detail)); err != nil {
 		s.Log.Warn("audit insert failed", "action", action, "err", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/analytics"
 	"github.com/3219378872/rent-auto/backend/internal/bench"
+	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
@@ -43,7 +44,18 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 					if !d.channelReady(ad.Channel(), time.Now()) {
 						continue
 					}
-					if _, err := bench.SyncShelf(ctx, ad, d.Store, log); err != nil {
+					if _, err := bench.SyncShelf(ctx, ad, d.Store, log, bench.SyncShelfOpts{
+						Audit: func(msg string, detail map[string]any) {
+							if d.Audit != nil {
+								d.Audit(ctx, domain.AuditEntry{
+									Time: time.Now().UTC(), Actor: "system",
+									Action: "shelf.empty_breaker", Channel: string(ad.Channel()),
+									Detail: detail,
+								})
+							}
+							_ = msg
+						},
+					}); err != nil {
 						d.penalize(ad.Channel(), err)
 						log.Error("shelf sync", "channel", string(ad.Channel()), "err", err)
 						errs = append(errs, fmt.Errorf("shelf %s: %w", ad.Channel(), err))
@@ -77,8 +89,10 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 			Fn: func(ctx context.Context) error {
 				if ecoDump != nil {
 					if prices, err := ecoDump(ctx); err == nil && len(prices) > 0 {
-						n, err := d.Store.UpdateEcoRefPrices(ctx, prices)
-						if err == nil {
+						n, uerr := d.Store.UpdateEcoRefPrices(ctx, prices)
+						if uerr != nil {
+							log.Warn("eco ref price persist failed", "err", uerr)
+						} else {
 							log.Info("eco ref prices updated", "rows", n)
 						}
 					} else if err != nil {
@@ -120,6 +134,7 @@ func runMarketSnapshot(ctx context.Context, st *store.Store, fetch func(ctx cont
 	}
 	const defaultMax = 20000.0
 	captured := 0
+	var errs []error
 	for _, tp := range tpls {
 		minP := tp.MarkPrice
 		maxP := tp.MarkPrice * 2
@@ -147,12 +162,16 @@ func runMarketSnapshot(ctx context.Context, st *store.Store, fetch func(ctx cont
 			}
 		}
 		if err := st.InsertSnapshots(ctx, snaps); err != nil {
-			return err
+			// 单模板落库失败不放弃本轮剩余模板；错误计入返回值供面板 LastError
+			log.Error("snapshot insert failed", "hash", tp.HashName, "err", err)
+			errs = append(errs, fmt.Errorf("snapshot %s: %w", tp.HashName, err))
+			continue
 		}
 		captured += len(snaps)
 	}
-	log.Info("market snapshot done", "templates", len(tpls), "points", captured)
-	return nil
+	log.Info("market snapshot done", "templates", len(tpls), "points", captured,
+		"failed_templates", len(errs))
+	return errors.Join(errs...)
 }
 
 // Order-sync lookback bounds (ADR-0003): the window must cover every order

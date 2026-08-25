@@ -44,7 +44,9 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           working-directory: backend
-          version: v2.6
+          # 与本地开发环境精确一致（round7 教训：版本差会让 config verify /
+          # 规则集静默漂移）；goinstall 源码构建规避官方二进制 Go 版本约束。
+          version: v2.13.1
           install-mode: goinstall
       - name: vet
         run: go vet ./...

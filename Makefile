@@ -29,6 +29,10 @@ fmt-check:
 	@test -z "$$(gofmt -l $(BACKEND)/cmd $(BACKEND)/internal 2>/dev/null)" || { gofmt -l $(BACKEND)/cmd $(BACKEND)/internal; exit 1; }
 
 lint:
+	@cd $(BACKEND) && v=$$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+	if [ "$$v" != "2.13.1" ]; then \
+		echo "⚠ golangci-lint $$v ≠ CI 锁定的 2.13.1（规则集可能漂移）；安装指引见 dev-setup.md"; \
+	fi
 	cd $(BACKEND) && golangci-lint run ./...
 
 vet:

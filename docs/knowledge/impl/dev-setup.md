@@ -28,6 +28,12 @@ analytics 等依赖 DB fixture 的包将卡在覆盖率门控上。
 make hooks    # = git config core.hooksPath .githooks
 ```
 
+lint 工具链与 CI 精确一致（round7 教训：版本差会让规则集/config verify 静默漂移）：
+
+```
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+```
+
 ## 环境变量（backend）
 
 | 变量 | 必填 | 说明 |

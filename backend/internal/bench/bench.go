@@ -73,7 +73,18 @@ func pricePtr(v float64) *float64 {
 // missing cascades into reconcile re-publishing the entire shelf next cycle.
 // Such cycles are skipped; genuine disappearances are caught by any later
 // non-empty sync, which prunes by seen-refs as usual.
-func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *slog.Logger) (int, error) {
+// SyncShelfOpts carries optional integrations; nil fields skip them.
+type SyncShelfOpts struct {
+	// Audit receives the empty-shelf breaker event so the panel audit page
+	// surfaces upstream anomalies (risk-control soft blocks), not just logs.
+	Audit func(msg string, detail map[string]any)
+}
+
+func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *slog.Logger, opts ...SyncShelfOpts) (int, error) {
+	var o SyncShelfOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	shelf, err := ad.LeaseShelf(ctx)
 	if err != nil {
 		return 0, err
@@ -92,6 +103,10 @@ func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *s
 		if active, cerr := st.CountActiveListings(ctx, ad.Channel()); cerr == nil && active > 0 {
 			log.Warn("empty shelf ignored by breaker",
 				"channel", string(ad.Channel()), "active_listings", active)
+			if o.Audit != nil {
+				o.Audit("空货架熔断：平台返回零在架但本地仍有活跃 listing，本周期跳过消失标记",
+					map[string]any{"channel": string(ad.Channel()), "active_listings": active})
+			}
 			return 0, nil
 		}
 	}
