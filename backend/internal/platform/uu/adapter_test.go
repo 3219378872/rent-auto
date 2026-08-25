@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"errors"
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 )
@@ -78,5 +79,37 @@ func TestNewClientInvalidToken(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("invalid token must fail construction")
+	}
+}
+
+// PublishLease 部分失败必须以 ErrPartialFailure 哨兵暴露，同时结果数组
+// 保持逐项权威（round7 契约统一，与 eco 对齐）。
+func TestPublishLeasePartialFailureSentinel(t *testing.T) {
+	c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/api/user/Account/getUserInfo":
+			okUserInfo(w)
+		case "/api/commodity/Inventory/SellInventoryWithLeaseV2":
+			_, _ = w.Write([]byte(`{"Code":0,"Data":[
+				{"AssetId":111,"Status":1,"CommodityId":999,"Remark":""},
+				{"AssetId":222,"Status":2,"CommodityId":0,"Remark":"不可租"}
+			]}`))
+		default:
+			w.WriteHeader(404)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := NewAdapter(c).PublishLease(context.Background(), []platform.PublishLeaseRequest{
+		{AssetRef: "111", RentPrice: 1.2, MaxDays: 30, Deposit: 88.5},
+		{AssetRef: "222", RentPrice: 2.0, MaxDays: 8, Deposit: 60},
+	})
+	if !errors.Is(err, platform.ErrPartialFailure) {
+		t.Fatalf("want ErrPartialFailure, got %v", err)
+	}
+	if len(out) != 2 || !out[0].Success || out[0].GoodsRef != "999" || out[1].Success || out[1].Error != "不可租" {
+		t.Fatalf("results must stay authoritative: %+v (%v)", out, err)
 	}
 }

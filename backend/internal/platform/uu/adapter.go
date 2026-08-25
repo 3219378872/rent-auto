@@ -111,7 +111,10 @@ func (a *Adapter) PublishLease(ctx context.Context, items []platform.PublishLeas
 		results[i].Error = r.Remark
 		results[i].GoodsRef = strconv.FormatInt(r.CommodityID, 10)
 	}
-	return results, err
+	if err != nil {
+		return results, err
+	}
+	return results, platform.PartialIfAnyFailed(results)
 }
 
 const defaultCompensationType = 7

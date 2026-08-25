@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
@@ -73,6 +74,22 @@ type RepriceLeaseResult struct {
 	GoodsRef string
 	Success  bool
 	Error    string
+}
+
+// PartialIfAnyFailed unifies the PublishLease contract across channels: any
+// per-item failure surfaces as an ErrPartialFailure-wrapped error while the
+// full results slice stays authoritative for callers to inspect.
+func PartialIfAnyFailed(results []PublishLeaseResult) error {
+	failed := 0
+	for _, r := range results {
+		if !r.Success {
+			failed++
+		}
+	}
+	if failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %d/%d items rejected", ErrPartialFailure, failed, len(results))
 }
 
 // Adapter is the uniform face of a trade channel (ADR-0003).

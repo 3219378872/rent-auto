@@ -22,5 +22,7 @@ UU 与 ECO 两渠道在批量上限、押金语义（显式 vs 派生）、租�
 
 - reconcile 的 decideFor 已于 2026-08-24 审查轮改为优先读 `Caps().RentMaxDayMin/Max`，
   消除了与 reprice 路径的口径漂移。
-- 遗留：哨兵语义仍有不一致（ECO PartialError 不包装 ErrPartialFailure、
-  PublishLease 无哨兵）——见 2026-08-24 第三轮审查遗留清单。
+- ~~遗留：哨兵语义不一致~~ round7 收口：PartialError 恒解包 ErrPartialFailure（round4）、
+  ECO 凭据失效映射 ErrAuthExpired（round4）、PublishLease 逐项失败经
+  `platform.PartialIfAnyFailed` 统一以 ErrPartialFailure 暴露且结果数组保持权威
+  （调用方 recon 按逐项判定，逐项拒绝不触发风控退避）。

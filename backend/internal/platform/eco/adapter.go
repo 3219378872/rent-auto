@@ -128,7 +128,10 @@ func (a *Adapter) PublishLease(ctx context.Context, items []platform.PublishLeas
 		out[i].Error = r.ErrorMsg
 		out[i].GoodsRef = r.GoodNum
 	}
-	return out, err
+	if err != nil {
+		return out, err
+	}
+	return out, platform.PartialIfAnyFailed(out)
 }
 
 // derivedDeposit mirrors the platform rule max(ref×140%, rent×D, long×D);

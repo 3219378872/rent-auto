@@ -34,8 +34,9 @@ func TestAdapterPublishAndReprice(t *testing.T) {
 		{AssetRef: "a1", RentPrice: 1.2, LongRentPrice: 1.0, MaxDays: 30, Deposit: 140},
 		{AssetRef: "a2", RentPrice: 2.0, MaxDays: 8, Deposit: 60},
 	})
-	if err != nil {
-		t.Fatal(err)
+	// round7 契约：逐项失败以哨兵暴露，结果字段保持权威
+	if !errors.Is(err, platform.ErrPartialFailure) {
+		t.Fatalf("want ErrPartialFailure, got %v", err)
 	}
 	if !pub[0].Success || pub[0].GoodsRef != "GN1" || pub[1].Success || pub[1].Error != "不可租" {
 		t.Fatalf("pub: %+v", pub)
@@ -151,5 +152,33 @@ func TestParsePrivateKeyRawBase64(t *testing.T) {
 	}
 	if _, err := ParsePrivateKey([]byte("not a key")); err == nil {
 		t.Fatal("garbage accepted")
+	}
+}
+
+// PublishLease 部分失败必须以 ErrPartialFailure 哨兵暴露，同时结果数组
+// 保持逐项权威（round7 契约统一）。
+func TestPublishLeasePartialFailureSentinel(t *testing.T) {
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		return okEnv(`[{"AssetId":"a1","IsSuccess":true,"GoodNum":"GN1"},{"AssetId":"a2","IsSuccess":false,"ErrorMsg":"不可租"}]`)
+	})
+	out, err := NewAdapter(c, "sid").PublishLease(context.Background(), []platform.PublishLeaseRequest{
+		{AssetRef: "a1", RentPrice: 1.2, MaxDays: 30, Deposit: 140},
+		{AssetRef: "a2", RentPrice: 2.0, MaxDays: 8, Deposit: 60},
+	})
+	if !errors.Is(err, platform.ErrPartialFailure) {
+		t.Fatalf("want ErrPartialFailure, got %v", err)
+	}
+	if len(out) != 2 || !out[0].Success || out[0].GoodsRef != "GN1" || out[1].Success || out[1].Error != "不可租" {
+		t.Fatalf("results must stay authoritative: %+v (%v)", out, err)
+	}
+
+	allOK, err := NewAdapter(c, "sid").PublishLease(context.Background(), []platform.PublishLeaseRequest{
+		{AssetRef: "a1", RentPrice: 1.2, MaxDays: 30, Deposit: 140},
+	})
+	if err != nil {
+		t.Fatalf("all-success publish must be nil error: %v", err)
+	}
+	if len(allOK) != 1 || !allOK[0].Success {
+		t.Fatalf("all-success results: %+v", allOK)
 	}
 }

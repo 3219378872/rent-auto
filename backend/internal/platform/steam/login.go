@@ -121,6 +121,7 @@ func (s *Session) doRaw(req *http.Request) ([]byte, error) {
 // doRawStatus is doRaw plus the final HTTP status code, for callers that must
 // distinguish transport success from application-level failure (write ops).
 func (s *Session) doRawStatus(req *http.Request) ([]byte, int, error) {
+	//nolint:gosec // G704：URL 来自 Steam 登录响应的 transfer_info（上游固定域名），协议要求原样回放
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)

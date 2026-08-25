@@ -8,6 +8,7 @@ package recon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -316,9 +317,12 @@ func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed 
 				Deposit:       a.Decision.Deposit,
 			}
 			res, err := ad.PublishLease(ctx, []platform.PublishLeaseRequest{req})
-			ok2 := err == nil && len(res) > 0 && res[0].Success
+			// round7 contract: per-item failures surface as ErrPartialFailure
+			// with results still authoritative — judge by the item verdict.
+			partial := errors.Is(err, platform.ErrPartialFailure)
+			ok2 := len(res) > 0 && res[0].Success && (err == nil || partial)
 			e.record(ctx, a, ok2, errString(err, res))
-			if err != nil {
+			if err != nil && !partial {
 				e.penalize(ctx, a.Channel, err)
 			}
 			if ok2 {
@@ -423,6 +427,9 @@ func errText(err error) string {
 }
 
 func errString(err error, res []platform.PublishLeaseResult) string {
+	if errors.Is(err, platform.ErrPartialFailure) && len(res) > 0 && res[0].Error != "" {
+		return res[0].Error // item remark beats the generic sentinel text
+	}
 	if err != nil {
 		return err.Error()
 	}

@@ -243,8 +243,9 @@ func TestPublishFailureRemark(t *testing.T) {
 	res, err := NewAdapter(c).PublishLease(context.Background(), []platform.PublishLeaseRequest{
 		{AssetRef: "111", RentPrice: 1, MaxDays: 30, Deposit: 10},
 	})
-	if err != nil {
-		t.Fatal(err)
+	// round7 契约：逐项失败以哨兵暴露，结果字段保持权威
+	if !errors.Is(err, platform.ErrPartialFailure) {
+		t.Fatalf("want ErrPartialFailure, got %v", err)
 	}
 	if res[0].Success || res[0].Error != "cannot lease" {
 		t.Fatalf("result: %+v", res[0])
