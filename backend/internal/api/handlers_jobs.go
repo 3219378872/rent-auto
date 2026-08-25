@@ -130,6 +130,15 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 	}
 	var cv *uu.CaptchaResult
 	if req.Captcha != nil && req.Captcha.Ticket != "" {
+		if req.SessionID == "" {
+			// The captcha ticket chain (ticket/reqTicket) is issued against the
+			// session that drew the challenge. Minting a fresh session here
+			// silently breaks that correlation upstream and loops the panel
+			// back into 图形校验 forever — reject instead.
+			writeErr(w, http.StatusBadRequest, "bad_request",
+				"captcha retry must carry the session_id that received req_ticket")
+			return
+		}
 		cv = &uu.CaptchaResult{
 			Ticket: req.Captcha.Ticket, Randstr: req.Captcha.Randstr, ReqTicket: req.Captcha.ReqTicket,
 		}

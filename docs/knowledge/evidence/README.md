@@ -28,6 +28,7 @@
 | 2026-08-24 工程收口（round7） | [2026-08-24-round7-hardening.md](2026-08-24-round7-hardening.md) | PublishLease 哨兵统一/gosec 零告警/Vite7+Vitest3 升级 |
 | 2026-08-24 模板级策略（round8） | [2026-08-24-round8-template-strategy.md](2026-08-24-round8-template-strategy.md) | US-STRAT-02 全栈落地；GetEffectiveStrategy 深覆盖缺陷修复；openapi v0.5.0 23 路由 |
 | 2026-08-24 收尾打磨（round9） | [2026-08-24-round9-polish.md](2026-08-24-round9-polish.md) | golangci v2.13.1 收敛/熔断审计事件化/审计抗断连/任务错误卫生 |
+| 2026-08-25 UU 图形校验死循环修复 | [2026-08-25-uu-captcha-session-loop.md](2026-08-25-uu-captcha-session-loop.md) | 滑块重试闭包丢 session_id 致票据关联失败死循环；前端显式透传+API 层 400 门禁 |
 
 ## 事故复盘
 

@@ -367,7 +367,7 @@ paths:
                 session_id: { type: string, description: 重试时回传上次返回值 }
                 captcha:
                   type: object
-                  description: captcha 模式重试时携带 TCaptcha 结果
+                  description: captcha 模式重试时携带 TCaptcha 结果；必须同时回传首次响应的 session_id（票据链与 session 绑定），否则 400
                   properties:
                     ticket: { type: string }
                     randstr: { type: string }

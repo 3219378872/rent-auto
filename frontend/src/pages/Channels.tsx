@@ -45,11 +45,19 @@ export default function Channels() {
     return () => clearTimeout(t)
   }, [cooldown])
 
-  const sendSms = async (captcha?: { ticket: string; randstr: string; req_ticket: string }) => {
+  // sessionId must be passed explicitly on the captcha retry: the recursive
+  // call would otherwise read a stale closure over `session` and drop it,
+  // making the backend mint a fresh session whose reqTicket binding fails
+  // upstream risk control — an endless 图形校验 loop.
+  const sendSms = async (
+    captcha?: { ticket: string; randstr: string; req_ticket: string },
+    smsSessionId?: string,
+  ) => {
     setErr(''); setMsg('')
     try {
       const body: Record<string, unknown> = { phone }
-      if (session) body.session_id = session
+      const sid = smsSessionId ?? session
+      if (sid) body.session_id = sid
       if (captcha) body.captcha = captcha
       const r = await api.post<SmsResp>('/channels/uu/sms', body)
       setSession(r.session_id)
@@ -60,7 +68,10 @@ export default function Channels() {
         try {
           const c = await solveCaptcha(UU_CAPTCHA_APP_ID)
           setMsg('图形验证通过，正在重新发送短信…')
-          await sendSms({ ticket: c.ticket, randstr: c.randstr, req_ticket: r.req_ticket || '' })
+          await sendSms(
+            { ticket: c.ticket, randstr: c.randstr, req_ticket: r.req_ticket || '' },
+            r.session_id,
+          )
         } catch (e2) {
           setMsg('')
           setErr(e2 instanceof Error ? e2.message : String(e2))

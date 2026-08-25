@@ -33,6 +33,9 @@
      → `{code:0, msg:发送成功, data:{secs:60, loginReqTicket}}`
   4. 登录调用疑似需携带 loginReqTicket（第4步行为待真机确认）
   - 该票据链与 sessionId 绑定：重发必须复用首次的 sessionId
+    （2026-08-25 事故：面板前端闭包读到过期 session 导致重发丢 session_id、
+    后端静默换新 session，票据关联失败 → 图形校验死循环；现 API 层强制校验——
+    带 captcha 而缺 session_id 直接 400，见 `handleUUSms`）
   - Go 实现：`SendLoginSmsCode(..., *CaptchaResult)` 被拦时返回
     `Mode="captcha"`+ReqTicket/Secs（不报错）；带票重试 payload 键为
     `behaviorVerifyResult`；成功响应解析 LoginReqTicket 并经 SmsSignIn 透传。
