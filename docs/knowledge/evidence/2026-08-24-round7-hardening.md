@@ -37,3 +37,14 @@ cd frontend && pnpm exec tsc --noEmit && pnpm exec eslint . --max-warnings=0 \
    出售域适配器、因子参数面板化
 2. foldOrderEvents UU 渠道依赖真机字段确认（api-notes 待办#14）
 3. plugin-react 6.x 兼容性跟进
+
+## 附：推送后 CI 热修
+
+本地 golangci-lint 与 CI 锁定的 v2.6 存在打包 gosec 版本差——G117/G124 属新版
+规则 ID，CI 的 `config verify` 按 JSON schema 拒绝其进入规则级豁免：
+
+| 问题 | 修复 | 验证 |
+|---|---|---|
+| excludes 含 G117/G124 → CI config verify 失败 | 移出规则级豁免，5 处位点改定向 //nolint（理由随行） | run 32816779211 backend ✓ |
+
+教训记录：**lint 配置以 CI 口径的 config verify 为准**，本地二进制版本差会漏检。
