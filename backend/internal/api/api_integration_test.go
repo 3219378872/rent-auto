@@ -71,6 +71,18 @@ func openAPIDB(t *testing.T) (*store.Store, func()) {
 	return st, cleanup
 }
 
+// truncateTables empties the tables a test touched. It must be deferred AFTER
+// cleanup (LIFO: runs first) — t.Cleanup callbacks execute once the test
+// function's defers have already closed the pool, where the TRUNCATE fails
+// silently and rows leak across runs (observed: TestAuditSinceUntilPaging
+// accumulated probe rows, total=12 instead of 3).
+func truncateTables(t *testing.T, st *store.Store, tables string) {
+	t.Helper()
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE `+tables); err != nil {
+		t.Errorf("truncate %s: %v", tables, err)
+	}
+}
+
 // Logout must revoke every outstanding token via the session epoch:
 // old token → 401 unauthorized (client auto-discards), fresh login works.
 func TestLogoutRevokesTokens(t *testing.T) {
@@ -132,13 +144,13 @@ func TestLogoutRevokesTokens(t *testing.T) {
 func TestTemplateBlacklistRoundTrip(t *testing.T) {
 	st, cleanup := openAPIDB(t)
 	defer cleanup()
+	defer truncateTables(t, st, "templates, audit_log CASCADE")
 	if _, err := store.MigrateUp(context.Background(), st.Pool); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertTemplate(context.Background(), store.Template{HashName: "H-BL"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = st.Pool.Exec(context.Background(), `TRUNCATE templates, audit_log`) })
 
 	s := newAuthedServer(t, st)
 	routes := s.Routes()
@@ -164,7 +176,7 @@ func TestTemplateBlacklistRoundTrip(t *testing.T) {
 func TestAuditSinceUntilPaging(t *testing.T) {
 	st, cleanup := openAPIDB(t)
 	defer cleanup()
-	t.Cleanup(func() { _, _ = st.Pool.Exec(context.Background(), `TRUNCATE audit_log`) })
+	defer truncateTables(t, st, "audit_log")
 
 	for i := 0; i < 3; i++ {
 		if err := st.InsertAudit(context.Background(), domain.AuditEntry{
@@ -214,11 +226,11 @@ func TestAuditSinceUntilPaging(t *testing.T) {
 func TestTemplateStrategyLifecycle(t *testing.T) {
 	st, cleanup := openAPIDB(t)
 	defer cleanup()
+	defer truncateTables(t, st, "strategies, templates CASCADE")
 	ctx := context.Background()
 	if _, err := store.MigrateUp(ctx, st.Pool); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = st.Pool.Exec(ctx, `TRUNCATE strategies, templates`) })
 	if err := st.UpsertTemplate(ctx, store.Template{HashName: "H-TS"}); err != nil {
 		t.Fatal(err)
 	}
@@ -300,11 +312,11 @@ func TestTemplateStrategyLifecycle(t *testing.T) {
 func TestTemplateStrategyValidation(t *testing.T) {
 	st, cleanup := openAPIDB(t)
 	defer cleanup()
+	defer truncateTables(t, st, "strategies, templates CASCADE")
 	ctx := context.Background()
 	if _, err := store.MigrateUp(ctx, st.Pool); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = st.Pool.Exec(ctx, `TRUNCATE strategies, templates`) })
 
 	s := newAuthedServer(t, st)
 	routes := s.Routes()
