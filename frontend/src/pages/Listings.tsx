@@ -1,31 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api, Paged, ListingRow } from '../api/client'
+import { useState } from 'react'
+import { api, ListingRow } from '../api/client'
+import { Pager, usePagedList } from '../lib/paged'
 
 const stateBadge: Record<string, string> = {
   active: 'ok', leased: 'warn', none: '', stale: 'bad', unknown: '',
 }
 
 export default function Listings() {
-  const [data, setData] = useState<Paged<ListingRow> | null>(null)
   const [channel, setChannel] = useState('')
   const [state, setState] = useState('active')
-  const [page, setPage] = useState(1)
-  const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [repricing, setRepricing] = useState(false)
-
-  const load = useCallback(() => {
-    const q = new URLSearchParams({ page: String(page), page_size: '50' })
-    if (channel) q.set('channel', channel)
-    if (state) q.set('state', state)
-    let alive = true
-    api.get<Paged<ListingRow>>(`/listings?${q}`)
-      .then((d) => { if (alive) { setData(d); setErr('') } })
-      .catch((e) => { if (alive) setErr(e.message) })
-    return () => { alive = false }
-  }, [channel, state, page])
-
-  useEffect(load, [load])
+  const { data, page, setPage, err, setErr } = usePagedList<ListingRow>('/listings', { channel, state })
 
   const triggerReprice = async () => {
     setErr(''); setMsg('')
@@ -87,13 +73,7 @@ export default function Listings() {
         </tbody>
       </table>
 
-      <div className="toolbar" style={{ marginTop: 12 }}>
-        <button className="ghost small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
-        <span className="muted">第 {page} 页</span>
-        <button className="ghost small"
-          disabled={data ? page * 50 >= data.total : true}
-          onClick={() => setPage(page + 1)}>下一页</button>
-      </div>
+      <Pager page={page} total={data?.total} pageSize={50} onPage={setPage} />
     </div>
   )
 }

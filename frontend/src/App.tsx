@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
-import { api, clearToken, getToken } from './api/client'
+import { api, AUTH_EVENT, clearToken, getToken } from './api/client'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
@@ -46,8 +46,15 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken())
   useEffect(() => {
-    const iv = setInterval(() => setAuthed(!!getToken()), 500)
-    return () => clearInterval(iv)
+    // Event-driven auth gate: token changes fire in-tab (custom event from
+    // setToken/clearToken) or cross-tab (storage). No polling.
+    const sync = () => setAuthed(!!getToken())
+    window.addEventListener(AUTH_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(AUTH_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
   }, [])
   return (
     <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>

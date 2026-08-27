@@ -1,16 +1,22 @@
 // Minimal typed API client: JWT in localStorage, JSON everywhere.
 const BASE = '/api/v1'
 
+// Fired on setToken/clearToken so same-tab listeners (App auth gate) react
+// instantly; cross-tab changes arrive via the standard `storage` event.
+export const AUTH_EVENT = 'ra-auth'
+
 export function getToken(): string {
   return localStorage.getItem('ra_token') ?? ''
 }
 
 export function setToken(t: string): void {
   localStorage.setItem('ra_token', t)
+  window.dispatchEvent(new Event(AUTH_EVENT))
 }
 
 export function clearToken(): void {
   localStorage.removeItem('ra_token')
+  window.dispatchEvent(new Event(AUTH_EVENT))
 }
 
 export class ApiError extends Error {

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api, Paged, InventoryRow } from '../api/client'
+import { useState } from 'react'
+import { api, InventoryRow } from '../api/client'
+import { Pager, usePagedList } from '../lib/paged'
 import { useDebounced } from '../lib/ui'
 
 const statusBadge: Record<string, string> = {
@@ -7,33 +8,18 @@ const statusBadge: Record<string, string> = {
 }
 
 export default function Inventory() {
-  const [data, setData] = useState<Paged<InventoryRow> | null>(null)
   const [channel, setChannel] = useState('')
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
-  const [page, setPage] = useState(1)
-  const [err, setErr] = useState('')
   const searchDebounced = useDebounced(search)
-
-  const load = useCallback(() => {
-    const q = new URLSearchParams({ page: String(page), page_size: '50' })
-    if (channel) q.set('channel', channel)
-    if (status) q.set('status', status)
-    if (searchDebounced) q.set('search', searchDebounced)
-    // alive-guard: only the latest effect run may write state (no stale races)
-    let alive = true
-    api.get<Paged<InventoryRow>>(`/inventory?${q}`)
-      .then((d) => { if (alive) { setData(d); setErr('') } })
-      .catch((e) => { if (alive) setErr(e.message) })
-    return () => { alive = false }
-  }, [channel, status, searchDebounced, page])
-
-  useEffect(load, [load])
+  const { data, page, setPage, err, setErr, reload } = usePagedList<InventoryRow>(
+    '/inventory', { channel, status, search: searchDebounced },
+  )
 
   const saveCost = async (row: InventoryRow, cost: number) => {
     try {
       await api.put(`/inventory/${row.channel}/${row.asset_id}/cost`, { cost })
-      load()
+      reload()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -80,13 +66,7 @@ export default function Inventory() {
         </tbody>
       </table>
 
-      <div className="toolbar" style={{ marginTop: 12 }}>
-        <button className="ghost small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
-        <span className="muted">第 {page} 页</span>
-        <button className="ghost small"
-          disabled={data ? page * 50 >= data.total : true}
-          onClick={() => setPage(page + 1)}>下一页</button>
-      </div>
+      <Pager page={page} total={data?.total} pageSize={50} onPage={setPage} />
     </div>
   )
 }

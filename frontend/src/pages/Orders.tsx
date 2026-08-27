@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, Paged, OrderRow } from '../api/client'
+import { Pager, usePagedList } from '../lib/paged'
 import { csvCell } from '../lib/ui'
 
 const statusBadge: Record<string, string> = {
@@ -10,25 +11,10 @@ const statusBadge: Record<string, string> = {
 const PAGE_SIZE = 50
 
 export default function Orders() {
-  const [data, setData] = useState<Paged<OrderRow> | null>(null)
   const [channel, setChannel] = useState('')
   const [status, setStatus] = useState('')
-  const [page, setPage] = useState(1)
-  const [err, setErr] = useState('')
   const [exporting, setExporting] = useState(false)
-
-  const load = useCallback(() => {
-    const q = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) })
-    if (channel) q.set('channel', channel)
-    if (status) q.set('status', status)
-    let alive = true
-    api.get<Paged<OrderRow>>(`/orders?${q}`)
-      .then((d) => { if (alive) { setData(d); setErr('') } })
-      .catch((e) => { if (alive) setErr(e.message) })
-    return () => { alive = false }
-  }, [channel, status, page])
-
-  useEffect(load, [load])
+  const { data, page, setPage, err, setErr } = usePagedList<OrderRow>('/orders', { channel, status }, PAGE_SIZE)
 
   // exportCsv fetches EVERY matching page (not just the visible one) so the
   // download always matches the "共 N 单" counter.
@@ -111,13 +97,7 @@ export default function Orders() {
         </tbody>
       </table>
 
-      <div className="toolbar" style={{ marginTop: 12 }}>
-        <button className="ghost small" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
-        <span className="muted">第 {page} 页</span>
-        <button className="ghost small"
-          disabled={data ? page * PAGE_SIZE >= data.total : true}
-          onClick={() => setPage(page + 1)}>下一页</button>
-      </div>
+      <Pager page={page} total={data?.total} pageSize={PAGE_SIZE} onPage={setPage} />
     </div>
   )
 }

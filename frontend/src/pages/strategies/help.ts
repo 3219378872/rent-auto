@@ -1,0 +1,20 @@
+// Field-by-field documentation table rendered in the <details> help panel.
+export const HELP_ROWS: { group: string; name: string; def: string; desc: string }[] = [
+  { group: '基线定价', name: 'topn 行情取样条数', def: '15', desc: '每次为模板拉取的租赁行情条数，按平台排序取前 N 条计算价格基线。越大越平滑，越小对最新行情反应越快。' },
+  { group: '基线定价', name: 'k1 短租基线系数', def: '97%', desc: '短租基线 = 行情短租均价 × k1（且不低于最低在售价）。调低更易出租，调高单价更高但成交变慢。' },
+  { group: '基线定价', name: 'k2 长租基线系数', def: '95%', desc: '长租基线 = min(短租基线 × 98%, 行情长租均价 × k2)。长租价始终略低于短租以引导长期订单。' },
+  { group: '基线定价', name: 'k3 押金基线系数', def: '98%', desc: '押金基线 = max(行情押金均值 × k3, 行情最低押金)。跟随市场押金水位。' },
+  { group: '基线定价', name: 'min_lease_ratio 短租下限比例', def: '0（关闭）', desc: '短租价不得低于该比例 × 价值锚点 V（跨平台基准价），防止行情异常时贱租。' },
+  { group: '反馈控制器', name: 'factor.min / factor.max 因子区间', def: '85% ~ 125%', desc: '最终报价 = 价格基线 × 反馈因子。因子初始 100%，随成交上调、滞销下调，在此区间内浮动。' },
+  { group: '反馈控制器', name: 'step_up 成功加价步长', def: '3%', desc: '每笔租赁订单成交后因子上浮幅度；被买断时上浮幅度翻倍。' },
+  { group: '反馈控制器', name: 'step_down 滞销降价步长', def: '5%', desc: '在架每超过 stale_days 天仍未出租，因子下调该幅度，阶梯式降价促销。' },
+  { group: '反馈控制器', name: 'stale_days 滞销判定天数', def: '7 天', desc: '在架多少天未出租视为滞销，触发 step_down 降价。' },
+  { group: '护栏', name: 'min_rent / max_rent 租金区间', def: '¥0.5 ~ ¥20000', desc: '单日租金允许区间，超出直接跳过上架/改价并记录原因，拦截异常报价。' },
+  { group: '护栏', name: 'max_change_ratio 单次改价幅度上限', def: '15%', desc: '单次改价相对当前价的 最大变动比例，防止一次调价过猛。' },
+  { group: '护栏', name: 'noise_ratio 改价防抖阈值', def: '2%', desc: '新价格与现价差异小于该比例时不改价，避免无意义的频繁微调。' },
+  { group: '护栏', name: 'cooldown_minutes 改价冷却时间', def: '30 分钟', desc: '同一挂单两次改价之间的最短间隔分钟数。' },
+  { group: '护栏', name: 'deposit_floor_ratio UU 押金下限比例', def: '30%', desc: 'UU 渠道押金不低于该比例 × V，控制在外押金风险敞口。' },
+  { group: '护栏', name: 'deposit_cap_ratio ECO 押金上限比例', def: '200%', desc: 'ECO 渠道派生押金超过该比例 × V 时拒绝上架并告警，防止押金虚高无人可租。' },
+  { group: '租期', name: 'uu_max_days UU 最长租期', def: '60 天', desc: 'UU 渠道允许的单次最长租赁天数。' },
+  { group: '租期', name: 'eco_max_days ECO 最长租期', def: '30 天', desc: 'ECO 渠道允许的最长租赁天数，参与 ECO 押金派生公式，最低 8 天。' },
+]
