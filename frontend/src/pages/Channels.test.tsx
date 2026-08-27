@@ -66,4 +66,32 @@ describe('Channels page UU 短信登录', () => {
     expect(postMock).toHaveBeenCalledWith('/channels/uu/sms', { phone: '13800000001' })
     expect(screen.getByText('session: sess-B…')).toBeDefined()
   })
+
+  // 2026-08-27 审计：解滑块后 +5s/+10s 即重发，落在平台 secs 冷却窗内再次被拦。
+  // 通过滑块后必须等满 secs 再自动重发。
+  it('图形校验通过后遵守 secs 冷却才自动重发', async () => {
+    postMock
+      .mockResolvedValueOnce({ session_id: 'sess-C', mode: 'captcha', req_ticket: 'rt-2', secs: 1 })
+      .mockResolvedValueOnce({ session_id: 'sess-C', mode: 'down', msg: '验证码发送成功' })
+    solveCaptchaMock.mockResolvedValue({ ret: 0, ticket: 'ck-ticket', randstr: 'ck-rand' })
+
+    render(<Channels />)
+    await screen.findByRole('heading', { name: '渠道账号' })
+
+    fireEvent.change(screen.getByPlaceholderText('+86 手机号'), { target: { value: '13800000002' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送验证码' }))
+
+    // 冷却期内不重发
+    await screen.findByText(/平台冷却中/)
+    expect(postMock).toHaveBeenCalledTimes(1)
+
+    // 冷却结束后自动重发
+    await screen.findByText('验证码已发送，请查收短信', {}, { timeout: 3000 })
+    expect(postMock).toHaveBeenCalledTimes(2)
+    expect(postMock).toHaveBeenNthCalledWith(2, '/channels/uu/sms', {
+      phone: '13800000002',
+      session_id: 'sess-C',
+      captcha: { ticket: 'ck-ticket', randstr: 'ck-rand', req_ticket: 'rt-2' },
+    })
+  })
 })

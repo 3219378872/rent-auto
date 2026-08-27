@@ -106,6 +106,18 @@ func (c *Client) headers(uk string) http.Header {
 	return h
 }
 
+// loginHeaders is the header set for the anonymous auth endpoints. The
+// reference client's generate_headers ALWAYS carries a uk header (random
+// 65-char when uk_verify is off) — including the SMS login flow. Omitting uk
+// there is a fingerprint deviation on exactly the endpoints risk control
+// watches: every panel-driven SendSignInSmsCode observed so far was answered
+// with 需进行图形校验 (audit 2026-08-25/27).
+func loginHeaders(device string) http.Header {
+	h := generateHeaders(device)
+	h.Set("uk", RandomString(65))
+	return h
+}
+
 func (c *Client) do(ctx context.Context, method, path string, payload any) ([]byte, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("uu: limiter: %w", err)

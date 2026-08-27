@@ -36,12 +36,23 @@
     （2026-08-25 事故：面板前端闭包读到过期 session 导致重发丢 session_id、
     后端静默换新 session，票据关联失败 → 图形校验死循环；现 API 层强制校验——
     带 captcha 而缺 session_id 直接 400，见 `handleUUSms`）
+  - **2026-08-27 复诊（滑块通过仍被拦）**：审计 7/7 次发送全被拦（含每次首发），
+    重试在 +5s/+10s 即到达——落在被拦响应 `secs:30` 冷却窗内。三处偏差已修
+    （mock 固化，待真机复验）：
+    ①登录端点此前不带 `uk` 头，与参考件 `generate_headers`（全请求含随机 uk）
+    指纹不符——现 `loginHeaders` 统一补齐（uk 是风控字段，api-notes 既有条目）；
+    ②`parseVerifyData` 改大小写无关 + `*reqticket*` 模糊兜底，App 网关字段名
+    无论何种拼写都不再静默取空（空 reqTicket 必再拦）；
+    ③前端解滑块后遵守 `secs` 冷却倒计时再自动重发（`Channels.tsx`）。
+    被拦响应的原始 Data 已随审计 `channel.uu.captcha_required` 的
+    `verify_data` 字段落盘，下次真机触发即可销项待办①②
   - Go 实现：`SendLoginSmsCode(..., *CaptchaResult)` 被拦时返回
     `Mode="captcha"`+ReqTicket/Secs（不报错）；带票重试 payload 键为
     `behaviorVerifyResult`；成功响应解析 LoginReqTicket 并经 SmsSignIn 透传。
     面板前端内嵌 TCaptcha SDK 人工完成后自动重试（ADR-0002），服务端绝不合成票据
   - **App 网关待校订项**（本客户端走 api.youpin898.com AES 加密网关，抓包来自
-    pc-api 明文网关）：①被拦响应 Data 是否含 BehaviorVerifyReqTicket；
+    pc-api 明文网关；被拦 Data 形状可由审计 `verify_data` 直接销项）：
+    ①被拦响应 Data 是否含 BehaviorVerifyReqTicket；
     ②payload 键大小写（camelCase vs PascalCase，改动集中在 SendLoginSmsCode）；
     ③SmsSignIn 是否必须 loginReqTicket；④TCaptcha aid 是否配置域名白名单
 - 认证端点（SendSignInSmsCode/SmsSignIn/GetSmsUpSignInConfig）虽匿名可调，但必须携带

@@ -25,6 +25,11 @@ type SmsCodeResult struct {
 	ReqTicket      string // captcha mode: correlation ticket issued by the blocked reply
 	Secs           int    // cooldown seconds before the next attempt (0 = unknown)
 	LoginReqTicket string // success: correlation ticket for the subsequent sign-in call
+	// VerifyRaw is the raw Data of a captcha-blocked reply (ticket + secs only,
+	// no PII). The app gateway's field casing is still 未真机校订 (api-notes
+	// 待办①②); surfacing it lets the audit trail answer the shape question on
+	// the next real attempt instead of guessing.
+	VerifyRaw string
 }
 
 // CaptchaResult carries the Tencent TCaptcha outcome used to retry a
@@ -91,7 +96,7 @@ func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID str
 			"reqTicket": captcha.ReqTicket,
 		}
 	}
-	body, err := postJSON(ctx, hc, apiBase+"/api/user/Auth/SendSignInSmsCode", payload, generateHeaders(sessionID))
+	body, err := postJSON(ctx, hc, apiBase+"/api/user/Auth/SendSignInSmsCode", payload, loginHeaders(sessionID))
 	if err != nil {
 		return SmsCodeResult{}, err
 	}
@@ -106,6 +111,7 @@ func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID str
 	case strings.Contains(env.Msg, "图形校验"), strings.Contains(env.Msg, "滑块"):
 		res.Mode = SmsModeCaptcha
 		res.ReqTicket, res.Secs = parseVerifyData(env.Data)
+		res.VerifyRaw = strings.TrimSpace(string(env.Data))
 		return res, nil
 	}
 	if env.Code != codeOK {
@@ -119,7 +125,10 @@ func SendLoginSmsCode(ctx context.Context, hc *http.Client, phone, sessionID str
 
 // parseVerifyData extracts the correlation ticket and cooldown seconds from a
 // SendSignInSmsCode Data payload. Field casing differs between the PC web
-// gateway (camelCase, captured 2026-08-23) and the app gateway (unverified).
+// gateway (camelCase, captured 2026-08-23) and the app gateway (unverified,
+// api-notes 待办①②) — match keys case-insensitively and fall back to any
+// *reqticket* key so the ticket chain never silently degrades to an empty
+// reqTicket (an empty one makes the platform re-challenge forever).
 func parseVerifyData(data json.RawMessage) (ticket string, secs int) {
 	if len(data) == 0 {
 		return "", 0
@@ -128,11 +137,24 @@ func parseVerifyData(data json.RawMessage) (ticket string, secs int) {
 	if json.Unmarshal(data, &m) != nil {
 		return "", 0
 	}
-	ticket = rawString(m, "BehaviorVerifyReqTicket", "behaviorVerifyReqTicket", "LoginReqTicket", "loginReqTicket")
-	if ticket == "" {
-		ticket = rawString(m, "ReqTicket", "reqTicket")
+	lower := make(map[string]json.RawMessage, len(m))
+	for k, v := range m {
+		lower[strings.ToLower(k)] = v
 	}
-	secs, _ = rawInt(m, "Secs", "secs")
+	ticket = rawString(lower, "behaviorverifyreqticket", "loginreqticket", "reqticket")
+	if ticket == "" {
+		for k, v := range lower {
+			flat := strings.NewReplacer("_", "", "-", "").Replace(k)
+			if strings.Contains(flat, "reqticket") {
+				var s string
+				if json.Unmarshal(v, &s) == nil && s != "" {
+					ticket = s
+					break
+				}
+			}
+		}
+	}
+	secs, _ = rawInt(lower, "secs")
 	return ticket, secs
 }
 
@@ -143,7 +165,7 @@ func GetSmsUpSignInConfig(ctx context.Context, hc *http.Client) (SmsUpConfig, er
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
-	body, err := getJSON(ctx, hc, apiBase+"/api/user/Auth/GetSmsUpSignInConfig", generateHeaders(RandomString(16)))
+	body, err := getJSON(ctx, hc, apiBase+"/api/user/Auth/GetSmsUpSignInConfig", loginHeaders(RandomString(16)))
 	if err != nil {
 		return SmsUpConfig{}, err
 	}
@@ -185,7 +207,7 @@ func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID, log
 	if loginReqTicket != "" {
 		payload["loginReqTicket"] = loginReqTicket
 	}
-	body, err := postJSON(ctx, hc, url, payload, generateHeaders(sessionID))
+	body, err := postJSON(ctx, hc, url, payload, loginHeaders(sessionID))
 	if err != nil {
 		return "", err
 	}

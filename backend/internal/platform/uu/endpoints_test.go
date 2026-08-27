@@ -384,6 +384,87 @@ func TestSMSSendCaptchaBlocked(t *testing.T) {
 	if res.ReqTicket != "tk-1" || res.Secs != 30 {
 		t.Fatalf("captcha correlation data: %+v", res)
 	}
+	// Diagnostics: the raw blocked-reply Data must surface for audit so the
+	// app-gateway shape question (api-notes 待办①②) is answered on the wire.
+	if !strings.Contains(res.VerifyRaw, "tk-1") || !strings.Contains(res.VerifyRaw, "30") {
+		t.Fatalf("verify raw diagnostics: %q", res.VerifyRaw)
+	}
+}
+
+// The reference client's generate_headers always carries a uk header, the SMS
+// login flow included. Every observed panel send without it was answered with
+// 需进行图形校验 (audit 2026-08-25/27) — uk presence is a mock-verified
+// baseline until the real machine confirms.
+func TestSMSLoginCarriesUKHeader(t *testing.T) {
+	var ukLens []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/Auth/SendSignInSmsCode", "/api/user/Auth/GetSmsUpSignInConfig":
+			uk := r.Header.Get("uk")
+			if uk == "" {
+				t.Errorf("%s missing uk header", r.URL.Path)
+			}
+			ukLens = append(ukLens, len(uk))
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"发送成功","Data":{"loginReqTicket":"lr","secs":1}}`))
+		case "/api/user/Auth/SmsSignIn":
+			uk := r.Header.Get("uk")
+			if uk == "" {
+				t.Error("SmsSignIn missing uk header")
+			}
+			ukLens = append(ukLens, len(uk))
+			_, _ = w.Write([]byte(`{"Code":0,"Msg":"ok","Data":{"Token":"tok-uk"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	hc := mockHTTP(srv.URL)
+	ctx := context.Background()
+	if _, err := SendLoginSmsCode(ctx, hc, "13800000000", "sess", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SmsSignIn(ctx, hc, "13800000000", "123456", "sess", "lr"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetSmsUpSignInConfig(ctx, hc); err != nil {
+		t.Fatal(err)
+	}
+	if len(ukLens) != 3 {
+		t.Fatalf("expected 3 login calls, got %d", len(ukLens))
+	}
+	for i, n := range ukLens {
+		if n != 65 {
+			t.Fatalf("uk[%d] length = %d, want 65", i, n)
+		}
+	}
+}
+
+// The app gateway's Data field casing is unverified (api-notes 待办①②): any
+// casing of the ticket keys must parse, and an unknown spelling must still be
+// caught by the *reqticket* fallback so retries never carry an empty ticket.
+func TestParseVerifyDataCasingTolerant(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   string
+		ticket string
+		secs   int
+	}{
+		{"pc-gateway-camel", `{"secs":30,"behaviorVerifyReqTicket":"t1"}`, "t1", 30},
+		{"pascal", `{"Secs":30,"BehaviorVerifyReqTicket":"t2"}`, "t2", 30},
+		{"lower", `{"secs":30,"reqticket":"t3"}`, "t3", 30},
+		{"unknown-spelling", `{"secs":30,"behavior_verify_req_ticket_v2":"t4"}`, "t4", 30},
+		{"empty", ``, "", 0},
+		{"no-ticket", `{"secs":30}`, "", 30},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ticket, secs := parseVerifyData(json.RawMessage(c.data))
+			if ticket != c.ticket || secs != c.secs {
+				t.Fatalf("got (%q,%d), want (%q,%d)", ticket, secs, c.ticket, c.secs)
+			}
+		})
+	}
 }
 
 func TestSMSSendCaptchaRetryPayload(t *testing.T) {

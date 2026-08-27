@@ -67,6 +67,15 @@ export default function Channels() {
         setMsg('平台风控要求图形验证，请在弹窗中手动完成')
         try {
           const c = await solveCaptcha(UU_CAPTCHA_APP_ID)
+          // The blocked reply carries a cooldown (HAR: secs:30) before the
+          // next attempt. Retrying the instant the slider clears lands inside
+          // that window and gets re-challenged (2026-08-27 audit: retries at
+          // +5s/+10s) — wait it out, showing the remaining seconds.
+          const wait = r.secs && r.secs > 0 ? r.secs : 0
+          for (let left = wait; left > 0; left--) {
+            setMsg(`图形验证通过，平台冷却中，${left}s 后自动重发…`)
+            await new Promise((res) => setTimeout(res, 1000))
+          }
           setMsg('图形验证通过，正在重新发送短信…')
           await sendSms(
             { ticket: c.ticket, randstr: c.randstr, req_ticket: r.req_ticket || '' },

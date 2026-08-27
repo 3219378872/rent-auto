@@ -159,7 +159,9 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 		ReqTicket: res.ReqTicket, Secs: res.Secs}
 	switch res.Mode {
 	case uu.SmsModeCaptcha:
-		s.audit(r, "channel.uu.captcha_required", map[string]any{"msg": res.Msg})
+		// VerifyRaw answers api-notes 待办①② (app-gateway Data shape) from the
+		// wire instead of guessing — contents are ticket+secs, no PII.
+		s.audit(r, "channel.uu.captcha_required", map[string]any{"msg": res.Msg, "verify_data": res.VerifyRaw})
 	case uu.SmsModeUplink:
 		cfg, err := s.Channels.GetSmsUpSignInConfig(r.Context())
 		if err != nil {

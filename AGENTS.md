@@ -113,6 +113,9 @@ steam exp=0 短路修复 / trustList 竞争 / RandomSessionID crypto/rand /
 AuditFn 实例注入 / 限流器合一 / /templates 可选分页（openapi v0.6.0，分页口径统一 ≤200）/
 ADR 撞号拆分（0007/0008 新号方案）/ ECO api-notes 待办节 #E1-E3 /
 前端 Strategies 拆分+usePagedList+事件驱动鉴权+补 13 用例，openapi v0.6.0**。
+**UU 滑块通过仍被拦复诊（2026-08-27）：登录端点补 uk 头 / parseVerifyData
+大小写无关+模糊兜底 / 前端遵守 secs 冷却；审计 verify_data 字段销项 api-notes
+待办①②，见 evidence/2026-08-27-uu-captcha-rechallenge.md**。
 纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
 uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
 
