@@ -256,7 +256,7 @@ func encodePoll(clientID uint64, requestID []byte) []byte {
 func encodeUpdateGuard(clientID, steamID uint64, code string, codeType int32) []byte {
 	var w pbWriter
 	w.u64(1, clientID)
-	w.u64(2, steamID)
+	w.f64(2, steamID) // steamid is declared fixed64 in the request proto — varint makes the server drop it (EResult 8 InvalidParam)
 	w.str(3, code)
 	w.u64(4, uint64(codeType))
 	return w.buf

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -260,6 +261,36 @@ func TestPollEresultSurfaces(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "PollAuthSessionStatus") ||
 		!strings.Contains(err.Error(), "RateLimitExceeded") {
 		t.Fatalf("poll rejection must surface: %v", err)
+	}
+}
+
+// The UpdateAuthSessionWithSteamGuardCode request declares steamid as
+// fixed64 (wire type 1) — encoding it as varint makes the server treat it
+// as an unknown field, drop it (steamid=0) and answer EResult 8
+// InvalidParam (2026-08-27 real-machine incident). Wire types are part of
+// the contract; assert them explicitly.
+func TestEncodeUpdateGuardWireTypes(t *testing.T) {
+	msg := encodeUpdateGuard(42, 76561199000000000, "ABCDE", 3)
+	r := newPBReader(msg)
+
+	f, wire, _, num, err := r.next()
+	if err != nil || f != 1 || wire != 0 || num != 42 {
+		t.Fatalf("client_id: f=%d wire=%d num=%d err=%v", f, wire, num, err)
+	}
+	f, wire, _, num, err = r.next()
+	if err != nil || f != 2 || wire != 1 || num != 76561199000000000 {
+		t.Fatalf("steamid must be fixed64: f=%d wire=%d num=%d err=%v", f, wire, num, err)
+	}
+	f, wire, payload, _, err := r.next()
+	if err != nil || f != 3 || wire != 2 || string(payload) != "ABCDE" {
+		t.Fatalf("code: f=%d wire=%d payload=%q err=%v", f, wire, payload, err)
+	}
+	f, wire, _, num, err = r.next()
+	if err != nil || f != 4 || wire != 0 || num != 3 {
+		t.Fatalf("code_type: f=%d wire=%d num=%d err=%v", f, wire, num, err)
+	}
+	if _, _, _, _, err := r.next(); !errors.Is(err, errProtoDone) {
+		t.Fatalf("trailing bytes: %v", err)
 	}
 }
 

@@ -32,6 +32,7 @@
 | 2026-08-27 第四轮全面审查与修复（round10） | [2026-08-27-round10-comprehensive-review.md](2026-08-27-round10-comprehensive-review.md) | 六维度审查 P1×6+P2×10+文档×5 全清欠；ADR 撞号拆分；openapi v0.6.0 |
 | 2026-08-27 Steam 真机登录 wire5 修复 | [2026-08-27-steam-login-wire5.md](2026-08-27-steam-login-wire5.md) | 解码器支持 wire 1/5 跳过（interval=float32）；红→绿佐证；api-notes §1.1 批注 |
 | 2026-08-27 Steam X-eresult 检查补齐 | [2026-08-27-steam-eresult-check.md](2026-08-27-steam-eresult-check.md) | WebAPI X-eresult 头检查接入登录四步；guard 29 容忍；误导性空 token 报错根除 |
+| 2026-08-27 Steam guard steamid fixed64 修复 | [2026-08-27-steam-guard-f64.md](2026-08-27-steam-guard-f64.md) | UpdateAuth steamid 改 fixed64(wire1) 编码；EResult 8 InvalidParam 根除；黄金断言锁 wire type |
 | 2026-08-27 UU 滑块通过仍被拦复诊 | [2026-08-27-uu-captcha-rechallenge.md](2026-08-27-uu-captcha-rechallenge.md) | 登录端点补 uk 头+parseVerifyData 大小写无关+前端遵守 secs 冷却；审计 verify_data 销项待办①② |
 
 ## 事故复盘

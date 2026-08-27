@@ -147,3 +147,6 @@ func RandomString(n int) string {
 	}
 	return string(b)
 }
+
+// Key exposes the raw AES key (probe/diagnostics only).
+func (c *Crypt) Key() string { return string(c.aesKey) }

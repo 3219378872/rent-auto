@@ -53,9 +53,17 @@ POST IAuthenticationService/BeginAuthSessionViaCredentials
 > TestDecodeBeginResponseWithInterval + evidence/2026-08-27-steam-login-wire5.md
 分支:
   confirmation_type == DeviceCode(3)    → code = TOTP(shared_secret)
-                                        UpdateAuthSessionWithSteamGuardCode{client_id=1,steamid=2(u64),code=3,code_type=4(3)}
+                                        UpdateAuthSessionWithSteamGuardCode{client_id=1(u64,varint),steamid=2(**fixed64**,wire1),code=3,code_type=4(3)}
   confirmation_type == EmailCode(2)     → 需人工提供邮件码（本项目报错终止）
   confirmation_type == DeviceConfirmation(4) → 同上但 code_type=4、code 置 "ok"
+
+> ⚠️ **UpdateAuthSessionWithSteamGuardCode.steamid 是 fixed64（wire type 1，8 字节 LE）**
+> （2026-08-27 真机事故）：上游 proto 描述符实测（steamclient_pb2.py）。varint 编码的
+> steamid 会因 wire type 不匹配被服务端当未知字段丢弃 → steamid=0 → **EResult 8 InvalidParam**。
+> 该错误码此前被 X-eresult 检查暴露（见上条批注）；修复：`encodeUpdateGuard` 用 `f64` 写入，
+> 黄金断言 `TestEncodeUpdateGuardWireTypes` 逐字段锁定 wire type。
+> 全部四个 Request 消息字段类型已逐项核对（仅此一处 fixed64；
+> PollAuthSessionStatus.token_to_revoke=3 亦为 fixed64，本项目不发该可选字段）。
 POST IAuthenticationService/PollAuthSessionStatus {client_id=1(u64), request_id=2(bytes)}
      → {refresh_token=3, access_token=4, account_name=6}
 POST login.steampowered.com/jwt/finalizelogin {nonce=refresh_token, sessionid, redir}
