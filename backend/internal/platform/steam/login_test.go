@@ -128,6 +128,141 @@ func TestLoginFullFlow(t *testing.T) {
 	}
 }
 
+// fullFlowMock is the TestLoginFullFlow mock with per-endpoint X-eresult
+// header overrides, so failure-injection tests mirror the real WebAPI
+// behavior: HTTP 200 + application error in the header.
+func fullFlowMock(t *testing.T, eresult map[string]string) (*Session, *httptest.Server) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := time.Now().Add(time.Hour).Unix()
+
+	var srvURL string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := eresult["*"]; ok {
+			w.Header().Set("X-eresult", v)
+		}
+		switch {
+		case r.URL.Path == "/":
+			http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: "sid123"})
+			w.WriteHeader(200)
+		case strings.Contains(r.URL.Path, "GetPasswordRSAPublicKey"):
+			if v, ok := eresult["GetPasswordRSAPublicKey"]; ok {
+				w.Header().Set("X-eresult", v)
+			}
+			modHex := fmt.Sprintf("%x", key.N)
+			var wtr pbWriter
+			wtr.str(1, modHex)
+			wtr.str(2, fmt.Sprintf("%x", key.E))
+			wtr.u64(3, uint64(time.Now().Unix()))
+			_, _ = w.Write(wtr.buf)
+		case strings.Contains(r.URL.Path, "BeginAuthSessionViaCredentials"):
+			if v, ok := eresult["BeginAuthSessionViaCredentials"]; ok {
+				w.Header().Set("X-eresult", v)
+			}
+			var wtr pbWriter
+			wtr.u64(1, 42)
+			wtr.bytes(2, []byte("reqid"))
+			wtr.f32(3, 5.0)
+			var inner pbWriter
+			inner.u64(1, 3)
+			wtr.bytes(4, inner.buf)
+			wtr.u64(5, 76561199000000000)
+			_, _ = w.Write(wtr.buf)
+		case strings.Contains(r.URL.Path, "UpdateAuthSessionWithSteamGuardCode"):
+			if v, ok := eresult["UpdateAuthSessionWithSteamGuardCode"]; ok {
+				w.Header().Set("X-eresult", v)
+			}
+			w.WriteHeader(200)
+		case strings.Contains(r.URL.Path, "PollAuthSessionStatus"):
+			if v, ok := eresult["PollAuthSessionStatus"]; ok {
+				w.Header().Set("X-eresult", v)
+			}
+			var wtr pbWriter
+			wtr.str(3, "refresh-token-xyz")
+			wtr.str(4, makeJWT(exp))
+			_, _ = w.Write(wtr.buf)
+		case strings.HasSuffix(r.URL.Path, "/jwt/finalizelogin"):
+			_, _ = w.Write([]byte(`{"steamID":76561199000000000,"transfer_info":[{"url":"` +
+				srvURL + `/transfer","params":{"nonce":"n","auth":"a"}}]}`))
+		case strings.HasSuffix(r.URL.Path, "/transfer"):
+			w.WriteHeader(200)
+		case r.URL.Path == "/my":
+			http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: "sid123"})
+			w.WriteHeader(200)
+		case r.URL.Path == "/trade/new/acknowledge":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	srvURL = ts.URL
+
+	jar, _ := cookiejar.New(nil)
+	s := NewSession(creds())
+	s.http.Jar = jar
+	s.http.Transport = rewriteTransport{ts}
+	return s, ts
+}
+
+// A rejected TOTP (X-eresult=85 on guard update) must surface the real
+// failure — previously the header was ignored and login misreported as
+// "empty refresh token after poll" (2026-08-27 real-machine incident).
+func TestGuardUpdateEresultSurfaces(t *testing.T) {
+	s, _ := fullFlowMock(t, map[string]string{
+		"UpdateAuthSessionWithSteamGuardCode": "85",
+	})
+	err := s.Login(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "UpdateAuthSessionWithSteamGuardCode") ||
+		!strings.Contains(err.Error(), "eresult=85") ||
+		strings.Contains(err.Error(), "empty refresh token") {
+		t.Fatalf("guard rejection must surface with eresult: %v", err)
+	}
+}
+
+// 29 DuplicateRequest on the guard update is tolerated (upstream
+// ignore_error_num=[29]) — login must proceed to poll and succeed.
+func TestGuardUpdateDuplicateRequest29Tolerated(t *testing.T) {
+	s, _ := fullFlowMock(t, map[string]string{
+		"UpdateAuthSessionWithSteamGuardCode": "29",
+	})
+	if err := s.Login(context.Background()); err != nil {
+		t.Fatalf("eresult=29 must be tolerated: %v", err)
+	}
+	if s.Tokens.RefreshToken != "refresh-token-xyz" {
+		t.Fatalf("tokens: %+v", s.Tokens)
+	}
+}
+
+// BeginAuthSession rejection (e.g. wrong password → 5) must fail at that step.
+func TestBeginAuthSessionEresultSurfaces(t *testing.T) {
+	s, _ := fullFlowMock(t, map[string]string{
+		"BeginAuthSessionViaCredentials": "5",
+	})
+	err := s.Login(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "BeginAuthSessionViaCredentials") ||
+		!strings.Contains(err.Error(), "InvalidPassword") {
+		t.Fatalf("begin rejection must surface with name: %v", err)
+	}
+}
+
+// Poll-side rate limiting (84) must be reported as-is, not as empty tokens.
+func TestPollEresultSurfaces(t *testing.T) {
+	s, _ := fullFlowMock(t, map[string]string{
+		"PollAuthSessionStatus": "84",
+	})
+	err := s.Login(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "PollAuthSessionStatus") ||
+		!strings.Contains(err.Error(), "RateLimitExceeded") {
+		t.Fatalf("poll rejection must surface: %v", err)
+	}
+}
+
 func TestRefreshAccessToken(t *testing.T) {
 	exp := time.Now().Add(2 * time.Hour).Unix()
 	s, _ := newMockSteam(t, func(w http.ResponseWriter, r *http.Request) {

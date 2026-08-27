@@ -100,7 +100,8 @@ func (s *Session) captureSessionID() {
 // ---- low-level calls ----
 
 // authAPIPOST posts protobuf input to IAuthenticationService and returns raw body.
-func (s *Session) authAPIPOST(ctx context.Context, method string, msg []byte) ([]byte, error) {
+// X-eresult is checked (see eresult.go); `ignore` lists tolerable codes.
+func (s *Session) authAPIPOST(ctx context.Context, method string, msg []byte, ignore ...int) ([]byte, error) {
 	form := url.Values{"input_protobuf_encoded": {base64.StdEncoding.EncodeToString(msg)}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		storeURL+"/IAuthenticationService/"+method+"/v1/",
@@ -110,37 +111,76 @@ func (s *Session) authAPIPOST(ctx context.Context, method string, msg []byte) ([
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", uaMobile)
-	return s.doRaw(req)
+	body, _, er, err := s.doRawFull(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkEresult(method, er, ignore...); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// authAPIGET is authAPIPOST via GET (same X-eresult contract).
+func (s *Session) authAPIGET(ctx context.Context, method string, msg []byte, ignore ...int) ([]byte, error) {
+	form := url.Values{"input_protobuf_encoded": {base64.StdEncoding.EncodeToString(msg)}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		storeURL+"/IAuthenticationService/"+method+"/v1/?"+form.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", uaMobile)
+	body, _, er, err := s.doRawFull(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkEresult(method, er, ignore...); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func (s *Session) doRaw(req *http.Request) ([]byte, error) {
-	body, _, err := s.doRawStatus(req)
+	body, _, _, err := s.doRawFull(req)
 	return body, err
 }
 
 // doRawStatus is doRaw plus the final HTTP status code, for callers that must
 // distinguish transport success from application-level failure (write ops).
 func (s *Session) doRawStatus(req *http.Request) ([]byte, int, error) {
+	body, status, _, err := s.doRawFull(req)
+	return body, status, err
+}
+
+// doRawFull is doRawStatus plus the Steam WebAPI X-eresult header value
+// (-1 when absent).
+func (s *Session) doRawFull(req *http.Request) ([]byte, int, int, error) {
 	//nolint:gosec // G704：URL 来自 Steam 登录响应的 transfer_info（上游固定域名），协议要求原样回放
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)
+		return nil, 0, -1, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, -1, err
 	}
 	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 		if loc := resp.Header.Get("Location"); loc != "" {
 			next, err := http.NewRequestWithContext(req.Context(), req.Method, loc, nil)
 			if err != nil {
-				return nil, resp.StatusCode, err
+				return nil, resp.StatusCode, -1, err
 			}
-			return s.doRawStatus(next)
+			return s.doRawFull(next)
 		}
 	}
-	return body, resp.StatusCode, nil
+	eresult := -1
+	if v := resp.Header.Get("X-eresult"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil {
+			eresult = n
+		}
+	}
+	return body, resp.StatusCode, eresult, nil
 }
 
 // ---- login state machine ----
@@ -274,13 +314,15 @@ func (s *Session) Login(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// 29 DuplicateRequest tolerated (code already accepted this window) —
+		// upstream steampy ignore_error_num=[29].
 		if _, err := s.authAPIPOST(ctx, "UpdateAuthSessionWithSteamGuardCode",
-			encodeUpdateGuard(begin.ClientID, begin.SteamID, code, 3)); err != nil {
+			encodeUpdateGuard(begin.ClientID, begin.SteamID, code, 3), 29); err != nil {
 			return err
 		}
 	case 4: // DeviceConfirmation → acknowledge with code_type=4, code "ok"
 		if _, err := s.authAPIPOST(ctx, "UpdateAuthSessionWithSteamGuardCode",
-			encodeUpdateGuard(begin.ClientID, begin.SteamID, "ok", 4)); err != nil {
+			encodeUpdateGuard(begin.ClientID, begin.SteamID, "ok", 4), 29); err != nil {
 			return err
 		}
 	default:
@@ -306,17 +348,6 @@ func (s *Session) Login(ctx context.Context) error {
 		AccessExp: jwtExp(accessTok),
 	}
 	return s.finalize(ctx)
-}
-
-func (s *Session) authAPIGET(ctx context.Context, method string, msg []byte) ([]byte, error) {
-	form := url.Values{"input_protobuf_encoded": {base64.StdEncoding.EncodeToString(msg)}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		storeURL+"/IAuthenticationService/"+method+"/v1/?"+form.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", uaMobile)
-	return s.doRaw(req)
 }
 
 func decodeRSAKey(body []byte) (mod, exp string, ts uint64, err error) {

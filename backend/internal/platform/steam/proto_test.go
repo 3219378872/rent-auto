@@ -3,6 +3,7 @@ package steam
 import (
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,28 @@ func TestPBReaderStillRejectsGroups(t *testing.T) {
 	r := newPBReader([]byte{0x0b}) // field 1, wire 3 (start group)
 	if _, _, _, _, err := r.next(); !errors.Is(err, errProto) {
 		t.Fatalf("group wire types must stay unsupported, got %v", err)
+	}
+}
+
+func TestCheckEresult(t *testing.T) {
+	if err := checkEresult("M", -1); err != nil { // header absent
+		t.Fatalf("absent eresult must pass: %v", err)
+	}
+	for _, ok := range []int{1, 22} { // OK / Pending
+		if err := checkEresult("M", ok); err != nil {
+			t.Fatalf("eresult=%d must pass: %v", ok, err)
+		}
+	}
+	if err := checkEresult("M", 29, 29); err != nil {
+		t.Fatalf("ignored eresult must pass: %v", err)
+	}
+	err := checkEresult("M", 5)
+	if err == nil || !strings.Contains(err.Error(), "eresult=5 InvalidPassword") {
+		t.Fatalf("named eresult expected, got %v", err)
+	}
+	err = checkEresult("M", 999)
+	if err == nil || !strings.Contains(err.Error(), "eresult=999") {
+		t.Fatalf("unknown eresult must print number, got %v", err)
 	}
 }
 

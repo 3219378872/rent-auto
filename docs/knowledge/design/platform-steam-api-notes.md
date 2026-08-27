@@ -16,6 +16,18 @@
 所有认证接口走 `https://api.steampowered.com/IAuthenticationService/<Method>/v1/`，
 POST body 为 `input_protobuf_encoded=<base64(protobuf)>`，响应体是裸 protobuf。
 
+> ⚠️ **X-eresult 响应头（未文档化，2026-08-27 真机事故归档）**：Steam WebAPI 把应用层
+> 结果码放在 `X-eresult` 头里，**HTTP 200 ≠ 成功**。上游 steampy `check_error` 语义：
+> 可接受集 = {1 OK, 22 Pending}；`UpdateAuthSessionWithSteamGuardCode` 额外容忍
+> 29 DuplicateRequest（`ignore_error_num=[29]`，同一 30s 窗口重复提交同一 code）。
+> 不检查该头会把真实失败（TOTP 被拒/限频）吞成下游误导性错误——
+> 本次真机表现为 `empty refresh token after poll`（实为 TOTP 被拒/RateLimit）。
+> Go 实现在 `eresult.go`（checkEresult + 全量 EResult 名称表）+ `doRawFull`；
+> 登录各步（RSA/BeginAuth/Guard/Poll）均已接入。
+> 高频登录错误码：5 InvalidPassword / 25 LimitExceeded / 84 RateLimitExceeded /
+> 85 AccountLoginDeniedNeedTwoFactor / 87 AccountLoginDeniedThrottle / 88 TwoFactorCodeMismatch。
+> 佐证：evidence/2026-08-27-steam-eresult-check.md（红→绿 mock 注入）
+
 ### 1.1 账密登录时序
 ```
 GET  steamcommunity.com                      → 取得 sessionid cookie
