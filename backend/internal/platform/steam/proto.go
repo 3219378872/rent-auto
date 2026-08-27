@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // Minimal protobuf wire-format writer/reader for the handful of
@@ -28,6 +29,23 @@ func (w *pbWriter) b32(field uint32, v bool) {
 	if v {
 		w.u64(field, 1)
 	}
+}
+
+// f32 writes a float (wire type 5) — e.g. the interval field Steam returns in
+// BeginAuthSessionViaCredentials responses.
+func (w *pbWriter) f32(field uint32, v float32) {
+	w.tag(field, 5)
+	var tmp [4]byte
+	binary.LittleEndian.PutUint32(tmp[:], math.Float32bits(v))
+	w.buf = append(w.buf, tmp[:]...)
+}
+
+// f64 writes a fixed64 (wire type 1).
+func (w *pbWriter) f64(field uint32, v uint64) {
+	w.tag(field, 1)
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], v)
+	w.buf = append(w.buf, tmp[:]...)
 }
 
 func (w *pbWriter) str(field uint32, s string) { w.bytes(field, []byte(s)) }
@@ -73,6 +91,13 @@ func (r *pbReader) next() (field, wire uint32, payload []byte, num uint64, err e
 		}
 		r.buf = r.buf[n:]
 		return field, wire, nil, v, nil
+	case 1: // fixed64 (little-endian)
+		if len(r.buf) < 8 {
+			return 0, 0, nil, 0, fmt.Errorf("%w: fixed64", errProto)
+		}
+		v := binary.LittleEndian.Uint64(r.buf[:8])
+		r.buf = r.buf[8:]
+		return field, wire, nil, v, nil
 	case 2:
 		l, n := binary.Uvarint(r.buf)
 		// Compare in the uint64 domain: a hostile length ≥ 2^63 makes int(l)
@@ -84,6 +109,14 @@ func (r *pbReader) next() (field, wire uint32, payload []byte, num uint64, err e
 		payload = r.buf[n : n+int(l)]
 		r.buf = r.buf[n+int(l):]
 		return field, wire, payload, 0, nil
+	case 5: // fixed32 (little-endian), e.g. float `interval` in
+		// BeginAuthSessionViaCredentials responses — must be skippable.
+		if len(r.buf) < 4 {
+			return 0, 0, nil, 0, fmt.Errorf("%w: fixed32", errProto)
+		}
+		v := uint64(binary.LittleEndian.Uint32(r.buf[:4]))
+		r.buf = r.buf[4:]
+		return field, wire, nil, v, nil
 	default:
 		return 0, 0, nil, 0, fmt.Errorf("%w: wire type %d", errProto, wire)
 	}

@@ -69,9 +69,12 @@ func TestLoginFullFlow(t *testing.T) {
 			wtr.u64(3, uint64(time.Now().Unix()))
 			_, _ = w.Write(wtr.buf)
 		case strings.Contains(r.URL.Path, "BeginAuthSessionViaCredentials"):
+			// real Steam responses also carry interval as a float (wire 5);
+			// leaving it out once hid the wire-type regression from tests.
 			var wtr pbWriter
 			wtr.u64(1, 42)
 			wtr.bytes(2, []byte("reqid"))
+			wtr.f32(3, 5.0)
 			var inner pbWriter
 			inner.u64(1, 3)
 			wtr.bytes(4, inner.buf)

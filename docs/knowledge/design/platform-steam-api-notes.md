@@ -28,8 +28,17 @@ POST IAuthenticationService/BeginAuthSessionViaCredentials
       platform_type=6(enum k_EAuthTokenPlatformType_MobileApp=3),
       persistence=7(enum k_ESessionPersistence_Persistent=1),
       website_id=8("Community")}
-     → {client_id=1(u64), request_id=2(bytes), steamid=5(u64),
-        allowed_confirmations=4(repeated){confirmation_type=1(enum)}}
+     → {client_id=1(u64), request_id=2(bytes), interval=3(float32,**wire type 5**),
+        allowed_confirmations=4(repeated){confirmation_type=1(enum)}, steamid=5(u64)}
+
+> ⚠️ **protobuf 解码器必须支持 wire type 1(fixed64)/5(fixed32) 并跳过无关字段**
+> （2026-08-27 真机登录失败事故）：`interval` 是 float（fixed32 LE），首版手写解码器
+> 只认 varint/length-delimited，真实 Steam 响应必然报 `bad protobuf: wire type 5`。
+> 上游 proto（Steamauto/protobufs/steammessages_auth/steamclient_pb2.py 描述符实测）：
+> GetPasswordRSAPublicKey.timestamp=uint64(varint)、BeginAuth 的 client_id/steamid=uint64(varint)、
+> PollAuthSessionStatus.had_remote_interaction=bool(varint)。group 类型(3/4)保持不支持。
+> 修复与红→绿佐证：`proto_test.go` TestPBReaderSkipsFixedFields /
+> TestDecodeBeginResponseWithInterval + evidence/2026-08-27-steam-login-wire5.md
 分支:
   confirmation_type == DeviceCode(3)    → code = TOTP(shared_secret)
                                         UpdateAuthSessionWithSteamGuardCode{client_id=1,steamid=2(u64),code=3,code_type=4(3)}
