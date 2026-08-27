@@ -26,6 +26,7 @@ export default function Channels() {
   const [sms, setSms] = useState<SmsResp | null>(null)
   const [loginTicket, setLoginTicket] = useState('')
   const [cooldown, setCooldown] = useState(0)
+  const [uuToken, setUUToken] = useState('')
   const [partnerId, setPartnerId] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [steamId, setSteamId] = useState('')
@@ -108,6 +109,18 @@ export default function Channels() {
     }
   }
 
+  const importUUToken = async () => {
+    setErr(''); setMsg('')
+    try {
+      await api.put('/channels/uu', { token: uuToken.trim() })
+      setUUToken('')
+      setMsg('UU Token 已验证并加密入库')
+      load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const saveSteam = async () => {
     setErr(''); setMsg('')
     try {
@@ -154,7 +167,26 @@ export default function Channels() {
       </div>
 
       <div className="section">
-        <h3 style={{ marginTop: 0 }}>悠悠有品 · 短信登录</h3>
+        <h3 style={{ marginTop: 0 }}>悠悠有品 · 手动导入 Token（推荐）</h3>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          平台已限制第三方客户端的短信登录（code=5050），但已签发的 token 不受影响。
+          在浏览器登录 youpin898.com 后，F12 → 应用/存储 或网络请求中复制
+          token（JWT，三段式），粘贴到此处导入；导入后系统验证并加密入库
+        </div>
+        <textarea
+          rows={3}
+          placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…"
+          value={uuToken}
+          onChange={(e) => setUUToken(e.target.value)}
+          style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+        />
+        <div className="toolbar" style={{ marginTop: 10 }}>
+          <button onClick={importUUToken} disabled={!uuToken.trim()}>验证并保存 Token</button>
+        </div>
+      </div>
+
+      <div className="section">
+        <h3 style={{ marginTop: 0 }}>悠悠有品 · 短信登录（当前被平台风控拦截）</h3>
         <div className="toolbar">
           <input placeholder="+86 手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <button onClick={() => sendSms()} disabled={!phone || cooldown > 0}>

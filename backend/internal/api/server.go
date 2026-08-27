@@ -50,6 +50,7 @@ type ChannelsService interface {
 	SendLoginSmsCode(ctx context.Context, phone, sessionID string, captcha *uu.CaptchaResult) (uu.SmsCodeResult, error)
 	GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, error)
 	VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) (string, error)
+	SetUUToken(ctx context.Context, token string) error
 	SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error
 }
 
@@ -83,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("GET /api/v1/channels", s.handleChannelsStatus)
 	protected.HandleFunc("POST /api/v1/channels/uu/sms", s.handleUUSms)
 	protected.HandleFunc("POST /api/v1/channels/uu/sms-verify", s.handleUUSmsVerify)
+	protected.HandleFunc("PUT /api/v1/channels/uu", s.handleUUToken)
 	protected.HandleFunc("PUT /api/v1/channels/eco", s.handleECOCreds)
 	protected.HandleFunc("PUT /api/v1/channels/steam", s.handleSteamCreds)
 

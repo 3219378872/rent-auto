@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.6.0"
+  version: "0.7.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -413,6 +413,37 @@ paths:
                   status: { type: string }
         "400":
           description: 验证码错误等上游拒绝（非面板会话失效）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /channels/uu:
+    put:
+      summary: 手动导入 UU Token（5050 登录门禁的替代路径）
+      description: |
+        平台限制第三方客户端短信登录（code=5050）后，管理员在官网/APP 登录
+        获取 JWT token，粘贴导入。服务端先以 getUserInfo 验证 token 有效性，
+        验证通过后 AES-256-GCM 加密落库并即时重建 UU 适配器。审计仅记
+        token 尾 8 位指纹。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: UU JWT（三段式）}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400":
+          description: token 为空或上游校验失败（84101 失效/网络错误）
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

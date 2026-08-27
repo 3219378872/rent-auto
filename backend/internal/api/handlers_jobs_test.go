@@ -16,6 +16,7 @@ type recordingChannels struct {
 	gotPhone   string
 	gotSession string
 	gotCaptcha *uu.CaptchaResult
+	setToken   string
 }
 
 func (f *recordingChannels) Health(context.Context) map[string]string { return map[string]string{} }
@@ -31,6 +32,11 @@ func (f *recordingChannels) GetSmsUpSignInConfig(context.Context) (uu.SmsUpConfi
 
 func (f *recordingChannels) VerifyUUSms(context.Context, string, string, string, string) (string, error) {
 	return "abcd1234", nil
+}
+
+func (f *recordingChannels) SetUUToken(_ context.Context, token string) error {
+	f.setToken = token
+	return nil
 }
 
 func (f *recordingChannels) SetECOCreds(context.Context, string, string, string) error {
@@ -105,5 +111,32 @@ func TestUUSmsFirstSendMintsSession(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.SessionID != rc.gotSession {
 		t.Fatalf("response session mismatch: %v %s vs %q", err, rec.Body.String(), rc.gotSession)
+	}
+}
+
+// Manual token import: the 5050 platform gate blocks third-party SMS login
+// entirely, so the operator pastes a token obtained from the official site.
+// The handler must forward it to Channels.SetUUToken (validate+seal+rebuild).
+func TestUUTokenImport(t *testing.T) {
+	rc := &recordingChannels{}
+	s := newTestServer(t)
+	s.Channels = rc
+	h := s.Routes()
+	token := loginToken(t, h)
+
+	rec := do(t, h, "PUT", "/api/v1/channels/uu", token, `{"token":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty token: want 400, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rc.setToken != "" {
+		t.Fatal("empty token must not reach the channel registry")
+	}
+
+	rec = do(t, h, "PUT", "/api/v1/channels/uu", token, `{"token":"jwt-abc.def.ghi"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import rejected: %d %s", rec.Code, rec.Body.String())
+	}
+	if rc.setToken != "jwt-abc.def.ghi" {
+		t.Fatalf("token not forwarded: %q", rc.setToken)
 	}
 }

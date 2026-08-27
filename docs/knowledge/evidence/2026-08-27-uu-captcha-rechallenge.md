@@ -78,3 +78,46 @@
 - 手机号当前可能处于风控高压状态（7 连拦），修复后建议间隔 ≥30 分钟再试，
   期间勿反复触发首发。
 - 若真机通过：顺手确认 SmsSignIn 带/不带 loginReqTicket 的行为，销项待办③。
+
+## 第二轮复诊（2026-08-27 下午，5050 版本门禁）
+
+修复部署重启后用户重试，错误从「需进行图形校验」变为
+`Code=5050「请更新至最新版本APP进行注册」`。一次性 Go 探针（临时 cmd/uu-probe，
+已删除）完成系统实验：
+
+| 实验 | 结果 |
+|---|---|
+| App-Version 5.28.3 / 5.48.0（iOS 商店当前版） | 均 5050 |
+| GetUUUK 修复后真 uk + 5.48.0 | 5050 |
+| + AndroidInfo 设备注册前置 | 5050 |
+| pc-api web 网关 + 浏览器指纹 | `Code=-1` 同类拦截 |
+| 无 uk 头（修复前的用户请求） | 图形校验分支（非 5050） |
+
+- **GetUUUK 两个真 bug 已修**（真机证据：修复后成功取得 65 位 uk）：
+  ①`iud` 必须标准 UUID v4 格式；②AES key 必须 16 位可打印 ASCII。
+  违反任一条 → 平台 200+空响应体静默拒绝（原实现随机 36 位字母数字 iud +
+  二进制 key 双踩）。
+- **结论**：版本字符串不是 5050 判据，门禁疑似在服务端校验「uk 与客户端
+  版本」的绑定（真实 APP 的 deviceW2 设备指纹携带版本信息）。上游 Steamauto
+  同病（issue #246 无解）。平台在 8-23（web 抓包尚可）~8-27 之间收紧。
+- **决定路线的关键实验（移交用户）**：浏览器登录官网 youpin898.com——
+  能登录 → 面板加「手动粘贴 token」入口；也拦 → 只能真机 APP。
+- api-notes：deviceW2 协议、AndroidInfo 版本探针、5050 待办⑤ 已归档。
+
+## 第三轮（2026-08-27 傍晚）：手动 Token 导入路径落地
+
+用户在官网登录成功并取回 JWT（getUserInfo 验证：UserId=1415273，
+NickName=3145），证实 5050 门禁**只压登录入口，已签发 token 完全可用**。
+实现替代路径：
+
+- 后端 `PUT /api/v1/channels/uu`（`handleUUToken`）：token 透传
+  `Registry.SetUUToken`（getUserInfo 验证 → AES-256-GCM 加密落库 → 重建
+  适配器），审计 `channel.uu.creds_update` 仅记 `token_tail` 尾 8 位
+  （security-spec 凭证展示规则），复用既有 `source: manual_import` 标记
+- 前端 Channels 页新增「手动导入 Token」区块（textarea + 导入按钮，
+  成功后清空输入并刷新健康徽章）；短信登录区块标注「当前被平台风控拦截」
+- openapi v0.7.0 新增该路由；`cmd/server` version 同步 0.7.0
+- 测试：api 层 `TestUUTokenImport`（空 token 400 且不触达 registry、
+  有效 token 原样透传）；前端导入用例（PUT 原样 token + 清空断言）；
+  `TestUUID4Shape`/`TestGetUUUKEnvelopeAndFailClosed` 固化 GetUUUK 协议
+- 顺带清欠：删除误入 main 的临时探针 `cmd/uu-probe`（1ea8c4c 引入）

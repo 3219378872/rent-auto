@@ -34,6 +34,7 @@
 | 2026-08-27 Steam X-eresult 检查补齐 | [2026-08-27-steam-eresult-check.md](2026-08-27-steam-eresult-check.md) | WebAPI X-eresult 头检查接入登录四步；guard 29 容忍；误导性空 token 报错根除 |
 | 2026-08-27 Steam guard steamid fixed64 修复 | [2026-08-27-steam-guard-f64.md](2026-08-27-steam-guard-f64.md) | UpdateAuth steamid 改 fixed64(wire1) 编码；EResult 8 InvalidParam 根除；黄金断言锁 wire type |
 | 2026-08-27 UU 滑块通过仍被拦复诊 | [2026-08-27-uu-captcha-rechallenge.md](2026-08-27-uu-captcha-rechallenge.md) | 登录端点补 uk 头+parseVerifyData 大小写无关+前端遵守 secs 冷却；审计 verify_data 销项待办①② |
+| 2026-08-27 UU 5050 门禁复诊+手动 Token 导入 | [2026-08-27-uu-captcha-rechallenge.md](2026-08-27-uu-captcha-rechallenge.md) | GetUUUK 修 UUID/ASCII key；5050 实验矩阵（版本/uk/网关全拦，上游同病）；`PUT /channels/uu` 手动导入落地，openapi v0.7.0 |
 
 ## 事故复盘
 

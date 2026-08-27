@@ -116,6 +116,10 @@ ADR 撞号拆分（0007/0008 新号方案）/ ECO api-notes 待办节 #E1-E3 /
 **UU 滑块通过仍被拦复诊（2026-08-27）：登录端点补 uk 头 / parseVerifyData
 大小写无关+模糊兜底 / 前端遵守 secs 冷却；审计 verify_data 字段销项 api-notes
 待办①②，见 evidence/2026-08-27-uu-captcha-rechallenge.md**。
+**UU 5050 登录门禁复诊（2026-08-27）：平台封禁第三方短信登录（版本/uk/双网关
+全拦，上游 Steamauto 同病）——GetUUUK 修 UUID iud+ASCII key 两 bug；落地
+`PUT /channels/uu` 手动 Token 导入（官网登录取 JWT 粘贴导入），短信登录入口
+保留但标注被拦；openapi v0.7.0**。
 纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
 uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
 

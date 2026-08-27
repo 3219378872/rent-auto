@@ -213,6 +213,34 @@ func (s *Server) handleECOCreds(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+type uuTokenRequest struct {
+	Token string `json:"token"`
+}
+
+// handleUUToken imports a UU token pasted by the operator. This is the
+// fallback login path: the platform gates third-party SMS login behind
+// app-version/risk checks (api-notes §认证域 5050), while already-issued
+// tokens keep working — the operator logs in on the official web/app and
+// pastes the JWT here. Validation + encrypted storage + adapter rebuild
+// happen inside Channels.SetUUToken.
+func (s *Server) handleUUToken(w http.ResponseWriter, r *http.Request) {
+	var req uuTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "token required")
+		return
+	}
+	if err := s.Channels.SetUUToken(r.Context(), req.Token); err != nil {
+		s.audit(r, "channel.uu.creds_failed", map[string]any{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, "invalid_token", err.Error())
+		return
+	}
+	// security-spec：凭证变更审计只带尾 8 位指纹，token 本体绝不入审计/日志。
+	s.audit(r, "channel.uu.creds_update", map[string]any{
+		"source": "manual_import", "token_tail": tokenTail(req.Token, 8),
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // credFingerprint returns the first 12 hex chars of SHA-256(v) — enough to
 // correlate credential updates without exposing the secret itself.
 func credFingerprint(v string) string {
@@ -222,6 +250,15 @@ func credFingerprint(v string) string {
 
 // phoneTail returns the last n chars of a phone number ("" when shorter).
 func phoneTail(s string, n int) string {
+	if len(s) <= n {
+		return ""
+	}
+	return s[len(s)-n:]
+}
+
+// tokenTail returns the last n chars of a credential ("" when shorter) —
+// mirrors channels.tokenTail for audit fingerprints.
+func tokenTail(s string, n int) string {
 	if len(s) <= n {
 		return ""
 	}

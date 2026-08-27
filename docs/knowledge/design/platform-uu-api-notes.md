@@ -59,7 +59,25 @@
   generate_headers 全套设备头（UA/AppVersion/DeviceToken 等），否则有风控拦截风险；
   DeviceToken 与 Sessionid 同源（参考件行为）
 - Token 长期有效但可被踢；失效表现：调用抛 KeyError/未登录码 → 面板重新短信登录
-- `get_uu_uk`：匿名可取，登录头需带 uk（风控字段）
+- `get_uu_uk`：匿名可取，登录头需带 uk（风控字段）。**deviceW2 真机校订
+  （2026-08-27 探针）**：请求体 `{"iud":"<标准UUID v4 带连字符>"}`——36 位随机
+  字母数字会得到 **200+空响应体**（静默拒绝）；AES key 必须为 16 位**可打印
+  ASCII**（参考件字母数字），二进制随机字节同样空响应体。满足两者后响应
+  216 字节密文，解密为 `{"deviceUk":"...","u":"..."}`，登录头取 `u`（65 位）
+- `GET /api/common/ClientInfo/AndroidInfo?DeviceToken=X&Sessionid=X`（App 头）
+  返回官方版本情报：Android 最新 APK=`5.28.2`（DownloadUrl）、
+  `LowestVersion=5.10.1`、`ForceUpdate=false`；iOS App Store 当前 `5.48.0`
+  （2026-08-21）。可作为版本情报探针，无需认证
+- **5050 版本/注册门禁（2026-08-27 复诊，未解决）**：`SendSignInSmsCode` 返回
+  `Code=5050「为了保证您的账户安全，请更新至最新版本APP进行注册」`（浏览器
+  指纹访问 pc-api 网关则 `Code=-1「请下载最新版本App进行注册/登录」`）。
+  实验矩阵：App-Version 5.28.3/5.48.0、真 uk、AndroidInfo 设备注册前置、
+  双网关——**全部 5050**；版本字符串不是判据。上游 Steamauto 同样报错
+  （issue #246，2025-06，无解关闭）。特征：无 uk 头 → 走图形校验分支；
+  带 uk → 5050 分支，疑似 uk 与客户端版本在服务端绑定校验（真实 APP 的
+  deviceW2 上报的设备指纹携带版本信息，第三方简化请求无法证明）。
+  平台 8-23~8-27 之间收紧（8-23 的 web 网关 HAR 尚可走通滑块流程）。
+  待办⑤：真机 APP/官网浏览器登录抓包对齐，或验证「手动粘贴 token」替代路径
 
 ## 本项目使用的端点（租赁域）
 

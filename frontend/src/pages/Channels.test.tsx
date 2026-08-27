@@ -2,14 +2,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import Channels from './Channels'
 
-const { getMock, postMock, solveCaptchaMock } = vi.hoisted(() => ({
+const { getMock, postMock, putMock, solveCaptchaMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
   postMock: vi.fn(),
+  putMock: vi.fn(),
   solveCaptchaMock: vi.fn(),
 }))
 
 vi.mock('../api/client', () => ({
-  api: { get: getMock, post: postMock, put: vi.fn() },
+  api: { get: getMock, post: postMock, put: putMock },
 }))
 
 vi.mock('../lib/tcaptcha', () => ({
@@ -20,6 +21,7 @@ vi.mock('../lib/tcaptcha', () => ({
 beforeEach(() => {
   getMock.mockReset()
   postMock.mockReset()
+  putMock.mockReset()
   solveCaptchaMock.mockReset()
   getMock.mockResolvedValue({ uu: 'not_configured' })
 })
@@ -93,5 +95,23 @@ describe('Channels page UU 短信登录', () => {
       session_id: 'sess-C',
       captcha: { ticket: 'ck-ticket', randstr: 'ck-rand', req_ticket: 'rt-2' },
     })
+  })
+
+  // 5050 门禁下短信登录不可用，手动粘贴 token 是主登录路径：
+  // 导入按钮必须把 token 原样 PUT 到 /channels/uu。
+  it('手动导入 UU Token：PUT 原样 token 并清空输入', async () => {
+    putMock.mockResolvedValue({ status: 'ok' })
+
+    render(<Channels />)
+    await screen.findByRole('heading', { name: '渠道账号' })
+
+    fireEvent.change(screen.getByPlaceholderText('eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…'), {
+      target: { value: '  jwt-token-pasted  ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '验证并保存 Token' }))
+    await screen.findByText('UU Token 已验证并加密入库')
+
+    expect(putMock).toHaveBeenCalledWith('/channels/uu', { token: 'jwt-token-pasted' })
+    expect((screen.getByPlaceholderText('eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…') as HTMLTextAreaElement).value).toBe('')
   })
 })
