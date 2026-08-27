@@ -95,7 +95,7 @@ func TestAdapterInventoryAndWallet(t *testing.T) {
 		switch r.URL.Path {
 		case "/Api/Selling/QuerySteamStock":
 			return okEnv(`{"TotalRecord":1,"PageResult":[{"StockId":"s1","AssetId":"A1","HashName":"AK","GoodsName":"AK名","MarkPrice":99.5,"Status":0}]}`)
-		case "/Api/Merchant/GetMerchantMoney":
+		case "/Api/Merchant/GetTotalMoney":
 			return okEnv(`{"Money":1234.56}`)
 		default:
 			t.Errorf("unexpected %s", r.URL.Path)

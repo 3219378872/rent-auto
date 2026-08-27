@@ -203,7 +203,7 @@ type WalletMoney struct {
 
 func (c *Client) GetWalletBalance(ctx context.Context) (float64, error) {
 	var w WalletMoney
-	if err := c.post(ctx, "/Api/Merchant/GetMerchantMoney", map[string]any{}, &w); err != nil {
+	if err := c.post(ctx, "/Api/Merchant/GetTotalMoney", map[string]any{}, &w); err != nil {
 		return 0, err
 	}
 	return w.Money, nil

@@ -30,8 +30,8 @@ RentDeposits = max( 平台参考价×140%, RentPrice×RentMaxDay, LongRentPrice�
 | /Api/Rent/SellerRentOrderDetails | 订单详情 | — |
 | /Api/Market/GetHashNameAndPriceList | **全量在售价 dump** | 两次调用间隔 **≥60s**（平台要求） |
 | /Api/Selling/QuerySteamStock + RefreshUserSteamStock | Steam库存 | 刷新为异步 |
-| /Api/Merchant/GetMerchantMoney | 钱包余额 | — |
-| /Api/Merchant/GetMerchantFundFlow | 资金流水 | 时间窗查询 |
+| /Api/Merchant/GetTotalMoney | 钱包余额 | ResultData 另含 LockMoney/PurchaseMoney/WaitSettlementMoney（当前仅消费 Money） |
+| /Api/Merchant/GetFundFlow | 资金流水 | 时间窗查询 |
 
 ## 状态映射（→ 统一状态机，见 data-model.md）
 
@@ -50,6 +50,9 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
 6. PublishRentAndSaleGoods 的逐项结果数组**不保证与请求等长/非空**：
    缺省项必须按失败处理（fail-closed → ErrPartialFailure），禁止乐观置成功——
    2026-08-24 起 RepriceLease 已按此固化并带 mock 反例
+7. **端点路径以官方 OpenAPI 块为准**：docx.ecosteam.cn 首页索引只有功能名不带路径，
+   每个接口页的 OpenAPI YAML 才是权威（2026-08-27 真机 404 复盘：
+   GetMerchantMoney 系早期转录错误，实际为 GetTotalMoney；资金流水为 GetFundFlow）
 
 ## Go 实现补充约定（M2b 落地结论）
 

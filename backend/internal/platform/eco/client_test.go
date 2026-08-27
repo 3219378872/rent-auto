@@ -52,6 +52,22 @@ func TestClientSignaturePresentAndVerifiable(t *testing.T) {
 	_ = pub
 }
 
+// Wallet balance must hit the documented route /Api/Merchant/GetTotalMoney;
+// the earlier transcription /Api/Merchant/GetMerchantMoney 404'd on the real
+// platform (2026-08-27). Pin the path so it cannot drift silently again.
+func TestWalletBalanceHitsDocumentedRoute(t *testing.T) {
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
+		if r.URL.Path != "/Api/Merchant/GetTotalMoney" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		return okEnv(`{"Money": 7.5}`)
+	})
+	bal, err := c.GetWalletBalance(context.Background())
+	if err != nil || bal != 7.5 {
+		t.Fatalf("bal: %v %f", err, bal)
+	}
+}
+
 func TestClientRateLimited(t *testing.T) {
 	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, b map[string]any) string {
 		return `{"ResultCode":"6001","ResultMsg":"too fast"}`

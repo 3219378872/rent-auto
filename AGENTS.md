@@ -120,6 +120,10 @@ ADR 撞号拆分（0007/0008 新号方案）/ ECO api-notes 待办节 #E1-E3 /
 全拦，上游 Steamauto 同病）——GetUUUK 修 UUID iud+ASCII key 两 bug；落地
 `PUT /channels/uu` 手动 Token 导入（官网登录取 JWT 粘贴导入），短信登录入口
 保留但标注被拦；openapi v0.7.0**。
+**ECO 钱包端点 404 修复（2026-08-27）：GetMerchantMoney 系转录错误，官方 OpenAPI
+YAML 复核实为 GetTotalMoney（资金流水为 GetFundFlow）；路径钉死回归测试；
+api-notes 已知坑 #7（端点路径以逐页 OpenAPI YAML 为准），见
+evidence/2026-08-27-eco-wallet-endpoint-404.md**。
 纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
 uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
 
