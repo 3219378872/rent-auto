@@ -106,9 +106,15 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 PublishLease 哨兵统一 / gosec 门控零告警 / Vite7+Vitest3 升级 /
 模板级策略 UI（US-STRAT-02，openapi v0.5.0；含 GetEffectiveStrategy
 route/real 深覆盖缺陷修复）/ lint 工具链收敛 v2.13.1 / 熔断审计事件化 /
-审计抗断连，见 evidence/2026-08-24-round{4,5,6,7,8,9}-*.md）**。纯逻辑域逐包覆盖率
-（make gate 数值卡点 ≥70%）：pricing 91% / platform 100% / uu 77% / eco 78% /
-steam 76% / recon 80% / analytics 81% / auth 90% / secrets 79% / config 76%
+审计抗断连，见 evidence/2026-08-24-round{4,5,6,7,8,9}-*.md）**。
+**第四轮全面审查 round10 完成（2026-08-27）：六维度审查 P1×6+P2×10+文档×5 全清欠——
+静默吞错补日志 / bench.Round2 委托 pricing（NaN 防护收回）/ 凭证审计尾号指纹 /
+steam exp=0 短路修复 / trustList 竞争 / RandomSessionID crypto/rand /
+AuditFn 实例注入 / 限流器合一 / /templates 可选分页（openapi v0.6.0，分页口径统一 ≤200）/
+ADR 撞号拆分（0007/0008 新号方案）/ ECO api-notes 待办节 #E1-E3 /
+前端 Strategies 拆分+usePagedList+事件驱动鉴权+补 13 用例，openapi v0.6.0**。
+纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
+uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
 
 - 系统可运行：`make dev-up && make server && make web`；首次启动日志打印一次性管理员密码
 - 生产部署：deploy/.env 设 `SITE_ADDRESS=<域名>` 启用 Caddy 自动 HTTPS + 安全响应头
@@ -122,6 +128,6 @@ steam 76% / recon 80% / analytics 81% / auth 90% / secrets 79% / config 76%
 - 后续迭代入口：ECO 回调/WebSocket、出售域适配器、因子参数面板化——
   完整清单见 round8 证据文档移交节
 - 里程碑进度与证据索引见 [docs/knowledge/evidence/README.md](docs/knowledge/evidence/README.md)
-  （含三轮综合审查+round4 归档）
+  （含三轮综合审查+round4–9+round10 归档）
 - 事故复盘归档于 [evidence/incidents/](docs/knowledge/evidence/incidents/)
   （最新：dryrun-bypass——写操作必须在执行入口短路 dry-run）

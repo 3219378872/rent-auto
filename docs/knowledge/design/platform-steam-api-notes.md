@@ -53,8 +53,10 @@ POST steamcommunity.com/trade/new/acknowledge {sessionid, message=1}   ← 新�
 - **Go 版实现偏离（有意简化，2026-08-24 记录）**：不做三级后台轮询，
   采用单一阈值惰性刷新——每次访问会话时检查 `exp-now < 3600s` 则同步刷新；
   steam_offers 任务每 5 分钟运行，实际效果≈到期前 1 小时内完成续期。
-  已知盲区（round3 备案）：`jwtExp` 解析失败返回 0 时刷新条件被永久短路，
-  直到硬失败才恢复。持久化：token 三元组 + 过期时间戳存 `app_settings`(AES-GCM 加密)
+  ~~已知盲区（round3 备案）：`jwtExp` 解析失败返回 0 时刷新条件被永久短路~~
+  → round10（2026-08-27）修复：`AccessExp==0` 视为"过期未知"强制走刷新路径
+  （刷新便宜、失败回落重登录），并打 Warn 日志。
+  持久化：token 三元组 + 过期时间戳存 `app_settings`(AES-GCM 加密)
 
 ## 2. Steam Guard 双算法（guard.py，已做 Python 向量交叉验证）
 

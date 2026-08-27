@@ -1,7 +1,7 @@
 # 证据索引（Evidence）
 
 > 每个里程碑完成时归档验证证据于此。规则：无证据不合并。
-> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；迭代打磨轮已归档至 round9（2026-08-24 round4–9）**。
+> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；迭代打磨轮 round4–9 归档（2026-08-24）；事故复盘 4 份（2026-08-23）；2026-08-25 UU 图形校验死循环修复；第四轮全面审查 round10 归档（2026-08-27）**。
 
 | 里程碑 | 证据文档 | 结论 |
 |---|---|---|
@@ -29,6 +29,7 @@
 | 2026-08-24 模板级策略（round8） | [2026-08-24-round8-template-strategy.md](2026-08-24-round8-template-strategy.md) | US-STRAT-02 全栈落地；GetEffectiveStrategy 深覆盖缺陷修复；openapi v0.5.0 23 路由 |
 | 2026-08-24 收尾打磨（round9） | [2026-08-24-round9-polish.md](2026-08-24-round9-polish.md) | golangci v2.13.1 收敛/熔断审计事件化/审计抗断连/任务错误卫生 |
 | 2026-08-25 UU 图形校验死循环修复 | [2026-08-25-uu-captcha-session-loop.md](2026-08-25-uu-captcha-session-loop.md) | 滑块重试闭包丢 session_id 致票据关联失败死循环；前端显式透传+API 层 400 门禁 |
+| 2026-08-27 第四轮全面审查与修复（round10） | [2026-08-27-round10-comprehensive-review.md](2026-08-27-round10-comprehensive-review.md) | 六维度审查 P1×6+P2×10+文档×5 全清欠；ADR 撞号拆分；openapi v0.6.0 |
 
 ## 事故复盘
 

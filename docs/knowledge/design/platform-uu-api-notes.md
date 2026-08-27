@@ -108,8 +108,10 @@
     解析（顶层 `assetId`、`commodityInfo.steamAssetId`），任一非空即写入
     `LeaseOrder.AssetID`——因子控制器的 `UnhandledFactorOrders` JOIN 依赖
     该字段映射 listing；字段确认后收敛为单一解析并删除本条
-15. 订单状态码映射仍只有 {0:leasing, 2:done, 3:bought_out}，未知→""
-    （静默不可见）；真机抓包补全后同步 `mapUUOrderStatus`
+15. 订单状态码映射仍只有 {0:leasing, 2:done, 3:bought_out}；未知码自 round5 起
+    显式落 `'unknown'`（0006 CHECK 放行，不再以空串隐身，但面板不可见性问题仍在：
+    unknown 非终态会拉长 orders_sync 动态回看窗口直至 100d 上限）。真机抓包补全后
+    同步 `mapUUOrderStatus` 并销项
 
 ## HTTP 状态码处理约定（两平台统一策略，2026-08-24 round5 成文）
 

@@ -24,7 +24,7 @@
 契约文件：`spec/openapi.yaml`（M1 建立，随里程碑演进）。
 通用约定：
 - 前缀 `/api/v1`；JSON UTF-8；金额字段一律两位小数 float
-- 分页参数 `page`(1-based)、`page_size`(≤100)；响应 `{items,total}`
+- 分页参数 `page`(1-based)、`page_size`(≤200，round10 与 store 钳制/openapi 统一口径)；响应 `{items,total}`
 - 错误体 `{code,message}`；HTTP 语义化
 
 核心端点组：auth / dashboard / inventory / listings / orders / strategies / channels / audit / jobs(手动触发)。

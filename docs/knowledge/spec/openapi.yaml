@@ -1,12 +1,12 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.5.0"
+  version: "0.6.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
     - 前缀 /api/v1；除 health/login 外全部需要 Bearer JWT
-    - 分页：query page(1-based) & page_size(<=100)；响应 {items,total}
+    - 分页：query page(1-based) & page_size(<=200，round10 统一口径)；响应 {items,total}
     - 错误体：{code,message}；金额两位小数
     - 401 body code 恒为 `unauthorized`：前端据此清 token 回登录页
       （含登出吊销后的旧 token —— 会话纪元机制见 ADR-0006）
@@ -145,7 +145,14 @@ paths:
                         items: { $ref: "#/components/schemas/OrderRow" }
   /templates:
     get:
-      summary: 模板清单（全量，含锚点/黑名单标记）
+      summary: 模板清单（含锚点/黑名单标记）
+      description: >-
+        分页可选：不带 page/page_size 时返回全量目录（面板黑名单表与模板选择器
+        依赖完整清单）；带 page_size 时按 1-based page 切页（上限 200）。
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 0, maximum: 200 },
+            description: "≤0 或缺省 = 全量" }
       responses:
         "200":
           description: 模板数组
@@ -472,7 +479,7 @@ components:
     PageSize:
       name: page_size
       in: query
-      schema: { type: integer, default: 50, maximum: 100 }
+      schema: { type: integer, default: 50, maximum: 200 }
   responses:
     Err400:
       description: 参数错误

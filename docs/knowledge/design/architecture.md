@@ -14,7 +14,8 @@
 │  recon/    Reconciler: desired vs actual 货架差异 → 动作队列（Executor 含 dry-run 门禁）│
 │  analytics/ 收益记账·资产构成·年化ROI·分渠道分品类rollup                             │
 │  auth/     JWT + bcrypt；channels/ 凭证生命周期+Steam会话；secrets/ AES-256-GCM      │
-│  store/    pgx/v5 · migrations(嵌入, 启动自升级)                                   │
+│  ratelimit/ 令牌桶限速器（渠道 pacer 唯一实现）；domain/ 跨层类型（零内部依赖）        │
+│  config/   环境变量装配；logging/ slog JSON；store/ pgx/v5 · migrations(嵌入, 自升级) │
 │  platform/ ChannelAdapter 接口                                                    │
 │   ├─ uu/  AES-ECB+RSA 加密客户端 · 短信登录流 · 租赁端点集 · 待发货代发               │
 │   ├─ eco/ SHA256withRSA 签名客户端 · 租赁四件套 · 发货闭环 · 市场dump                │
@@ -39,7 +40,25 @@
 | channels | 凭证校验/加密落库/adapter 重建；Steam 会话刷新与自愈 | 业务语义 |
 
 审计职责：无独立 audit 包——写入助手在 `api.Server.audit()`，自动链路经
-`channels.AuditFn` / `scheduler.Deps.Audit` 钩子注入，存储在 `store.InsertAudit`。
+`channels.Registry.SetAuditFn` / `SteamSession.SetAuditFn` / `scheduler.Deps.Audit`
+钩子注入（round10 起为实例注入，不再用包级全局变量），存储在 `store.InsertAudit`。
+
+## ADR 索引
+
+| ADR | 文件 | 决策 |
+|---|---|---|
+| 0001 | [adr-0001-pure-go-rewrite.md](adr-0001-pure-go-rewrite.md) | 纯 Go 重写平台对接（弃用 Python sidecar） |
+| 0002* | [adr-0007-postgres-storage.md](adr-0007-postgres-storage.md) | PostgreSQL 唯一存储（*) 从 adr-0001 拆出，编号保序说明见文内 |
+| 0003* | [adr-0008-dual-channel-first-class.md](adr-0008-dual-channel-first-class.md) | 双通道一等公民适配层（*) 同上 |
+| 0002 | adr-0002-uu-captcha-frontend-manual.md | UU 图形校验前端人工通过 |
+| 0003 | adr-0003-channel-capabilities.md | Adapter 统一接口 + Capabilities |
+| 0004 | adr-0004-order-sync-dynamic-window.md | orders_sync 动态回看窗口 |
+| 0005 | adr-0005-recon-writeback-and-delisting.md | recon 写回闭环 + 下架安全 |
+| 0006 | adr-0006-jwt-session-epoch-revocation.md | JWT 会话纪元吊销 |
+
+(*) 编号异常说明：adr-0001 初稿将三条决策并入一个文件，导致与后续独立文件撞号。
+2026-08-27 round10 审查轮拆分时，为不重写历史证据文档中的既有引用，拆出的两条
+按新号 0007/0008 编号（决策日期仍为 2026-08-23）；0002/0003 号保持既有文件不变。
 
 ## 关键数据流
 

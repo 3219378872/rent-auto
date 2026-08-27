@@ -70,3 +70,17 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
 200 响应信封缺 `ResultCode` 键视为协议错误（此前默认 code=0 曾致幽灵下架，
 round3 修复并固化反例）。凭据级失败码 4004/5005 映射 `ErrAuthExpired` 哨兵，
 调度器风控冷却得以介入（round4）；5004 验签失败保留 generic（可能是本地 bug）。
+
+## 待办（待真机校订）
+
+> 规则：mock 无法覆盖、需要真实平台会话确认的行为在此登记；结论确认后回写正文并销项。
+> （本节 2026-08-27 round10 建立此前散落于 evidence/functional-spec 的待办统一归口。）
+
+- **#E1 SellerRentOrderList 时间窗上限（7002）**：官方对 StartTime/EndTime 跨度存在
+  上限，超限返回 7002（查询时间超限）。首次真实调用后如触发，orders_sync 改为
+  以"最早未终态订单"为锚的滚动窗口逐段拉取（m2b 证据文档承诺项，2026-08-25 登记）。
+- **#E2 改价边界 PublishType=2**：PublishRentAndSaleGoods 以 PublishType=2 提交时
+  是否支持只改租赁价不影响已配置的出售域字段，待真机验证；结论回写本文件
+  「本项目使用的端点」表（functional-spec §5 Open Question 的结论落点）。
+- **#E3 长租阈值配置化**：>21 天为长租须填 LongRentPrice 是平台"目前"实现
+  （已知坑#4）；真机确认后如平台调整，改价前需校验 LongRentPrice 必填性。
