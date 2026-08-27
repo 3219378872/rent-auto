@@ -228,16 +228,25 @@ func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID, log
 }
 
 // GetUUUK obtains the anti-bot "uk" parameter via the deviceW2 encrypted endpoint.
+//
+// Real-machine calibration (2026-08-27 probe, api-notes §认证域):
+//   - the `iud` field MUST be a canonical UUID v4 (with dashes) — 36 random
+//     alphanumerics make the platform answer 200 with an EMPTY body;
+//   - the AES key MUST be printable ASCII (reference uses 16 alphanumeric
+//     chars) — binary keys get the same silent empty-body rejection.
+//
+// The response carries {"deviceUk":"...","u":"..."}; the login header consumes `u`.
 func GetUUUK(ctx context.Context, hc *http.Client) (string, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
-	crypt, err := NewCrypt()
+	// Reference parity: 16 printable alphanumeric bytes, not binary entropy.
+	crypt, err := NewCryptWithKey([]byte(RandomString(16)))
 	if err != nil {
 		return "", err
 	}
 	payload := map[string]string{
-		"encryptedData":   crypt.EncryptAES([]byte(`{"iud":"` + RandomString(36) + `"}`)),
+		"encryptedData":   crypt.EncryptAES([]byte(`{"iud":"` + UUID4() + `"}`)),
 		"encryptedAesKey": "",
 	}
 	if payload["encryptedAesKey"], err = crypt.EncryptedAESKey(); err != nil {

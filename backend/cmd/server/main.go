@@ -26,7 +26,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	if err := run(); err != nil {

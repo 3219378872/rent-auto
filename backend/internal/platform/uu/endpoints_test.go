@@ -467,6 +467,57 @@ func TestParseVerifyDataCasingTolerant(t *testing.T) {
 	}
 }
 
+// deviceW2 rejects non-canonical iud shapes with a silent empty 200
+// (real-machine probe 2026-08-27): UUID4 must render the exact reference shape.
+func TestUUID4Shape(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		s := UUID4()
+		if len(s) != 36 {
+			t.Fatalf("len = %d (%q)", len(s), s)
+		}
+		for _, pos := range []int{8, 13, 18, 23} {
+			if s[pos] != '-' {
+				t.Fatalf("dash missing at %d: %q", pos, s)
+			}
+		}
+		if s[14] != '4' {
+			t.Fatalf("version nibble = %c: %q", s[14], s)
+		}
+		if s[19] != '8' && s[19] != '9' && s[19] != 'a' && s[19] != 'b' {
+			t.Fatalf("variant nibble = %c: %q", s[19], s)
+		}
+		if seen[s] {
+			t.Fatalf("duplicate uuid %q", s)
+		}
+		seen[s] = true
+	}
+}
+
+// GetUUUK must send the three-field encrypted envelope and fail closed on the
+// silent-empty-200 rejection shape observed for malformed payloads.
+func TestGetUUUKEnvelopeAndFailClosed(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deviceW2" {
+			w.WriteHeader(404)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write(nil) // silent empty 200 (rejection shape)
+	}))
+	defer srv.Close()
+
+	if _, err := GetUUUK(context.Background(), mockHTTP(srv.URL)); err == nil {
+		t.Fatal("empty 200 body must fail closed")
+	}
+	for _, k := range []string{"encryptedData", "encryptedAesKey"} {
+		if v, _ := got[k].(string); v == "" {
+			t.Fatalf("envelope field %q missing/empty", k)
+		}
+	}
+}
+
 func TestSMSSendCaptchaRetryPayload(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -148,5 +148,16 @@ func RandomString(n int) string {
 	return string(b)
 }
 
-// Key exposes the raw AES key (probe/diagnostics only).
-func (c *Crypt) Key() string { return string(c.aesKey) }
+// UUID4 renders a canonical UUID v4 (8-4-4-4-12 with dashes, version nibble 4,
+// RFC 4122 variant) from crypto/rand. The deviceW2 handshake rejects payloads
+// whose iud is not in this exact shape (observed 2026-08-27: 36 random
+// alphanumerics yield a silent empty 200).
+func UUID4() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
