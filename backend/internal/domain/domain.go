@@ -3,10 +3,11 @@
 package domain
 
 import (
+	"crypto/rand"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"time"
 )
 
@@ -109,11 +110,21 @@ func (j *JSONB) Scan(src any) error {
 
 const sessionAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// RandomSessionID generates the UU SMS-login session identifier.
+// RandomSessionID generates the UU SMS-login session identifier. Session IDs
+// gate who may complete a login challenge, so they come from crypto/rand —
+// math/rand is only sanctioned for non-security identifiers (gosec G404).
 func RandomSessionID() string {
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = sessionAlphabet[rand.Intn(len(sessionAlphabet))]
+	out := make([]byte, 16)
+	span := big.NewInt(int64(len(sessionAlphabet)))
+	for i := range out {
+		n, err := rand.Int(rand.Reader, span)
+		if err != nil {
+			// crypto/rand failure is unrecoverable system-wide; fall back to a
+			// fixed marker so callers see an obviously invalid session id
+			// instead of a silently predictable one.
+			panic(fmt.Errorf("domain: crypto/rand unavailable: %w", err))
+		}
+		out[i] = sessionAlphabet[n.Int64()]
 	}
-	return string(b)
+	return string(out)
 }

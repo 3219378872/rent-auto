@@ -26,7 +26,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -85,6 +85,7 @@ func run() error {
 	registry := channels.NewRegistry(st, box, log)
 	registry.SetLimiter(domain.ChannelUU, newLimiter(3))
 	registry.SetLimiter(domain.ChannelECO, newLimiter(2))
+	registry.SetAuditFn(func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) })
 	if err := registry.Refresh(ctx); err != nil {
 		log.Warn("channel adapters refresh", "err", err)
 	}
@@ -107,6 +108,7 @@ func run() error {
 		Penalize: deps.NoteChannelError,
 	}
 	steamSess := channels.NewSteamSession(st, box, log)
+	steamSess.SetAuditFn(func(ctx context.Context, e domain.AuditEntry) { _ = st.InsertAudit(ctx, e) })
 	if err := steamSess.Restore(ctx); err != nil {
 		log.Warn("steam session restore", "err", err)
 	}
@@ -124,9 +126,6 @@ func run() error {
 		return err
 	}
 
-	channels.AuditFn = func(ctx context.Context, e domain.AuditEntry) {
-		_ = st.InsertAudit(ctx, e)
-	}
 	ecoDeps := &scheduler.EcoDeliveryDeps{
 		Eco:   liveECOClient{r: registry},
 		Steam: steamSess,

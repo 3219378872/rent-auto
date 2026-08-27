@@ -1,6 +1,9 @@
 package bench
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestMedian(t *testing.T) {
 	cases := []struct {
@@ -29,6 +32,25 @@ func TestRound2(t *testing.T) {
 		if got := Round2(c.in); got != c.want {
 			t.Fatalf("Round2(%v)=%v want %v", c.in, got, c.want)
 		}
+	}
+	// Non-finite market data must collapse to 0, never convert to an
+	// implementation-defined int64 (the pre-round10 local copy lost this guard).
+	for _, nan := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if got := Round2(nan); got != 0 {
+			t.Fatalf("Round2(%v)=%v want 0", nan, got)
+		}
+	}
+}
+
+// pricePtr feeds raw upstream prices into anchors; NaN/Inf must read as absent.
+func TestPricePtrNonFinite(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), 0, -3} {
+		if pricePtr(v) != nil {
+			t.Fatalf("pricePtr(%v) should be nil", v)
+		}
+	}
+	if p := pricePtr(12.345); p == nil || *p != 12.35 {
+		t.Fatalf("pricePtr(12.345)=%v", p)
 	}
 }
 

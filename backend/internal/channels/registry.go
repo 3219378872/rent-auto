@@ -33,10 +33,27 @@ type Registry struct {
 	log        *slog.Logger
 	ad         map[domain.Channel]platform.Adapter
 	lim        map[domain.Channel]platform.Limiter
+	auditFn    AuditHook
 	uuClient   *uu.Client
 	ecoClient  *eco.Client
 	ecoSteamID string
 	uuHTTP     *http.Client // test seam: overrides UU API transport
+}
+
+// AuditHook receives write-operation audit entries (wired to the store by
+// main). Instance-injected instead of a package-level var: the write target is
+// a runtime dependency, and a global mutable var is an implicit, racy one.
+type AuditHook func(ctx context.Context, e domain.AuditEntry)
+
+// SetAuditFn wires the audit sink. Must be called before any write operation
+// can run (main wires it during assembly, before the scheduler starts).
+func (r *Registry) SetAuditFn(fn AuditHook) { r.auditFn = fn }
+
+// audit dispatches a write-operation audit entry when the hook is wired.
+func (r *Registry) audit(ctx context.Context, e domain.AuditEntry) {
+	if r.auditFn != nil {
+		r.auditFn(ctx, e)
+	}
 }
 
 func NewRegistry(st *store.Store, box *secrets.Box, log *slog.Logger) *Registry {
@@ -355,17 +372,10 @@ func (r *Registry) ClearZeroCD(ctx context.Context) error {
 	if err := c.EnableZeroCD(ctx, ids); err != nil {
 		return err
 	}
-	audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+	r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 		Action: "shelf.zero_cd_enabled", Channel: string(domain.ChannelUU),
 		Detail: map[string]any{"orders": len(ids)}})
 	return nil
-}
-
-// audit dispatches a write-operation audit entry when the hook is wired.
-func audit(ctx context.Context, e domain.AuditEntry) {
-	if AuditFn != nil {
-		AuditFn(ctx, e)
-	}
 }
 
 // SendLoginSmsCode starts the UU SMS login flow and reports the delivery mode.
@@ -379,13 +389,26 @@ func (r *Registry) GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, er
 	return uu.GetSmsUpSignInConfig(ctx, nil)
 }
 
-// VerifyUUSms completes the SMS login and stores the token.
-func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) error {
+// VerifyUUSms completes the SMS login and stores the token. It returns the
+// token's last 8 chars (security-spec UU 展示规则：尾 8 位) so the caller can
+// audit the credential change with a fingerprint instead of the secret.
+func (r *Registry) VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) (string, error) {
 	token, err := uu.SmsSignIn(ctx, nil, phone, code, sessionID, loginReqTicket)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return r.SetUUToken(ctx, token)
+	if err := r.SetUUToken(ctx, token); err != nil {
+		return "", err
+	}
+	return tokenTail(token, 8), nil
+}
+
+// tokenTail returns the last n chars of a credential ("" when shorter).
+func tokenTail(s string, n int) string {
+	if len(s) <= n {
+		return ""
+	}
+	return s[len(s)-n:]
 }
 
 // DeliverPendingRentals walks the UU to-do list and sends pending offers,
@@ -399,14 +422,11 @@ func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent []string, gi
 	}
 	sent, gifts, err = c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
 	for _, orderNo := range sent {
-		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+		r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 			Action: "order.offer_sent", Channel: string(domain.ChannelUU), Target: orderNo})
 	}
 	return sent, gifts, err
 }
-
-// AuditFn receives write-operation audit entries (wired to store by main).
-var AuditFn func(ctx context.Context, e domain.AuditEntry)
 
 // EcoOneClickResolve runs the platform batch send/accept for order fulfilment.
 func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
@@ -423,23 +443,23 @@ func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
 	for _, so := range out.SendOffers {
 		if so.Error != "" || so.NeedsMobileConfirmation || so.NeedsEmailConfirmation {
 			logWarnDelivery(r.log, "eco send offer failed", so.OrderNum, so.Error)
-			audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+			r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 				Action: "order.send_offer_failed", Channel: "eco", Target: so.OrderNum,
 				Detail: map[string]any{"error": so.Error}})
 			continue
 		}
-		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+		r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 			Action: "order.offer_sent", Channel: "eco", Target: so.OrderNum})
 	}
 	for _, ao := range out.AcceptOffers {
 		if ao.ErrorCode != 1 || ao.Error != "" { // ErrorCode OK=1
 			logWarnDelivery(r.log, "eco accept offer failed", ao.OrderNum, ao.Error)
-			audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+			r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 				Action: "order.accept_offer_failed", Channel: "eco", Target: ao.OrderNum,
 				Detail: map[string]any{"error": ao.Error, "code": ao.ErrorCode}})
 			continue
 		}
-		audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
+		r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 			Action: "order.accepted", Channel: "eco", Target: ao.OrderNum})
 	}
 	return nil

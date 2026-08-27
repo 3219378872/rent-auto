@@ -110,6 +110,10 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 	for _, c := range cands {
 		es, err := d.Store.GetEffectiveStrategy(ctx, c.HashName)
 		if err != nil {
+			// A store outage here must not look like "nothing to do": candidates
+			// silently skipped with a nil error upstream would report a
+			// successful reprice cycle. Surface loudly, keep the loop alive.
+			d.Log.Warn("effective strategy lookup failed", "hash", c.HashName, "err", err)
 			continue
 		}
 		key := string(es.GlobalParams) + "|" + string(es.Params)
@@ -205,6 +209,9 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 func (d *Deps) loadQuotes(ctx context.Context, hash string, topn int) []pricing.Quote {
 	rows, err := d.Store.RecentMergedQuotes(ctx, hash, time.Now().Add(-quoteWindow), topn*3)
 	if err != nil {
+		// Empty quotes read as "no baseline" and produce a skip record; the
+		// underlying store failure must still be visible in logs.
+		d.Log.Warn("quote load failed", "hash", hash, "err", err)
 		return nil
 	}
 	out := make([]pricing.Quote, 0, len(rows))
@@ -235,5 +242,3 @@ func tsOrZero(t *time.Time) time.Time {
 }
 
 func intPtr(v int) *int { return &v }
-
-var _ = domain.ChannelUU

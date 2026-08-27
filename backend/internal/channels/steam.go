@@ -22,6 +22,7 @@ type SteamSession struct {
 	st      *store.Store
 	box     *secrets.Box
 	log     *slog.Logger
+	auditFn AuditHook
 	session *steam.Session
 }
 
@@ -31,6 +32,9 @@ func NewSteamSession(st *store.Store, box *secrets.Box, log *slog.Logger) *Steam
 	}
 	return &SteamSession{st: st, box: box, log: log}
 }
+
+// SetAuditFn wires the write-operation audit sink (see Registry.SetAuditFn).
+func (s *SteamSession) SetAuditFn(fn AuditHook) { s.auditFn = fn }
 
 // Restore rebuilds a session from stored tokens (fast path, no password login).
 func (s *SteamSession) Restore(ctx context.Context) error {
@@ -135,7 +139,15 @@ func (s *SteamSession) EnsureSession(ctx context.Context) (*steam.Session, error
 	}
 	sess := s.session
 	now := time.Now().Unix()
-	if sess.Tokens.AccessExp != 0 && sess.Tokens.AccessExp-now < 3600 {
+	// AccessExp == 0 means the exp claim was unreadable at store time (legacy
+	// persisted tokens). Treating it as "fresh" short-circuits refresh forever
+	// — the api-notes §1.2 blind spot. Unknown expiry is treated as stale
+	// instead: refresh (cheap, rotates the access token) and relogin on
+	// failure, so a corrupt exp can never wedge the session.
+	if sess.Tokens.AccessExp == 0 {
+		s.log.Warn("steam access token exp unknown; forcing refresh")
+	}
+	if sess.Tokens.AccessExp == 0 || sess.Tokens.AccessExp-now < 3600 {
 		if err := sess.RefreshAccessToken(ctx); err != nil {
 			s.log.Info("access token refresh failed, relogin", "err", err)
 			if err := sess.Login(ctx); err != nil {
@@ -205,8 +217,8 @@ func (s *SteamSession) AcceptZeroCostOffers(ctx context.Context, log interface{ 
 		if ok {
 			accepted++
 			log.Info("steam offer accepted", "offer", o.TradeOfferID)
-			if AuditFn != nil {
-				AuditFn(ctx, domain.AuditEntry{
+			if s.auditFn != nil {
+				s.auditFn(ctx, domain.AuditEntry{
 					Time: time.Now().UTC(), Actor: "system",
 					Action: "order.accepted", Channel: "steam", Target: o.TradeOfferID,
 				})

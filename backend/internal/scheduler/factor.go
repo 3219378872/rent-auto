@@ -53,10 +53,16 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 		if !ok {
 			es, err := d.Store.GetEffectiveStrategy(ctx, o.HashName)
 			if err != nil {
-				continue // no strategy → nothing to control
+				// The global strategy row is guaranteed by startup; any error
+				// here (store outage) must not pass silently — those orders
+				// would otherwise be skipped without a trace. The batch stays
+				// unmarked, so the next run replays them.
+				d.Log.Warn("factor fold: strategy lookup failed", "order", o.OrderID, "hash", o.HashName, "err", err)
+				continue
 			}
 			pp, err := pricing.ParseParams(es.GlobalParams, es.Params)
 			if err != nil {
+				d.Log.Warn("factor fold: strategy params parse failed", "order", o.OrderID, "hash", o.HashName, "err", err)
 				continue
 			}
 			p = &pp
@@ -108,10 +114,12 @@ func (d *Deps) runStaleScan(ctx context.Context) error {
 		if !ok {
 			es, err := d.Store.GetEffectiveStrategy(ctx, c.HashName)
 			if err != nil {
+				d.Log.Warn("stale scan: strategy lookup failed", "hash", c.HashName, "err", err)
 				continue
 			}
 			pp, err := pricing.ParseParams(es.GlobalParams, es.Params)
 			if err != nil {
+				d.Log.Warn("stale scan: strategy params parse failed", "hash", c.HashName, "err", err)
 				continue
 			}
 			p = &pp

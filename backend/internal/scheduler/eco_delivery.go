@@ -35,8 +35,9 @@ type EcoDeliveryDeps struct {
 
 const (
 	ecoLookbackDays         = 30
-	detailsStateWaitDeliver = 8 // ECO DetailsState filter: 待发货
-	orderStateOfferNotSent  = 1 // OrderStateCode: 报价未发送
+	detailsStateWaitDeliver = 8     // ECO DetailsState filter: 待发货
+	orderStateOfferNotSent  = 1     // OrderStateCode: 报价未发送
+	acceptedSetMax          = 10000 // cross-cycle accepted-offer memory cap
 )
 
 // RunECODelivery executes the four-step fulfilment loop for every
@@ -93,6 +94,15 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 		if ok {
 			d.mu.Lock()
 			d.accepted[detail.TradeOfferID] = true
+			// The accepted-set grows with every delivered order for the
+			// process lifetime. Volume is bounded by real deliveries, but a
+			// cap keeps the map from silently accumulating forever; on
+			// eviction, a re-accept attempt is idempotent (offer already
+			// accepted upstream) and merely logs.
+			if len(d.accepted) > acceptedSetMax {
+				d.accepted = map[string]bool{detail.TradeOfferID: true}
+				d.info(ctx, "accepted set overflow, reset", fmt.Sprintf("%d offers", acceptedSetMax))
+			}
 			d.mu.Unlock()
 			if d.Audit != nil {
 				d.Audit(ctx, domain.AuditEntry{

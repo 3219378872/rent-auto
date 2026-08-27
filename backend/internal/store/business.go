@@ -50,10 +50,22 @@ func (s *Store) GetTemplate(ctx context.Context, hash string) (*Template, error)
 	return scanTemplate(row)
 }
 
-func (s *Store) ListTemplates(ctx context.Context) ([]Template, error) {
-	rows, err := s.Pool.Query(ctx,
-		`SELECT hash_name, display_name, category, uu_template_id, uu_mark_price, eco_ref_price, value_anchor, blacklisted, anchor_updated_at
-		 FROM templates ORDER BY hash_name`)
+// ListTemplates returns the template catalog ordered by hash. Pagination is
+// optional: limit<=0 returns the full catalog (the panel needs the complete
+// blacklist table and template picker), a positive limit is clamped to 200.
+func (s *Store) ListTemplates(ctx context.Context, limit, offset int) ([]Template, error) {
+	q := `SELECT hash_name, display_name, category, uu_template_id, uu_mark_price, eco_ref_price, value_anchor, blacklisted, anchor_updated_at
+		 FROM templates ORDER BY hash_name`
+	if limit > 0 {
+		if limit > 200 {
+			limit = 200
+		}
+		if offset < 0 {
+			offset = 0
+		}
+		q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
+	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}

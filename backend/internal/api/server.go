@@ -49,13 +49,14 @@ type ChannelsService interface {
 	Health(ctx context.Context) map[string]string
 	SendLoginSmsCode(ctx context.Context, phone, sessionID string, captcha *uu.CaptchaResult) (uu.SmsCodeResult, error)
 	GetSmsUpSignInConfig(ctx context.Context) (uu.SmsUpConfig, error)
-	VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) error
+	VerifyUUSms(ctx context.Context, phone, code, sessionID, loginReqTicket string) (string, error)
 	SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error
 }
 
 func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *slog.Logger) *Server {
 	return &Server{Store: st, JWT: jwt, TTL: 24 * time.Hour, AdminUser: adminUser, Version: version, Log: log,
-		logins: newLoginLimiter()}
+		logins:       newLoginLimiter(),
+		defaultTrust: parseCIDRs(defaultTrustCIDRs)}
 }
 
 // Routes builds the handler tree:
@@ -122,6 +123,8 @@ var defaultTrustCIDRs = []string{
 }
 
 // SetTrustProxies overrides the trusted peer CIDR list (from TRUST_PROXY_CIDRS).
+// Must be called before serving; the list is parsed here so request-time
+// trustList() reads are race-free.
 func (s *Server) SetTrustProxies(cidrs []string) {
 	s.trustProxies = parseCIDRs(cidrs)
 }
@@ -139,9 +142,6 @@ func parseCIDRs(list []string) []*net.IPNet {
 func (s *Server) trustList() []*net.IPNet {
 	if len(s.trustProxies) > 0 {
 		return s.trustProxies
-	}
-	if s.defaultTrust == nil {
-		s.defaultTrust = parseCIDRs(defaultTrustCIDRs)
 	}
 	return s.defaultTrust
 }

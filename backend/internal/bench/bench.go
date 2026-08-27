@@ -10,6 +10,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
@@ -58,10 +59,12 @@ func nilIfZero64(v int64) *int64 {
 }
 
 func pricePtr(v float64) *float64 {
-	if v <= 0 {
+	// Round2 first: non-finite upstream prices (NaN/Inf) collapse to 0 and are
+	// treated as absent instead of poisoning the value anchor.
+	p := pricing.Round2(v)
+	if p <= 0 {
 		return nil
 	}
-	p := Round2(v)
 	return &p
 }
 
@@ -158,10 +161,7 @@ func Median(vals []float64) float64 {
 	return (s[mid-1] + s[mid]) / 2
 }
 
-// Round2 rounds money to two decimals (half away from zero).
-func Round2(v float64) float64 {
-	if v >= 0 {
-		return float64(int64(v*100+0.5)) / 100
-	}
-	return float64(int64(v*100-0.5)) / 100
-}
+// Round2 rounds money to two decimals, half away from zero.
+// Delegates to the canonical pricing implementation (AGENTS.md 硬规则) so the
+// NaN/Inf guard is not duplicated (and previously lost) per package.
+func Round2(v float64) float64 { return pricing.Round2(v) }

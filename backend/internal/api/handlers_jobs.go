@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -114,7 +116,11 @@ func (s *Server) handleSteamCreds(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "login_failed", err.Error())
 		return
 	}
-	s.audit(r, "channel.steam.creds_update", map[string]any{})
+	// security-spec：凭证变更审计带指纹（Steam 凭证展示规则：不可见——以
+	// SHA-256 前 12 位指纹关联，密钥本体不落审计）。
+	s.audit(r, "channel.steam.creds_update", map[string]any{
+		"username": req.Username, "secret_fp": credFingerprint(req.SharedSecret),
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -171,14 +177,19 @@ func (s *Server) handleUUSmsVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid payload")
 		return
 	}
-	if err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID, req.LoginReqTicket); err != nil {
+	tail, err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID, req.LoginReqTicket)
+	if err != nil {
 		s.audit(r, "channel.uu.login_failed", map[string]any{"error": err.Error()})
 		// 400, not 401: this is an upstream code rejection, NOT a panel-session
 		// expiry — the frontend force-logouts on 401.
 		writeErr(w, http.StatusBadRequest, "verify_failed", err.Error())
 		return
 	}
-	s.audit(r, "channel.uu.login", map[string]any{})
+	// security-spec：凭证变更必须产生带尾号指纹的审计（UU token 规则：尾 8 位；
+	// 手机号仅记尾 4 位）。凭证本体绝不入审计。
+	s.audit(r, "channel.uu.login", map[string]any{
+		"phone_tail": phoneTail(req.Phone, 4), "token_tail": tail,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -193,8 +204,24 @@ func (s *Server) handleECOCreds(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_creds", err.Error())
 		return
 	}
-	s.audit(r, "channel.eco.creds_update", map[string]any{})
+	// security-spec：ECO 私钥展示规则 = SHA-256 指纹前 12 位；partnerId 明文。
+	s.audit(r, "channel.eco.creds_update", map[string]any{
+		"partner_id": req.PartnerID, "key_fp": credFingerprint(req.PrivateKeyPEM),
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-var _ = domain.ChannelUU
+// credFingerprint returns the first 12 hex chars of SHA-256(v) — enough to
+// correlate credential updates without exposing the secret itself.
+func credFingerprint(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// phoneTail returns the last n chars of a phone number ("" when shorter).
+func phoneTail(s string, n int) string {
+	if len(s) <= n {
+		return ""
+	}
+	return s[len(s)-n:]
+}

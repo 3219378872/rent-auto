@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/ratelimit"
 )
 
 type JobKind int
@@ -214,6 +215,9 @@ func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 	e.lastErr = ""
 	if err != nil {
 		e.lastErr = err.Error()
+		e.failStreak++ // same accounting as scheduled runs
+	} else {
+		e.failStreak = 0
 	}
 	e.next = s.initialNext(e.job, time.Now())
 	s.mu.Unlock()
@@ -255,7 +259,9 @@ func (c *ChannelLimiter) For(channel string) platform.Limiter {
 	if l, ok := c.bkt[channel]; ok {
 		return l
 	}
-	l := newTokenBucket(c.rps)
+	// Single shared pacer implementation (internal/ratelimit); scheduler keeps
+	// only the per-channel keying policy.
+	l := ratelimit.New(c.rps)
 	c.bkt[channel] = l
 	return l
 }

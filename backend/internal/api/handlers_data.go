@@ -67,7 +67,8 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Store.ListTemplates(r.Context())
+	limit, offset := pageParams(r)
+	items, err := s.Store.ListTemplates(r.Context(), limit, offset)
 	if err != nil {
 		s.internalError(w, err)
 		return

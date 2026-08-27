@@ -29,8 +29,8 @@ func (f *recordingChannels) GetSmsUpSignInConfig(context.Context) (uu.SmsUpConfi
 	return uu.SmsUpConfig{}, nil
 }
 
-func (f *recordingChannels) VerifyUUSms(context.Context, string, string, string, string) error {
-	return nil
+func (f *recordingChannels) VerifyUUSms(context.Context, string, string, string, string) (string, error) {
+	return "abcd1234", nil
 }
 
 func (f *recordingChannels) SetECOCreds(context.Context, string, string, string) error {
