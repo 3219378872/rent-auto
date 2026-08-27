@@ -86,8 +86,11 @@ dev-up:
 dev-down:
 	docker compose -f deploy/docker-compose.yml down
 
+# 加载 <dir>/.env（dotenv 约定：仅填充当前环境未导出的变量，外部环境优先；空值不覆盖）
+load-env = if [ -f $(1)/.env ]; then while IFS='=' read -r k v; do case "$$k" in ''|'\#'*) continue ;; esac; [ -n "$${!k+x}" ] || export "$$k=$$v"; done < $(1)/.env; fi
+
 server:
-	cd $(BACKEND) && go run ./cmd/server
+	$(call load-env,$(BACKEND)); cd $(BACKEND) && go run ./cmd/server
 
 web:
 	cd $(FRONTEND) && pnpm dev

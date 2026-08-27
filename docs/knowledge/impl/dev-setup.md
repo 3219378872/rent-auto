@@ -10,7 +10,7 @@
 ```bash
 make dev-up                    # 起 docker-compose: postgres:16（宿主机端口 PG_HOST_PORT，默认 15432）
 cp backend/.env.example backend/.env   # 填 JWT_SECRET/APP_MASTER_KEY(32B hex)
-DATABASE_URL=postgres://rentauto:rentauto@localhost:$PG_HOST_PORT/rentauto?sslmode=disable make server
+make server                    # 自动加载 backend/.env（仅填充未导出的变量，外部环境优先）
 make web                       # 前端 :5173（代理 /api → 8080）
 ```
 
@@ -46,6 +46,10 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 | TRUST_PROXY_CIDRS | — | 可设置 X-Real-IP 的对端 CIDR（逗号分隔）；默认私网+回环——backend 端口直接公网暴露时必须收紧为仅回环并由代理覆写头 |
 | TRUST_PROXY_CIDRS | — | 允许设置 X-Real-IP 的对端 CIDR 逗号分隔；缺省=回环+RFC1918+ULA（backend 端口不发布的部署下安全；公网直连必须收紧） |
 | LOG_LEVEL | — | debug/info/warn |
+
+`make server` 自动加载 `backend/.env`（.gitignore 已忽略）：仅填充 shell 未导出的变量，
+外部环境优先于 .env，`.env` 内留空的键等价于未设置。注意：JWT_SECRET/APP_MASTER_KEY
+一经使用须保持稳定——更换 JWT_SECRET 使面板会话失效，更换 APP_MASTER_KEY 使已存渠道凭证无法解密。
 
 ## 集成测试
 
