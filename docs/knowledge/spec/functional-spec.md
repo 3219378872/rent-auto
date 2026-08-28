@@ -66,6 +66,9 @@
 - 策略字段 route ∈ {uu_only, eco_only, both, uu_primary_eco_fallback}
 - fallback 触发条件：UU token 失效 或 该商品在 UU 连续 N 天(默认7)无在架记录
 - Reconciler 保证路由意图最终一致（在正确渠道上架、从错误渠道下架）
+- ECO 出租上架一律开启转租且转租价由平台动态定价（SupportSublet=1 +
+  SubletPricingMethod=2，上架与改价载荷均携带；自定义转租价字段不传）→
+  枚举语义记 platform-eco-api-notes.md
 
 ## 5. Open Questions
 - ECO 改价接口是否支持只改租赁不改出售（PublishType=2 的行为边界）→ 待真机验证，结论记 platform-eco-api-notes.md

@@ -129,6 +129,7 @@ func (a *Adapter) PublishLease(ctx context.Context, items []platform.PublishLeas
 			v := it.LongRentPrice
 			p.LongRentPrice = &v
 		}
+		applySubletPolicy(&p)
 		payload = append(payload, p)
 	}
 	results, err := a.c.PublishRentAndSale(ctx, a.steamID, PublishTypeAdd, payload)
@@ -180,6 +181,7 @@ func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeas
 			v := it.LongRentPrice
 			p.LongRentPrice = &v
 		}
+		applySubletPolicy(&p)
 		payload = append(payload, p)
 	}
 	results, err := a.c.PublishRentAndSale(ctx, a.steamID, PublishTypeMod, payload)

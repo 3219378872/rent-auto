@@ -16,16 +16,40 @@ const (
 	PublishTypeMod = 2
 )
 
+// Sublet (转租) policy per official PublishRentAndSaleItemModel schema
+// (api-220956685): SupportSublet 0=关闭 1=开启 99=禁用;
+// SubletPricingMethod 1=自定义价格 2=动态定价 (platform-managed).
+// Channel policy: every ECO rent listing allows sublet priced dynamically
+// by the platform — custom sublet price fields (SubletPrice et al.) stay
+// unset for that reason.
+const (
+	SubletOff      = 0
+	SubletOn       = 1
+	SubletDisabled = 99
+
+	SubletPricingCustom  = 1
+	SubletPricingDynamic = 2
+)
+
 type RentPublishItem struct {
-	AssetID         string   `json:"AssetId,omitempty"`
-	StockID         string   `json:"StockId,omitempty"`
-	SteamGameID     string   `json:"SteamGameId"`
-	TradeTypes      []int    `json:"TradeTypes"`
-	RentPrice       float64  `json:"RentPrice"`
-	LongRentPrice   *float64 `json:"LongRentPrice,omitempty"`
-	RentMaxDay      int      `json:"RentMaxDay"`
-	RentDeposits    float64  `json:"RentDeposits"`
-	RentDescription string   `json:"RentDescription,omitempty"`
+	AssetID             string   `json:"AssetId,omitempty"`
+	StockID             string   `json:"StockId,omitempty"`
+	SteamGameID         string   `json:"SteamGameId"`
+	TradeTypes          []int    `json:"TradeTypes"`
+	RentPrice           float64  `json:"RentPrice"`
+	LongRentPrice       *float64 `json:"LongRentPrice,omitempty"`
+	RentMaxDay          int      `json:"RentMaxDay"`
+	RentDeposits        float64  `json:"RentDeposits"`
+	RentDescription     string   `json:"RentDescription,omitempty"`
+	SupportSublet       int      `json:"SupportSublet"`
+	SubletPricingMethod int      `json:"SubletPricingMethod"`
+}
+
+// applySubletPolicy stamps the channel-wide sublet policy onto a rent item
+// (publish and reprice alike — reprice must carry the full item body).
+func applySubletPolicy(p *RentPublishItem) {
+	p.SupportSublet = SubletOn
+	p.SubletPricingMethod = SubletPricingDynamic
 }
 
 type publishItemResult struct {

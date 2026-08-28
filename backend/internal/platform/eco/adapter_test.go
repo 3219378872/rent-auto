@@ -51,6 +51,11 @@ func TestAdapterPublishAndReprice(t *testing.T) {
 	if items[1].LongRentPrice != nil || items[1].RentMaxDay != 8 {
 		t.Fatalf("items[1]: %+v", items[1])
 	}
+	for i, it := range items {
+		if it.SupportSublet != SubletOn || it.SubletPricingMethod != SubletPricingDynamic {
+			t.Fatalf("items[%d] sublet policy: %+v", i, it)
+		}
+	}
 
 	rep, err := ad.RepriceLease(ctx, []platform.RepriceLeaseRequest{
 		{AssetRef: "b1", GoodsRef: "GN1", RentPrice: 1.3, MaxDays: 30, Deposit: 140},
@@ -64,6 +69,16 @@ func TestAdapterPublishAndReprice(t *testing.T) {
 	}
 	if !strings.Contains(string(modAssets), `"AssetId":"b1"`) {
 		t.Fatalf("mod assets must address by AssetId: %s", modAssets)
+	}
+	var modItems []RentPublishItem
+	if err := json.Unmarshal([]byte(modAssets), &modItems); err != nil {
+		t.Fatal(err)
+	}
+	for i, it := range modItems {
+		// reprice must re-assert the sublet policy: the mod body is a full item
+		if it.SupportSublet != SubletOn || it.SubletPricingMethod != SubletPricingDynamic {
+			t.Fatalf("modItems[%d] sublet policy: %+v", i, it)
+		}
 	}
 }
 

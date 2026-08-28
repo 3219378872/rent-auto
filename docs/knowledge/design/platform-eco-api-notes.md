@@ -23,7 +23,7 @@ RentDeposits = max( 平台参考价×140%, RentPrice×RentMaxDay, LongRentPrice�
 
 | 端点 | 用途 | 约束 |
 |---|---|---|
-| /Api/Rent/PublishRentAndSaleGoods | 上架(1)/改价(2)，可租可售 TradeTypes=[2] | 单次≤100；RentMaxDay≥8；>21天为长租须填 LongRentPrice |
+| /Api/Rent/PublishRentAndSaleGoods | 上架(1)/改价(2)，可租可售 TradeTypes=[2] | 单次≤100；RentMaxDay≥8；>21天为长租须填 LongRentPrice；转租策略见下节 |
 | /Api/Rent/DelistingRentGoods | 下架出租 | — |
 | /Api/Rent/QuerySelfRentGoods | 我的租赁货架 | 分页≤100；State: 已上架=1/出租中=2 |
 | /Api/Rent/SellerRentOrderList | 出租订单 | StartTime/EndTime 必填(格式 yyyy-MM-dd HH:mm:ss)；状态枚举见下 |
@@ -45,6 +45,20 @@ SteamStockStatus（QueryStock 响应，api-220956670 权威）: 1待上架→in_
 QueryStock 响应字段真机校订（2026-08-27）：**无 MarkPrice 字段**——价格用
 Price(平台市场价)+SteamPrice(Steam市场价)，另有 Tradable/CanPublish(bool)、
 PaintWear(string) 等；请求体用 `GameId`（非 SteamGameId），PageSize≤100。
+
+## 转租（Sublet）策略（2026-08-28）
+
+PublishRentAndSaleItemModel（官方 OpenAPI schema-123578183）含转租组字段：
+
+- `SupportSublet`：关闭=0 / 开启转租=1 / 禁用=99
+- `SubletPricingMethod`：自定义价格=1 / **动态定价=2**（平台随市场自动调转租价，
+  此时无需传 SubletPrice / SubletLongRentPrice / SubletMinPriceRatio）
+- `SubletSellerFreeRentDay`：转租卖家免租金天数（可选，本项目不传）
+
+本项目渠道策略（固定，非策略参数）：**所有 ECO 出租项开启转租并采用平台
+动态定价**——上架与改价载荷均携带 `SupportSublet=1 + SubletPricingMethod=2`，
+自定义转租价字段一律不传（改价 PublishType=2 是全量项体，改价时同样重申）。
+Go 实现锁定于 `eco.applySubletPolicy`，mock 契约测试断言两组字段。
 
 ## SteamId 绑定（PublishRentAndSaleGoods 前置）
 
