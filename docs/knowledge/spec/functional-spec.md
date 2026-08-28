@@ -37,7 +37,7 @@
 
 | 任务 | 默认节奏 | 规格 |
 |---|---|---|
-| reprice | 每 31m±90s 抖动 | 在架商品全量重估；仅当变化超过最小步长才提交；频控限速；风控退避；策略级 dry-run 双门禁 |
+| reprice | 每 31m±90s 抖动 | 在架商品全量重估；仅当变化超过最小步长才提交；频控限速；风控退避；策略级 dry-run 双门禁；ECO 转租补齐：sublet_applied=false 豁免噪声下限提交一次（冷却/幅度护栏仍守，接受后置位，迁移 0008） |
 | factor_events | 每 17m±60s | 终态订单折算 listings.factor（同 listing 批内顺序累计，单事务落库）；stale 步降；f_min 回归 1.00+审计告警 |
 | inventory_sync | 每 30m±60s | 两渠道库存拉取 upsert；成本价维护 |
 | shelf_sync | 每 10m±30s | 货架快照 upsert listings.actual_state |

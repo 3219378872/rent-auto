@@ -141,6 +141,10 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			Now:           now,
 			RentMaxDayMin: ad.Caps().RentMaxDayMin,
 			RentMaxDayMax: ad.Caps().RentMaxDayMax,
+			// ECO listings that have never had the sublet policy accepted by
+			// the platform must push a payload even at an unchanged price —
+			// cooldown and change-rate cap still apply (2026-08-28 backfill).
+			IgnoreNoiseFloor: c.Channel == domain.ChannelECO && !c.SubletApplied,
 		}
 		decision := pricing.Decide(in)
 
@@ -195,6 +199,13 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			}{decision.Rent, decision.Long, decision.Deposit, decision.MaxDays}
 			if uerr := d.Store.UpdateListingDecision(ctx, c.ListingID, newVals); uerr != nil {
 				d.Log.Error("listing update failed", "listing", c.ListingID, "err", uerr)
+			}
+			if in.IgnoreNoiseFloor {
+				if merr := d.Store.MarkListingSubletApplied(ctx, c.ListingID); merr != nil {
+					// Leaving the flag false is safe: the next cycle retries the
+					// forced submission instead of silently skipping backfill.
+					d.Log.Error("sublet flag update failed", "listing", c.ListingID, "err", merr)
+				}
 			}
 		} else if err != nil {
 			d.Log.Warn("reprice call failed", "goods", c.GoodsRef, "err", err)

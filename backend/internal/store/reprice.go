@@ -13,24 +13,25 @@ import (
 
 // RepriceCandidate is one listing joined with its template benchmark state.
 type RepriceCandidate struct {
-	ListingID    int64          `json:"listing_id"`
-	Channel      domain.Channel `json:"channel"`
-	HashName     string         `json:"hash_name"`
-	GoodsRef     string         `json:"goods_ref"`
-	AssetID      string         `json:"asset_id"`
-	RentPrice    float64        `json:"rent_price"`
-	LongPrice    float64        `json:"long_rent_price"`
-	Deposit      float64        `json:"deposit"`
-	Factor       float64        `json:"factor"`
-	V            *float64       `json:"value_anchor"`
-	UUTemplateID *int64         `json:"uu_template_id"`
-	LastActionAt *time.Time     `json:"last_action_at"`
+	ListingID     int64          `json:"listing_id"`
+	Channel       domain.Channel `json:"channel"`
+	HashName      string         `json:"hash_name"`
+	GoodsRef      string         `json:"goods_ref"`
+	AssetID       string         `json:"asset_id"`
+	RentPrice     float64        `json:"rent_price"`
+	LongPrice     float64        `json:"long_rent_price"`
+	Deposit       float64        `json:"deposit"`
+	Factor        float64        `json:"factor"`
+	V             *float64       `json:"value_anchor"`
+	UUTemplateID  *int64         `json:"uu_template_id"`
+	LastActionAt  *time.Time     `json:"last_action_at"`
+	SubletApplied bool           `json:"sublet_applied"`
 }
 
 const repriceCols = `l.id, l.channel, l.hash_name, l.goods_ref, l.asset_id,
 	l.rent_price, coalesce(l.long_rent_price,0), coalesce(l.deposit,0), coalesce(l.factor,1.0),
 	t.value_anchor, t.uu_template_id,
-	COALESCE(l.last_reprice_at, l.listed_at)`
+	COALESCE(l.last_reprice_at, l.listed_at), l.sublet_applied`
 
 func (s *Store) ListRepriceCandidates(ctx context.Context, channel domain.Channel) ([]RepriceCandidate, error) {
 	rows, err := s.Pool.Query(ctx,
@@ -45,7 +46,8 @@ func (s *Store) ListRepriceCandidates(ctx context.Context, channel domain.Channe
 	for rows.Next() {
 		var c RepriceCandidate
 		if err := rows.Scan(&c.ListingID, &c.Channel, &c.HashName, &c.GoodsRef, &c.AssetID,
-			&c.RentPrice, &c.LongPrice, &c.Deposit, &c.Factor, &c.V, &c.UUTemplateID, &c.LastActionAt); err != nil {
+			&c.RentPrice, &c.LongPrice, &c.Deposit, &c.Factor, &c.V, &c.UUTemplateID,
+			&c.LastActionAt, &c.SubletApplied); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -61,6 +63,15 @@ func (s *Store) UpdateListingDecision(ctx context.Context, listingID int64, d st
 		`UPDATE listings SET rent_price=$2, long_rent_price=$3, deposit=$4, max_days=$5,
 		        last_reprice_at=now(), actual_synced_at=now() WHERE id=$1`,
 		listingID, d.Rent, nullIf(d.Long), d.Deposit, d.Days)
+	return err
+}
+
+// MarkListingSubletApplied records that a reprice/publish payload carrying the
+// ECO sublet policy (SupportSublet=1 + SubletPricingMethod=2) was accepted by
+// the platform for this listing; the one-shot noise-floor exemption ends here.
+func (s *Store) MarkListingSubletApplied(ctx context.Context, listingID int64) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE listings SET sublet_applied=true WHERE id=$1`, listingID)
 	return err
 }
 

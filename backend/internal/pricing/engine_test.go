@@ -170,6 +170,31 @@ func TestDecideChangeCapClamp(t *testing.T) {
 	}
 }
 
+// IgnoreNoiseFloor must bypass ONLY the noise-floor skip: a sub-2% move that
+// would normally be dropped still submits (ECO sublet backfill), while the
+// change-rate cap keeps the payload within guardrails.
+func TestDecideIgnoreNoiseFloor(t *testing.T) {
+	in := baseInput()
+	in.Cur.RentPrice = 2.0
+	in.Cur.LastActionAt = in.Now.Add(-time.Hour)
+	if d := Decide(in); d.OK || d.SkipReason != "noise" {
+		t.Fatalf("baseline must noise-skip: %+v", d)
+	}
+	in.IgnoreNoiseFloor = true
+	d := Decide(in)
+	if !d.OK {
+		t.Fatalf("forced skip: %s", d.SkipReason)
+	}
+	if d.Rent != 2.0 {
+		t.Fatalf("forced rent=%v, want unchanged capped 2.0", d.Rent)
+	}
+	// cooldown is respected regardless of the flag
+	in.Cur.LastActionAt = in.Now.Add(-5 * time.Minute)
+	if d := Decide(in); d.OK || d.SkipReason != "cooldown" {
+		t.Fatalf("cooldown must still apply: %+v", d)
+	}
+}
+
 func TestDecideECODerivedDeposit(t *testing.T) {
 	in := baseInput()
 	in.Channel = domain.ChannelECO

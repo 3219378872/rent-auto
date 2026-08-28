@@ -225,6 +225,88 @@ func testLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// ECO sublet backfill (2026-08-28): a listing that predates the sublet payload
+// policy (sublet_applied=false) must reach the platform even when the computed
+// price is unchanged (noise floor bypassed, cooldown/cap still respected);
+// one accepted submission flips the flag and the forced path ends.
+func TestRepriceSubletBackfillForcedOnce(t *testing.T) {
+	st := openDB(t)
+	ctx := context.Background()
+	hash := "Backfill Item (Minimal Wear)"
+	if err := st.UpsertTemplate(ctx, store.Template{
+		HashName: hash, DisplayName: hash, UUTemplateID: ptr(555),
+		UUMarkPrice: ptrF(100), EcoRefPrice: ptrF(100),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecomputeAnchors(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// target base_short = mean(2.0,2.2)×0.97 = 2.04; listing at 2.02 → 0.99%
+	// move = noise floor → would skip without the backfill exemption.
+	snaps := []store.Snapshot{
+		{HashName: hash, Source: "uu_market", Kind: "lease_short", Rank: 1, Price: 2.0},
+		{HashName: hash, Source: "uu_market", Kind: "lease_short", Rank: 2, Price: 2.2},
+	}
+	if err := st.InsertSnapshots(ctx, snaps); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertListingFromShelf(ctx, domain.ShelfListing{
+		Channel: domain.ChannelECO, GoodsRef: "GN-555", AssetID: "a-555",
+		HashName: hash, DisplayName: hash, RentPrice: 2.02, Deposit: 100, MaxDays: 30,
+		ListedAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.EnsureGlobalStrategy(ctx, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool.Exec(ctx, `UPDATE strategies SET real_execution_enabled=true WHERE scope='global'`); err != nil {
+		t.Fatal(err)
+	}
+
+	ad := &captureAdapter{ch: domain.ChannelECO}
+	deps := scheduler.Deps{Store: st, Log: testLog(), DryRun: false}
+	if err := deps.RunReprice(ctx, []platform.Adapter{ad}); err != nil {
+		t.Fatal(err)
+	}
+	dumpActions(t, st)
+	if len(ad.reprice) != 1 {
+		t.Fatalf("forced backfill must submit once, got %d", len(ad.reprice))
+	}
+	var applied bool
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT sublet_applied FROM listings WHERE goods_ref='GN-555'`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("sublet_applied must flip after an accepted submission")
+	}
+
+	// After the flag: rewind the cooldown and prove the noise skip resumes —
+	// no price move, no platform call.
+	if _, err := st.Pool.Exec(ctx,
+		`UPDATE listings SET last_reprice_at=now()-interval '1 hour' WHERE goods_ref='GN-555'`); err != nil {
+		t.Fatal(err)
+	}
+	ad.reprice = nil
+	if err := deps.RunReprice(ctx, []platform.Adapter{ad}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ad.reprice) != 0 {
+		t.Fatalf("flag must end forced submissions: %+v", ad.reprice)
+	}
+	var lastAction string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT action FROM price_actions pa JOIN listings l ON l.id=pa.listing_id
+		 WHERE l.goods_ref='GN-555' ORDER BY pa.id DESC LIMIT 1`).Scan(&lastAction); err != nil {
+		t.Fatal(err)
+	}
+	if lastAction != "skip" {
+		t.Fatalf("post-backfill run must noise-skip, got %q", lastAction)
+	}
+}
+
 // dumpActions prints recorded price actions for failure diagnostics.
 func dumpActions(t *testing.T, st *store.Store) {
 	t.Helper()

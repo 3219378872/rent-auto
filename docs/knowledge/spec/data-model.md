@@ -43,6 +43,9 @@ actual_state            -- unknown|none|active|leased|stale
 rent_price, long_rent_price, max_days, deposit numeric
 factor numeric DEFAULT 1.0        -- 反馈控制器状态（pricing-spec §3，0003+）
 last_factor_event_at timestamptz  -- 因子事件锚点（stale 阶梯计时起点，0005）
+sublet_applied bool DEFAULT false -- ECO 转租策略已被平台接受（0008）：
+                                  -- false 时 reprice 豁免噪声下限强制提交一次，
+                                  -- 接受后置位（上架成功即置位；仅 ECO 语义）
 strategy_id FK
 listed_at, last_reprice_at, actual_synced_at
 UNIQUE(channel, goods_ref)

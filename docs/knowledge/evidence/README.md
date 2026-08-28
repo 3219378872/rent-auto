@@ -37,7 +37,7 @@
 | 2026-08-27 UU 5050 门禁复诊+手动 Token 导入 | [2026-08-27-uu-captcha-rechallenge.md](2026-08-27-uu-captcha-rechallenge.md) | GetUUUK 修 UUID/ASCII key；5050 实验矩阵（版本/uk/网关全拦，上游同病）；`PUT /channels/uu` 手动导入落地，openapi v0.7.0 |
 | 2026-08-27 ECO 钱包端点 404 修复 | [2026-08-27-eco-wallet-endpoint-404.md](2026-08-27-eco-wallet-endpoint-404.md) | GetMerchantMoney 系转录错误，实际为 GetTotalMoney（官方 OpenAPI YAML 复核）；路径钉死回归测试；api-notes 已知坑 #7 |
 | 2026-08-27 首次真实上架轮（ECO-only 仅出租） | [2026-08-27-ops-round-eco-rent-listing.md](2026-08-27-ops-round-eco-rent-listing.md) | QueryStock 端点+SteamStockStatus/Price/Tradable 真机校订；UU 行情金额字段全字符串；recon 双渠道同资产去重+distinct 预算；EnsureGlobalStrategy 冲突目标修复（迁移 0007）；≥¥500 四件 ECO 实挂成功 |
-| 2026-08-28 ECO 出租全量开启转租（平台动态定价） | [2026-08-28-eco-sublet-dynamic-pricing.md](2026-08-28-eco-sublet-dynamic-pricing.md) | 上架/改价载荷固定 SupportSublet=1+SubletPricingMethod=2（平台动态转租价）；存量挂单经 reprice 周期自动补齐；api-notes 转租节建立 |
+| 2026-08-28 ECO 出租全量开启转租（平台动态定价） | [2026-08-28-eco-sublet-dynamic-pricing.md](2026-08-28-eco-sublet-dynamic-pricing.md) | 上架/改价载荷固定 SupportSublet=1+SubletPricingMethod=2（平台动态转租价）；存量经 listings.sublet_applied+噪声豁免立即补齐（迁移 0008）；api-notes 转租节建立 |
 | 2026-08-28 ECO 订单同步时区错位修复 | [2026-08-28-eco-orders-tz-8h-lag.md](2026-08-28-eco-orders-tz-8h-lag.md) | StartTime/EndTime 与响应时间串均为北京时间(UTC+8)；UTC 直发致新订单晚 8h 进 orders_sync 窗（Karambit 单缺失实锤）；formatEcoTime/parseEcoTime 统一 + upsert COALESCE 治愈存量；api-notes 已知坑 #8 |
 
 ## 事故复盘

@@ -60,6 +60,11 @@ PublishRentAndSaleItemModel（官方 OpenAPI schema-123578183）含转租组字�
 自定义转租价字段一律不传（改价 PublishType=2 是全量项体，改价时同样重申）。
 Go 实现锁定于 `eco.applySubletPolicy`，mock 契约测试断言两组字段。
 
+存量补齐（2026-08-28，迁移 0008）：货架回读（QuerySelfRentGoods/RentGoodsItem）
+**不含**转租字段，无法做状态比对；以 `listings.sublet_applied` 位追踪——
+false 的挂单在 reprice 时豁免噪声下限（价格不变也提交，冷却/幅度护栏仍守），
+平台接受后置位；上架成功即置位。
+
 ## SteamId 绑定（PublishRentAndSaleGoods 前置）
 
 发布/改价/下架均要求 SteamId 已绑定：适配器从 app_settings `eco_steam_id`

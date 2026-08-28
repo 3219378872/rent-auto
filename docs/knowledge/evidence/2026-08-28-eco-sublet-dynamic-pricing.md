@@ -37,7 +37,28 @@
   渠道级固定政策；若未来需按模板差异化，可将 SupportSublet/SubletPricingMethod
   提升为 strategies.params 字段（规格未预先承诺，避免过度设计）。
 - `SubletSellerFreeRentDay` 未设置：用户未要求免租金天数，保持平台默认。
-- 首次真实改价生效依赖 reprice 护栏（cooldown/min-step）：转租字段随最近
-  一次达标改价一并落平台；不强制立即改价。
 - 动态定价为平台侧行为，具体调价算法对本系统不透明（官方文档未展开）；
   若后续发现与转租相关的订单/收益口径变化，回写本文件与 api-notes。
+
+## 存量补齐轮（同日追加，用户决策「立即补齐」）
+
+初版实现依赖自然改价携带转租字段，但 reprice 的噪声护栏（价格变化
+< NoiseRatio 默认 2% 即 skip，engine.go 步骤4）会让存量四件挂单在价格
+不动时迟迟带不上策略（最长等 7 天 stale 步降）。用户选择立即补齐：
+
+- **迁移 0008**：`listings.sublet_applied bool NOT NULL DEFAULT false`
+  （货架回读 RentGoodsItem 官方 schema 不含转租字段，无法平台侧比对，
+  只能本地记账）。
+- **引擎**：`pricing.Input.IgnoreNoiseFloor` 仅豁免噪声下限——
+  冷却与幅度帽照常生效；`TestDecideIgnoreNoiseFloor` 三段断言
+  （基线 skip / 强制提交价格不变 / 冷却仍守）。
+- **调度器**：`IgnoreNoiseFloor = channel==eco && !sublet_applied`；
+  真实改价被平台接受后 `MarkListingSubletApplied` 置位（失败仅留日志，
+  下轮自然重试强制提交，不会静默丢补齐）。
+- **上架路径**：`RecordPublishedListing` 以 `$1='eco'` 直接置位
+  （ECO 上架载荷按构造携带策略），shelf sync 的 UpsertListingFromShelf
+  不触碰该位，避免把已补齐的挂单打回 false。
+- **集成测试**：`TestRepriceSubletBackfillForcedOnce`（rentauto_test 真库）——
+  2.02→目标 2.04（0.99% 噪声区间）首次强制提交 1 次、置位、倒回冷却后
+  第二轮恢复 noise skip、末条 price_action=skip。
+- 单元/集成/race 全绿；`make gate` 与 `make migrate-check` 见提交。

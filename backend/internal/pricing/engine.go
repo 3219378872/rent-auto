@@ -287,6 +287,12 @@ type Input struct {
 	// RentMaxDayMin/Max from channel capabilities (ECO 8..90)
 	RentMaxDayMin int
 	RentMaxDayMax int
+	// IgnoreNoiseFloor bypasses the noise-floor skip (a price move below
+	// NoiseRatio normally aborts the submission). Used for one-shot policy
+	// backfills (ECO sublet flag) where the payload must reach the platform
+	// even when the computed price is unchanged; the change-rate cap and
+	// cooldown still apply.
+	IgnoreNoiseFloor bool
 }
 
 type Decision struct {
@@ -346,7 +352,7 @@ func Decide(in Input) Decision {
 		if math.Abs(capped-old) > 1e-9 && capped != rent {
 			rent = capped
 		}
-		if math.Abs(rent-old)/math.Max(old, 0.01) < g.NoiseRatio {
+		if math.Abs(rent-old)/math.Max(old, 0.01) < g.NoiseRatio && !in.IgnoreNoiseFloor {
 			return Decision{SkipReason: "noise"}
 		}
 	}
