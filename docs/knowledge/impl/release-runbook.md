@@ -23,6 +23,23 @@ docker compose logs -f backend        # 观察启动迁移与健康检查
   任何跨机访问需求一律走 backend 容器内网（`postgres:5432`），禁止改绑 `0.0.0.0`
 - ⚠️ 未设置 `SITE_ADDRESS` 时 Caddy 退化为 :80 明文——仅限内网调试，公网部署必须设置
 
+### 主机部署（ubuntu，2026-08-28 起）
+
+- **入口**：`http://100.102.138.9:8081`（Tailscale IP；ufw 仅放行 tailscale0，
+  纯 HTTP 明文，公网/局域网不可达——面板持平台凭证，勿放宽 ufw）
+- **位置**：`lee@ubuntu:~/rent-auto/deploy`；`lee` 不在 docker 组，一律
+  `sudo docker compose …`（免密 sudo）
+- **代码更新**：开发机 `tar czf - --exclude=node_modules --exclude=dist --exclude=bin --exclude=Steamauto . | ssh lee@ubuntu 'tar xzf - -C ~/rent-auto'`
+  → 远端 `sudo docker compose up -d --build`（启动时迁移自动前滚）
+- **⚠️ APP_MASTER_KEY 双 key 纪律**：本地 dev 后端（`make server`）用
+  `backend/.env` 的 key 加密渠道凭证；远端 `deploy/.env` 必须与之**同 key**，
+  否则解密失败、渠道页显示为空（2026-08-28 迁移事故，见 evidence 同日文档）。
+  改任一 key 前先确认对方存量密文口径
+- **数据搬迁**：`pg_dump -Fc` → scp → `pg_restore --clean --if-exists`
+  （schema_migrations 随行，backend 启动不重复迁移）
+- **跨机双开红线**：本地 `make server` 与远端实例**不可同时运行**——advisory
+  lock 按库加锁，拦不住两实例各自操作同一批平台账号
+
 ## 备份
 
 - Postgres 每日 dump（compose 内置 cron 服务）保留14天；恢复演练每月一次
