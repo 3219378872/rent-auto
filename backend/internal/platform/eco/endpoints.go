@@ -169,6 +169,28 @@ func (c *Client) OffshelfRentGoods(ctx context.Context, goodsNums []string) ([]d
 
 // ---- seller rent orders ----
 
+// ecoCST is the platform's wall-clock zone (Beijing, UTC+8). Real-machine
+// finding 2026-08-28: time-window request params are compared against CST
+// CreateTime strings, and every timestamp string in responses is CST too —
+// formatting UTC bounds verbatim made fresh rent orders invisible to
+// orders_sync for ~8h (evidence 2026-08-28-eco-orders-tz-8h-lag.md).
+var ecoCST = time.FixedZone("UTC+8", 8*3600)
+
+// formatEcoTime renders t in the platform's wall-clock zone.
+func formatEcoTime(t time.Time, layout string) string {
+	return t.In(ecoCST).Format(layout)
+}
+
+// parseEcoTime parses a platform timestamp string in the platform's zone;
+// malformed input yields the zero time (callers store NULL via nullTime).
+func parseEcoTime(s, layout string) time.Time {
+	t, err := time.ParseInLocation(layout, s, ecoCST)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 type SellerRentOrder struct {
 	OrderNum     string  `json:"OrderNum"`
 	RentType     int     `json:"RentType"` // 1 short, 2 long
@@ -219,8 +241,8 @@ func (c *Client) sellerRentOrderPage(ctx context.Context, start, end time.Time, 
 	pageIndex := 1
 	for pageIndex <= maxListPages {
 		biz := map[string]any{
-			"StartTime": start.Format(layout),
-			"EndTime":   end.Format(layout),
+			"StartTime": formatEcoTime(start, layout),
+			"EndTime":   formatEcoTime(end, layout),
 			"PageIndex": pageIndex,
 			"PageSize":  100,
 		}

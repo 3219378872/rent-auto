@@ -26,7 +26,7 @@ RentDeposits = max( 平台参考价×140%, RentPrice×RentMaxDay, LongRentPrice�
 | /Api/Rent/PublishRentAndSaleGoods | 上架(1)/改价(2)，可租可售 TradeTypes=[2] | 单次≤100；RentMaxDay≥8；>21天为长租须填 LongRentPrice；转租策略见下节 |
 | /Api/Rent/DelistingRentGoods | 下架出租 | — |
 | /Api/Rent/QuerySelfRentGoods | 我的租赁货架 | 分页≤100；State: 已上架=1/出租中=2 |
-| /Api/Rent/SellerRentOrderList | 出租订单 | StartTime/EndTime 必填(格式 yyyy-MM-dd HH:mm:ss)；状态枚举见下 |
+| /Api/Rent/SellerRentOrderList | 出租订单 | StartTime/EndTime 必填(格式 yyyy-MM-dd HH:mm:ss，**北京时间 UTC+8**，见已知坑#8)；状态枚举见下 |
 | /Api/Rent/SellerRentOrderDetails | 订单详情 | — |
 | /Api/Market/GetHashNameAndPriceList | **全量在售价 dump** | 两次调用间隔 **≥60s**（平台要求） |
 | /Api/Selling/QueryStock + RefreshUserSteamStock | Steam库存 | 2026-08-27 真机校订：QuerySteamStock 系转录 404，实际 QueryStock（api-220956670）；刷新为异步 |
@@ -83,6 +83,14 @@ Go 实现锁定于 `eco.applySubletPolicy`，mock 契约测试断言两组字段
    GetMerchantMoney 系早期转录错误，实际为 GetTotalMoney；资金流水为 GetFundFlow；
    同日 QuerySteamStock → 实际 **QueryStock**，同类转录错误第二例——
    新端点上线前必须先抓 YAML 核对路径与字段名）
+8. **所有时间参数与时间字符串均为北京时间（UTC+8）墙钟**（2026-08-28 真机确诊）：
+   SellerRentOrderList/SellerOrderList 的 StartTime/EndTime 按平台 CST 时钟
+   字符串比较——发送 UTC 墙钟格式会使新订单在 orders_sync 中**晚约 8 小时可见**
+   （Karambit 订单 23:40 UTC 创建，直到 07:40 UTC 才进窗）；
+   响应 CreateTime/RentExpire/RevertExpire 亦为 CST 字符串，须按 +08 解析，
+   否则 started_at/due_at 系统性偏早 8 小时。客户端已统一走
+   `formatEcoTime`/`parseEcoTime`（`ecoCST`）， SellerOrderList 的
+   日期粒度参数同样转换（跨日界日期会变）。
 
 ## Go 实现补充约定（M2b 落地结论）
 

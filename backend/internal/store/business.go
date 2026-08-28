@@ -231,6 +231,8 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 		   status=EXCLUDED.status, order_type=EXCLUDED.order_type,
 		   rent_days=EXCLUDED.rent_days, rent_price=EXCLUDED.rent_price,
 		   order_amount=EXCLUDED.order_amount, deposits=EXCLUDED.deposits,
+		   started_at=COALESCE(EXCLUDED.started_at, lease_orders.started_at),
+		   due_at=COALESCE(EXCLUDED.due_at, lease_orders.due_at),
 		   finished_at=COALESCE(lease_orders.finished_at, EXCLUDED.finished_at),
 		   income_recorded = lease_orders.income_recorded OR $14,
 		   raw=COALESCE(EXCLUDED.raw, lease_orders.raw), updated_at=now()`,

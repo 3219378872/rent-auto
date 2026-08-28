@@ -1,7 +1,7 @@
 # 证据索引（Evidence）
 
 > 每个里程碑完成时归档验证证据于此。规则：无证据不合并。
-> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；迭代打磨轮 round4–9 归档（2026-08-24）；事故复盘 4 份（2026-08-23）；2026-08-25 UU 图形校验死循环修复；第四轮全面审查 round10 归档（2026-08-27）；2026-08-27 Steam 真机登录 wire5 修复归档；2026-08-27 ECO 钱包端点 404 修复归档；2026-08-27 首次真实上架轮（ECO-only 仅出租 + 双端点真机校订 + recon 去重）归档；2026-08-28 ECO 转租+平台动态定价策略归档**。
+> 状态：**M0–M11 全部归档完毕；三轮综合审查修复归档（2026-08-23/24）；迭代打磨轮 round4–9 归档（2026-08-24）；事故复盘 4 份（2026-08-23）；2026-08-25 UU 图形校验死循环修复；第四轮全面审查 round10 归档（2026-08-27）；2026-08-27 Steam 真机登录 wire5 修复归档；2026-08-27 ECO 钱包端点 404 修复归档；2026-08-27 首次真实上架轮（ECO-only 仅出租 + 双端点真机校订 + recon 去重）归档；2026-08-28 ECO 转租+平台动态定价策略归档；2026-08-28 ECO 订单同步时区错位修复归档**。
 
 | 里程碑 | 证据文档 | 结论 |
 |---|---|---|
@@ -38,6 +38,7 @@
 | 2026-08-27 ECO 钱包端点 404 修复 | [2026-08-27-eco-wallet-endpoint-404.md](2026-08-27-eco-wallet-endpoint-404.md) | GetMerchantMoney 系转录错误，实际为 GetTotalMoney（官方 OpenAPI YAML 复核）；路径钉死回归测试；api-notes 已知坑 #7 |
 | 2026-08-27 首次真实上架轮（ECO-only 仅出租） | [2026-08-27-ops-round-eco-rent-listing.md](2026-08-27-ops-round-eco-rent-listing.md) | QueryStock 端点+SteamStockStatus/Price/Tradable 真机校订；UU 行情金额字段全字符串；recon 双渠道同资产去重+distinct 预算；EnsureGlobalStrategy 冲突目标修复（迁移 0007）；≥¥500 四件 ECO 实挂成功 |
 | 2026-08-28 ECO 出租全量开启转租（平台动态定价） | [2026-08-28-eco-sublet-dynamic-pricing.md](2026-08-28-eco-sublet-dynamic-pricing.md) | 上架/改价载荷固定 SupportSublet=1+SubletPricingMethod=2（平台动态转租价）；存量挂单经 reprice 周期自动补齐；api-notes 转租节建立 |
+| 2026-08-28 ECO 订单同步时区错位修复 | [2026-08-28-eco-orders-tz-8h-lag.md](2026-08-28-eco-orders-tz-8h-lag.md) | StartTime/EndTime 与响应时间串均为北京时间(UTC+8)；UTC 直发致新订单晚 8h 进 orders_sync 窗（Karambit 单缺失实锤）；formatEcoTime/parseEcoTime 统一 + upsert COALESCE 治愈存量；api-notes 已知坑 #8 |
 
 ## 事故复盘
 

@@ -95,7 +95,7 @@ func (a *Adapter) LeaseShelf(ctx context.Context) ([]domain.ShelfListing, error)
 	}
 	out := make([]domain.ShelfListing, 0, len(goods))
 	for _, g := range goods {
-		listedAt, _ := time.Parse(time.DateTime, g.CreateTime)
+		listedAt := parseEcoTime(g.CreateTime, time.DateTime)
 		out = append(out, domain.ShelfListing{
 			Channel:       domain.ChannelECO,
 			GoodsRef:      g.GoodsNum,
@@ -237,8 +237,8 @@ func (a *Adapter) LeaseOrders(ctx context.Context, since time.Time) ([]domain.Le
 	const layout = "2006-01-02 15:04:05"
 	out := make([]domain.LeaseOrder, 0, len(orders))
 	for _, o := range orders {
-		started, _ := time.Parse(layout, o.CreateTime)
-		due, _ := time.Parse(layout, o.RentExpire)
+		started := parseEcoTime(o.CreateTime, layout)
+		due := parseEcoTime(o.RentExpire, layout)
 		ot := "short"
 		if o.RentType == 2 {
 			ot = "long"

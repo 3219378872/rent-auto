@@ -194,6 +194,8 @@ func TestOffshelfAndOrders(t *testing.T) {
 			// Chunked query (platform caps windows at 31d): only the segment
 			// covering the order's CreateTime returns it; every request must
 			// stay within the 31d window or the platform answers code=7002.
+			// Sent bounds are platform-CST wall strings; the fake compares
+			// wall clocks so the created constant is written zone-agnostically.
 			st, err1 := time.Parse("2006-01-02 15:04:05", body["StartTime"].(string))
 			et, err2 := time.Parse("2006-01-02 15:04:05", body["EndTime"].(string))
 			if err1 != nil || err2 != nil {
@@ -229,6 +231,54 @@ func TestOffshelfAndOrders(t *testing.T) {
 	o := orders[0]
 	if o.OrderType != "long" || o.Status != "bought_out" || o.Amount != 297 || o.Channel != domain.ChannelECO {
 		t.Fatalf("order: %+v", o)
+	}
+	// Response timestamps are platform-CST strings and must land as the real
+	// UTC instants (regression 2026-08-28: parsed as UTC they ran 8h early,
+	// skewing started_at/due_at and every rollup anchored on them).
+	if want := time.Date(2026, 8, 1, 2, 0, 0, 0, time.UTC); !o.StartedAt.Equal(want) {
+		t.Fatalf("started_at = %s, want %s", o.StartedAt, want)
+	}
+	if want := time.Date(2026, 8, 31, 2, 0, 0, 0, time.UTC); !o.DueAt.Equal(want) {
+		t.Fatalf("due_at = %s, want %s", o.DueAt, want)
+	}
+}
+
+// Regression 2026-08-28: window params must be rendered in the platform's
+// Beijing wall clock. UTC-formatted bounds made fresh rent orders invisible
+// to orders_sync for ~8h (the platform compares them against CST CreateTime
+// strings, evidence 2026-08-28-eco-orders-tz-8h-lag.md).
+func TestSellerRentOrderListWindowInPlatformZone(t *testing.T) {
+	var gotStart, gotEnd string
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		gotStart, _ = body["StartTime"].(string)
+		gotEnd, _ = body["EndTime"].(string)
+		return okEnv(`{"TotalRecord":0,"PageResult":null}`)
+	})
+	end := time.Date(2026, 8, 28, 2, 18, 18, 0, time.UTC)
+	if _, err := c.SellerRentOrderList(context.Background(), end.AddDate(0, 0, -5), end, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotStart != "2026-08-23 10:18:18" || gotEnd != "2026-08-28 10:18:18" {
+		t.Fatalf("window not rendered in +08: start=%q end=%q", gotStart, gotEnd)
+	}
+}
+
+// The sale-order list sends date-only bounds; the +08 conversion must shift
+// late-UTC days across the date boundary too (delivery loop relies on the
+// EndTime covering orders created "today" on platform wall clock).
+func TestSellerOrderListWindowInPlatformZone(t *testing.T) {
+	var gotStart, gotEnd string
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		gotStart, _ = body["StartTime"].(string)
+		gotEnd, _ = body["EndTime"].(string)
+		return okEnv(`{"PageResult":[],"TotalRecord":0}`)
+	})
+	end := time.Date(2026, 8, 27, 20, 0, 0, 0, time.UTC) // already 08-28 04:00 in +08
+	if _, err := c.SellerOrderList(context.Background(), end.AddDate(0, 0, -2), end, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotStart != "2026-08-26" || gotEnd != "2026-08-28" {
+		t.Fatalf("window not rendered in +08: start=%q end=%q", gotStart, gotEnd)
 	}
 }
 
@@ -266,6 +316,10 @@ func TestAdapterCapsAndShelfMapping(t *testing.T) {
 	}
 	if shelf[0].GoodsRef != "G9" || !shelf[0].Leased || shelf[0].Deposit != 140 {
 		t.Fatalf("shelf: %+v", shelf[0])
+	}
+	// Shelf CreateTime is a platform-CST string (regression 2026-08-28).
+	if want := time.Date(2026, 8, 1, 2, 0, 0, 0, time.UTC); !shelf[0].ListedAt.Equal(want) {
+		t.Fatalf("listed_at = %s, want %s", shelf[0].ListedAt, want)
 	}
 }
 

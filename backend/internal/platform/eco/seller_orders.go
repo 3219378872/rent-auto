@@ -30,8 +30,8 @@ func (c *Client) SellerOrderList(ctx context.Context, start, end time.Time, deta
 	pageIndex := 1
 	for pageIndex <= maxListPages {
 		biz := map[string]any{
-			"StartTime": start.Format(layout),
-			"EndTime":   end.Format(layout),
+			"StartTime": formatEcoTime(start, layout),
+			"EndTime":   formatEcoTime(end, layout),
 			"PageIndex": pageIndex,
 			"PageSize":  100,
 			"SteamId":   steamID,
