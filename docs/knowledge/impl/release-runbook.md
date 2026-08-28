@@ -29,8 +29,11 @@ docker compose logs -f backend        # 观察启动迁移与健康检查
   纯 HTTP 明文，公网/局域网不可达——面板持平台凭证，勿放宽 ufw）
 - **位置**：`lee@ubuntu:~/rent-auto/deploy`；`lee` 不在 docker 组，一律
   `sudo docker compose …`（免密 sudo）
-- **代码更新**：开发机 `tar czf - --exclude=node_modules --exclude=dist --exclude=bin --exclude=Steamauto . | ssh lee@ubuntu 'tar xzf - -C ~/rent-auto'`
-  → 远端 `sudo docker compose up -d --build`（启动时迁移自动前滚）
+- **代码更新（标准流，2026-08-28 定）**：本机改码 → `git push origin main`
+  （pre-push 钩子自动跑 `make gate`）→ 远端 `cd ~/rent-auto && git pull --ff-only
+  origin main` → `sudo docker compose up -d --build`（启动时迁移自动前滚）。
+  注意远端 `deploy/.env`、`backend/.env` 均已 gitignore，pull 不冲突；
+  origin URL 内嵌 GitHub PAT（随 .git 自本机迁入），勿在远端 log/echo 该 URL
 - **⚠️ APP_MASTER_KEY 双 key 纪律**：本地 dev 后端（`make server`）用
   `backend/.env` 的 key 加密渠道凭证；远端 `deploy/.env` 必须与之**同 key**，
   否则解密失败、渠道页显示为空（2026-08-28 迁移事故，见 evidence 同日文档）。
