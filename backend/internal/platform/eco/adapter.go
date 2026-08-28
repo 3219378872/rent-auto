@@ -37,20 +37,28 @@ func (a *Adapter) Healthy(ctx context.Context) error {
 }
 
 // Inventory is served from ECO's Steam-stock view; full sync lands in M3.
+// Inventory reads ECO's Steam-stock view (official OpenAPI api-220956670).
+// Response Status is the SteamStockStatus enum: 1 待上架, 2 出售上架,
+// 3 出售交易中, 4 出租上架, 5 出租交易中, 6 租售上架, 7 租售交易中,
+// 8 预售上架, 9 预售交易中, 10 打包上架, 11 打包交易中.
+// Mark price uses Price (平台市场价), falling back to SteamPrice (Steam市场价).
+// Single page of ≤100 — mirrors the UU adapter; page through if ever needed.
 func (a *Adapter) Inventory(ctx context.Context) ([]domain.InventoryItem, error) {
 	var raw struct {
 		PageResult []struct {
-			StockID   string  `json:"StockId"`
-			AssetID   string  `json:"AssetId"`
-			HashName  string  `json:"HashName"`
-			GoodsName string  `json:"GoodsName"`
-			MarkPrice float64 `json:"MarkPrice"`
-			Status    int     `json:"Status"`
+			StockID    string  `json:"StockId"`
+			AssetID    string  `json:"AssetId"`
+			HashName   string  `json:"HashName"`
+			GoodsName  string  `json:"GoodsName"`
+			SteamPrice float64 `json:"SteamPrice"`
+			Price      float64 `json:"Price"`
+			Tradable   bool    `json:"Tradable"`
+			Status     int     `json:"Status"`
 		} `json:"PageResult"`
 		TotalRecord int `json:"TotalRecord"`
 	}
-	biz := map[string]any{"SteamGameId": "730", "PageIndex": 1, "PageSize": 100}
-	if err := a.c.post(ctx, "/Api/Selling/QuerySteamStock", biz, &raw); err != nil {
+	biz := map[string]any{"GameId": "730", "PageIndex": 1, "PageSize": 100}
+	if err := a.c.post(ctx, "/Api/Selling/QueryStock", biz, &raw); err != nil {
 		return nil, err
 	}
 	out := make([]domain.InventoryItem, 0, len(raw.PageResult))
@@ -59,14 +67,22 @@ func (a *Adapter) Inventory(ctx context.Context) ([]domain.InventoryItem, error)
 		if ref == "" {
 			ref = it.StockID
 		}
-		status := "in_stock"
-		if it.Status != 0 {
-			status = "locked"
+		mark := it.Price
+		if mark <= 0 {
+			mark = it.SteamPrice
+		}
+		status := "locked"
+		switch {
+		case !it.Tradable:
+		case it.Status == 1: // 待上架
+			status = "in_stock"
+		case it.Status == 4 || it.Status == 6 || it.Status == 8 || it.Status == 10: // 出租/租售/预售/打包上架
+			status = "listed"
 		}
 		out = append(out, domain.InventoryItem{
 			Channel: domain.ChannelECO, AssetID: ref,
 			HashName: it.HashName, DisplayName: it.GoodsName,
-			MarkPrice: it.MarkPrice, Tradable: true, Status: status,
+			MarkPrice: mark, Tradable: it.Tradable, Status: status,
 		})
 	}
 	return out, nil

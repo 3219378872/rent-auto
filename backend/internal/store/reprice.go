@@ -121,10 +121,13 @@ func nullIf(v float64) any {
 // ---- strategies ----
 
 // EnsureGlobalStrategy seeds the singleton global strategy if absent.
+// uniq_global_strategy (migration 0007) makes the singleton contract real:
+// without it, `ON CONFLICT DO NOTHING` had no constraint to target and every
+// call inserted a duplicate 'default' row that shadowed the tuned params.
 func (s *Store) EnsureGlobalStrategy(ctx context.Context, defaultParams string) (int64, string, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`INSERT INTO strategies(name, scope, params) VALUES('default','global',$1::jsonb)
-		 ON CONFLICT DO NOTHING`, defaultParams)
+		 ON CONFLICT (scope) WHERE scope='global' DO NOTHING`, defaultParams)
 	if err != nil {
 		return 0, "", err
 	}

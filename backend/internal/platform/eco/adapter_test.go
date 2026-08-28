@@ -93,8 +93,16 @@ func TestRepriceMissingResultsFailClosed(t *testing.T) {
 func TestAdapterInventoryAndWallet(t *testing.T) {
 	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
 		switch r.URL.Path {
-		case "/Api/Selling/QuerySteamStock":
-			return okEnv(`{"TotalRecord":1,"PageResult":[{"StockId":"s1","AssetId":"A1","HashName":"AK","GoodsName":"AK名","MarkPrice":99.5,"Status":0}]}`)
+		case "/Api/Selling/QueryStock":
+			if body["GameId"] != "730" {
+				t.Errorf("GameId = %v, want 730", body["GameId"])
+			}
+			return okEnv(`{"TotalRecord":4,"PageResult":[
+				{"StockId":"s1","AssetId":"A1","HashName":"AK","GoodsName":"AK名","SteamPrice":120,"Price":99.5,"Tradable":true,"Status":1},
+				{"StockId":"s2","AssetId":"A2","HashName":"AWP","GoodsName":"AWP名","SteamPrice":50,"Price":40,"Tradable":true,"Status":4},
+				{"StockId":"s3","AssetId":"A3","HashName":"M4","GoodsName":"M4名","SteamPrice":30,"Price":25,"Tradable":true,"Status":5},
+				{"StockId":"s4","AssetId":"A4","HashName":"USP","GoodsName":"USP名","SteamPrice":10,"Price":8,"Tradable":false,"Status":1}
+			]}`)
 		case "/Api/Merchant/GetTotalMoney":
 			return okEnv(`{"Money":1234.56}`)
 		default:
@@ -106,11 +114,20 @@ func TestAdapterInventoryAndWallet(t *testing.T) {
 	ctx := context.Background()
 
 	inv, err := ad.Inventory(ctx)
-	if err != nil || len(inv) != 1 {
+	if err != nil || len(inv) != 4 {
 		t.Fatalf("inv: %v %d", err, len(inv))
 	}
-	if inv[0].AssetID != "A1" || inv[0].MarkPrice != 99.5 || inv[0].Status != "in_stock" {
+	if inv[0].AssetID != "A1" || inv[0].MarkPrice != 99.5 || inv[0].Status != "in_stock" || !inv[0].Tradable {
 		t.Fatalf("inv item: %+v", inv[0])
+	}
+	if inv[1].Status != "listed" {
+		t.Fatalf("出租上架(4) must map to listed: %+v", inv[1])
+	}
+	if inv[2].Status != "locked" {
+		t.Fatalf("出租交易中(5) must map to locked: %+v", inv[2])
+	}
+	if inv[3].Status != "locked" || inv[3].Tradable {
+		t.Fatalf("non-tradable must be locked: %+v", inv[3])
 	}
 
 	bal, err := ad.Wallet(ctx)

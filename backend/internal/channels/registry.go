@@ -452,6 +452,13 @@ func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
 			Action: "order.offer_sent", Channel: "eco", Target: so.OrderNum})
 	}
 	for _, ao := range out.AcceptOffers {
+		// The platform reports an offer as "not accepted" (ErrorCode 0, empty
+		// Error) when a mobile/email confirmation is pending — our Steam
+		// confirmlist flow handles those; only a real Error is a failure.
+		if ao.NeedMobileConfirmation || ao.NeedEmailConfirmation {
+			r.log.Info("eco offer pending confirmation", "order", ao.OrderNum, "offer", ao.OfferID)
+			continue
+		}
 		if ao.ErrorCode != 1 || ao.Error != "" { // ErrorCode OK=1
 			logWarnDelivery(r.log, "eco accept offer failed", ao.OrderNum, ao.Error)
 			r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
@@ -476,6 +483,8 @@ func (r *Registry) EcoOrderClient() interface {
 	SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
 	SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error)
 	Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error)
+	SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]eco.SellerRentOrder, error)
+	SellerRentOrderDetail(ctx context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error)
 } {
 	r.mu.RLock()
 	c := r.ecoClient

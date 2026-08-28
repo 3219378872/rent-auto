@@ -108,8 +108,8 @@ func TestMarketLeasePriceFiltering(t *testing.T) {
 				t.Errorf("unexpected market payload: %v", req)
 			}
 			_, _ = w.Write([]byte(`{"Code":0,"Data":{"CommodityList":[
-				{"CommodityName":"A","LeaseUnitPrice":1.5,"LongLeaseUnitPrice":1.2,"LeaseDeposit":"100"},
-				{"CommodityName":"B","LeaseUnitPrice":2.0,"LeaseDeposit":"5000"},
+				{"CommodityName":"A","LeaseUnitPrice":"1.5","LongLeaseUnitPrice":"1.2","LeaseDeposit":"100"},
+				{"CommodityName":"B","LeaseUnitPrice":"2.0","LeaseDeposit":"5000"},
 				{"CommodityName":"C","LeaseDeposit":null}
 			]}}`))
 		default:
@@ -127,7 +127,7 @@ func TestMarketLeasePriceFiltering(t *testing.T) {
 	if len(items) != 1 { // A in window; B deposit 5000 > maxPrice; C nil deposit
 		t.Fatalf("filtered len = %d", len(items))
 	}
-	if items[0].Deposit() != 100 || *items[0].LeaseUnitPrice != 1.5 {
+	if items[0].Deposit() != 100 || items[0].UnitPrice() != 1.5 || items[0].LongUnitPrice() != 1.2 {
 		t.Fatalf("item0 = %+v", items[0])
 	}
 }

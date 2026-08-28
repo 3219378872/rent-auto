@@ -98,18 +98,30 @@ func (p *Planner) Plan(ctx context.Context) ([]Action, error) {
 func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace time.Duration, decide decideFn) []Action {
 	uuHealthy := snap.Health["uu"] == "ok"
 
+	// wantCopies counts DISTINCT asset ids per (hash, channel): the same Steam
+	// asset is synced once per channel that stocks it, so raw row counts would
+	// double the wanted budget for items visible on both platforms (real-machine
+	// finding 2026-08-27 — one physical knife planned for publish twice).
+	wantCopies := map[string]map[domain.Channel]int{}
+	distinct := map[string]map[domain.Channel]map[string]bool{}
 	desiredByHash := map[string][]domain.Channel{}
 	routeByHash := map[string]string{}
-	wantCopies := map[string]map[domain.Channel]int{}
 	for _, it := range snap.Items {
 		chs := desiredChannels(it.Route, uuHealthy)
 		desiredByHash[it.HashName] = chs
 		routeByHash[it.HashName] = it.Route
 		if wantCopies[it.HashName] == nil {
 			wantCopies[it.HashName] = map[domain.Channel]int{}
+			distinct[it.HashName] = map[domain.Channel]map[string]bool{}
 		}
 		for _, ch := range chs {
-			wantCopies[it.HashName][ch]++
+			if distinct[it.HashName][ch] == nil {
+				distinct[it.HashName][ch] = map[string]bool{}
+			}
+			if !distinct[it.HashName][ch][it.AssetID] {
+				distinct[it.HashName][ch][it.AssetID] = true
+				wantCopies[it.HashName][ch]++
+			}
 		}
 	}
 
@@ -126,12 +138,16 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	var plan []Action
 
 	// ---- publish pass ----
+	planned := map[key]map[string]bool{} // hash+ch → assets already in this plan
 	for _, it := range snap.Items {
 		if it.AssetID == "" {
 			continue
 		}
 		for _, ch := range desiredByHash[it.HashName] {
 			k := key{it.HashName, ch}
+			if planned[k][it.AssetID] {
+				continue // same asset reached via another channel's stock row
+			}
 			existing := listedByHash[k]
 			assetListed := false
 			for _, l := range existing {
@@ -147,6 +163,10 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 			if d == nil || !d.OK {
 				continue
 			}
+			if planned[k] == nil {
+				planned[k] = map[string]bool{}
+			}
+			planned[k][it.AssetID] = true
 			plan = append(plan, Action{
 				Kind: "publish", Channel: ch, AssetID: it.AssetID,
 				HashName: it.HashName, Reason: "route:" + it.Route,

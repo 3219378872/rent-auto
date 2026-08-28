@@ -246,11 +246,15 @@ func globalRealEnabled(ctx context.Context, st *store.Store, log *slog.Logger) b
 // next delivery cycle without a restart.
 type liveECOClient struct{ r *channels.Registry }
 
-func (l liveECOClient) client() (interface {
+type ecoOrderClient interface {
 	SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
 	SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error)
 	Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error)
-}, error) {
+	SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]eco.SellerRentOrder, error)
+	SellerRentOrderDetail(ctx context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error)
+}
+
+func (l liveECOClient) client() (ecoOrderClient, error) {
 	if c := l.r.EcoOrderClient(); c != nil {
 		return c, nil
 	}
@@ -281,6 +285,22 @@ func (l liveECOClient) Detail(ctx context.Context, orderNum string) (*eco.Seller
 	return c.Detail(ctx, orderNum)
 }
 
+func (l liveECOClient) SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]eco.SellerRentOrder, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.SellerRentOrderList(ctx, start, end, status)
+}
+
+func (l liveECOClient) SellerRentOrderDetail(ctx context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.SellerRentOrderDetail(ctx, orderNum)
+}
+
 func uuQuotesFn(r *channels.Registry) func(context.Context, int64, float64, float64) ([]pricing.Quote, error) {
 	return func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error) {
 		items, err := r.UUMarketQuotes(ctx, tplID, minP, maxP)
@@ -291,8 +311,8 @@ func uuQuotesFn(r *channels.Registry) func(context.Context, int64, float64, floa
 		for _, it := range items {
 			out = append(out, pricingQuoteAlias{
 				Name:    it.CommodityName,
-				Short:   deref(it.LeaseUnitPrice),
-				Long:    deref(it.LongLeaseUnitPrice),
+				Short:   it.UnitPrice(),
+				Long:    it.LongUnitPrice(),
 				Deposit: it.Deposit(),
 			})
 		}
@@ -309,13 +329,6 @@ type pricingQuoteAlias = struct {
 	Short   float64
 	Long    float64
 	Deposit float64
-}
-
-func deref(v *float64) float64 {
-	if v == nil {
-		return 0
-	}
-	return *v
 }
 
 // schedulerAdapter bridges scheduler.Status to the api JobStatus shape.

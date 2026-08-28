@@ -282,6 +282,22 @@ func (s *Store) EarliestOpenOrderStart(ctx context.Context) (*time.Time, error) 
 	return t, nil
 }
 
+// EarliestLeasedListingStart returns the oldest listed_at among listings the
+// shelf reports as leased (nil when none). An order can never start before
+// its listing was published, so this anchors the order-sync lookback for
+// pre-existing leases on a fresh deployment — before any lease_orders row
+// exists to extend EarliestOpenOrderStart (bootstrap gap, 2026-08-27).
+func (s *Store) EarliestLeasedListingStart(ctx context.Context) (*time.Time, error) {
+	var t *time.Time
+	err := s.Pool.QueryRow(ctx,
+		`SELECT MIN(listed_at) FROM listings
+		 WHERE actual_state='leased' AND listed_at IS NOT NULL`).Scan(&t)
+	if err != nil {
+		return nil, fmt.Errorf("earliest leased listing start: %w", err)
+	}
+	return t, nil
+}
+
 func finishedAt(o domain.LeaseOrder, terminal bool) *time.Time {
 	if !terminal {
 		return nil

@@ -3,6 +3,7 @@ package eco
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -161,10 +162,36 @@ type SellerRentOrder struct {
 	AssetID      string  `json:"AssetId"`
 }
 
-// SellerRentOrderList queries orders in [start,end] window (max span per docs).
+// SellerRentOrderList queries orders in [start,end]. 平台单次查询窗口上限
+// 31 天（code=7002「最大支持查询31天内数据」，2026-08-27 真机确认）——
+// orders_sync 的回看窗最长 100 天（ADR-0003 长租锚点），因此按 30 天分段
+// 聚合，段内再翻页。
 func (c *Client) SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]SellerRentOrder, error) {
 	var out []SellerRentOrder
 	const layout = "2006-01-02 15:04:05"
+	const chunk = 30 * 24 * time.Hour
+	// Hard bound: never look back further than one year regardless of the
+	// caller's anchor (zero-time callers must not explode into thousands of
+	// segments; the scheduler's own cap is 100d).
+	if minStart := end.AddDate(0, 0, -365); start.Before(minStart) {
+		start = minStart
+	}
+	for cursor := start; !cursor.After(end); cursor = cursor.Add(chunk).Add(time.Second) {
+		segEnd := end
+		if segEnd.After(cursor.Add(chunk)) {
+			segEnd = cursor.Add(chunk)
+		}
+		orders, err := c.sellerRentOrderPage(ctx, cursor, segEnd, status, layout)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, orders...)
+	}
+	return out, nil
+}
+
+func (c *Client) sellerRentOrderPage(ctx context.Context, start, end time.Time, status []int, layout string) ([]SellerRentOrder, error) {
+	var out []SellerRentOrder
 	pageIndex := 1
 	for pageIndex <= maxListPages {
 		biz := map[string]any{
@@ -237,4 +264,41 @@ func (c *Client) GetMarketPriceDump(ctx context.Context) ([]MarketPriceEntry, er
 		return list, nil
 	}
 	return nil, nil
+}
+
+// SellerRentOrderDetailResult is /Api/Rent/SellerRentOrderDetail (api-220956684).
+// OfferId semantics: while awaiting delivery it is the RENT trade-offer id the
+// platform created; during return it is the return offer id. SendOfferRole:
+// 未设置=0 买家=1 卖家=2 (who must send the offer).
+type SellerRentOrderDetailResult struct {
+	OrderNum       string  `json:"OrderNum"`
+	RentType       int     `json:"RentType"`
+	Status         int     `json:"Status"`         // RentOrderDetailStatus
+	ProgressStatus int     `json:"ProgressStatus"` // RentOrderProgressStatus: 等待发货=2 发货中=3 …租赁中=5
+	CreateTime     string  `json:"CreateTime"`
+	RentExpire     string  `json:"RentExpire"`
+	RevertExpire   string  `json:"RevertExpire"`
+	Price          float64 `json:"Price"`
+	OrderAmount    float64 `json:"OrderAmount"`
+	RentDay        int     `json:"RentDay"`
+	MaxRentDay     int     `json:"MaxRentDay"`
+	Deposits       float64 `json:"Deposits"`
+	HashName       string  `json:"HashName"`
+	OfferID        string  `json:"OfferId"`
+	SendOfferRole  int     `json:"SendOfferRole"`
+}
+
+// SellerRentOrderDetail fetches one rent order's detail (OfferId drives the
+// Steam accept step of rent delivery — rent orders never appear in the
+// sale-order SellerOrderList view, real-machine finding 2026-08-27).
+func (c *Client) SellerRentOrderDetail(ctx context.Context, orderNum string) (*SellerRentOrderDetailResult, error) {
+	if orderNum == "" {
+		return nil, fmt.Errorf("eco: order num required")
+	}
+	var out SellerRentOrderDetailResult
+	biz := map[string]any{"OrderNum": orderNum}
+	if err := c.post(ctx, "/Api/Rent/SellerRentOrderDetail", biz, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

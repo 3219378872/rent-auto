@@ -494,3 +494,35 @@ func TestRentDayBoundsAndErrHelpers(t *testing.T) {
 		t.Fatal("errString")
 	}
 }
+
+// The same Steam asset is synced once per channel that stocks it (uu + eco
+// rows share one asset id). The publish pass must dedupe within the plan and
+// the copy budget must count distinct assets — real-machine finding
+// 2026-08-27: one physical knife was planned for publish on ECO twice.
+func TestPlanFromDedupesAssetSyncedByBothChannels(t *testing.T) {
+	v := 100.0
+	items := []store.RoutableItem{
+		{AssetID: "a1", HashName: "H", V: &v, Route: "eco_only"},
+		{AssetID: "a1", HashName: "H", V: &v, Route: "eco_only"}, // same asset, other channel's stock row
+	}
+	snap := Snapshot{
+		Items:  items,
+		Health: map[string]string{"uu": "ok", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+
+	pubs := 0
+	for _, a := range plan {
+		if a.Kind != "publish" {
+			t.Fatalf("unexpected delist: %+v", a)
+		}
+		if a.Channel != domain.ChannelECO || a.AssetID != "a1" {
+			t.Fatalf("unexpected publish target: %+v", a)
+		}
+		pubs++
+	}
+	if pubs != 1 {
+		t.Fatalf("same asset must publish exactly once, got %d (%+v)", pubs, plan)
+	}
+}

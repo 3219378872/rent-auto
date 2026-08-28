@@ -329,7 +329,7 @@ func TestAcceptOfferWithConfirmation(t *testing.T) {
 			acceptForm = r.Form.Encode()
 			w.Write([]byte(`{"needs_mobile_confirmation":true}`))
 		case r.URL.Path == "/mobileconf/getlist":
-			w.Write([]byte(`{"success":true,"conf":[{"id":"c1","nonce":"n1","creator_id":999}]}`))
+			w.Write([]byte(`{"success":true,"conf":[{"id":"c1","nonce":"n1","creator_id":"999"}]}`))
 		case r.URL.Path == "/mobileconf/ajaxop":
 			ajaxopQuery = r.URL.RawQuery
 			w.Write([]byte(`{"success":true}`))
@@ -365,7 +365,7 @@ func TestAcceptOfferConfirmationExactMatchOnly(t *testing.T) {
 		case r.URL.Path == "/mobileconf/getlist":
 			// 456 is a suffix of 123456 — an unrelated confirmation that must
 			// NOT be allowed just because its digits line up.
-			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"cx","nonce":"nx","creator_id":456}]}`))
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"cx","nonce":"nx","creator_id":"456"}]}`))
 		case r.URL.Path == "/mobileconf/ajaxop":
 			ajaxopCalled = true
 			_, _ = w.Write([]byte(`{"success":true}`))
@@ -477,7 +477,7 @@ func TestAcceptOfferConfirmAllowFailurePropagates(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/accept"):
 			_, _ = w.Write([]byte(`{"needs_mobile_confirmation":true}`))
 		case r.URL.Path == "/mobileconf/getlist":
-			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":881}]}`))
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":"881"}]}`))
 		case r.URL.Path == "/mobileconf/ajaxop":
 			_, _ = w.Write([]byte(`{"success":false}`))
 		default:
@@ -496,7 +496,7 @@ func TestAcceptOfferAjaxopNonJSONFails(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/accept"):
 			_, _ = w.Write([]byte(`{"needs_mobile_confirmation":true}`))
 		case r.URL.Path == "/mobileconf/getlist":
-			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":882}]}`))
+			_, _ = w.Write([]byte(`{"success":true,"conf":[{"id":"c9","nonce":"n9","creator_id":"882"}]}`))
 		case r.URL.Path == "/mobileconf/ajaxop":
 			_, _ = w.Write([]byte(`<html>gateway</html>`))
 		default:

@@ -148,9 +148,11 @@ func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID
 type confListResp struct {
 	Success bool `json:"success"`
 	Conf    []struct {
-		ID        string `json:"id"`
-		Nonce     string `json:"nonce"`
-		CreatorID int64  `json:"creator_id"`
+		ID    string `json:"id"`
+		Nonce string `json:"nonce"`
+		// 真机校订 (2026-08-27): Steam returns creator_id as a JSON string,
+		// not an int64 — a typed field failed the whole confirmlist decode.
+		CreatorID string `json:"creator_id"`
 	} `json:"conf"`
 }
 
@@ -194,7 +196,7 @@ func (s *Session) confirmTradeOffer(ctx context.Context, offerID string) error {
 			// Exact creator_id == offer id only (upstream steampy default,
 			// match_end=False): a loose suffix match once allowed confirming an
 			// unrelated trade whose creator_id happened to end with our digits.
-			if strconv.FormatInt(c.CreatorID, 10) == offerID {
+			if c.CreatorID == offerID {
 				return s.allowConfirmation(ctx, c.ID, c.Nonce)
 			}
 		}

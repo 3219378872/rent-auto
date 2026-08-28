@@ -16,10 +16,12 @@ import (
 // ---- fakes ----
 
 type fakeEco struct {
-	orders  []eco.SellerOrder
-	sent    []string
-	details map[string]eco.SellerOrderDetail
-	sendErr map[string]error
+	orders     []eco.SellerOrder
+	sent       []string
+	details    map[string]eco.SellerOrderDetail
+	sendErr    map[string]error
+	rentOrders []eco.SellerRentOrder
+	rentDetail map[string]eco.SellerRentOrderDetailResult
 }
 
 func (f *fakeEco) SellerOrderList(context.Context, time.Time, time.Time, *int, string) ([]eco.SellerOrder, error) {
@@ -39,6 +41,17 @@ func (f *fakeEco) Detail(_ context.Context, orderNum string) (*eco.SellerOrderDe
 		return &d, nil
 	}
 	return &eco.SellerOrderDetail{}, nil
+}
+
+func (f *fakeEco) SellerRentOrderList(context.Context, time.Time, time.Time, []int) ([]eco.SellerRentOrder, error) {
+	return f.rentOrders, nil
+}
+
+func (f *fakeEco) SellerRentOrderDetail(_ context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error) {
+	if d, ok := f.rentDetail[orderNum]; ok {
+		return &d, nil
+	}
+	return &eco.SellerRentOrderDetailResult{OrderNum: orderNum}, nil
 }
 
 type fakeSteamAccept struct {
@@ -168,5 +181,49 @@ func TestECODeliverySendFailureSkipsAccept(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("send failure not audited")
+	}
+}
+
+// Rent delivery pass (real-machine finding 2026-08-27): rent orders never
+// appear in the sale-order list — they arrive via SellerRentOrderList and the
+// platform pre-creates the trade offer exposed as SellerRentOrderDetail.OfferId.
+// The loop must accept it once; when SendOfferRole=卖家 and no offer exists,
+// it triggers SellerSendOffer and defers acceptance to the next cycle.
+func TestECODeliveryRentPass(t *testing.T) {
+	ef := &fakeEco{
+		rentOrders: []eco.SellerRentOrder{
+			{OrderNum: "RENT1", Status: 2}, // 平台已建报价 → 直接接受
+			{OrderNum: "RENT2", Status: 2}, // 卖家未发报价(SendOfferRole=2, OfferId空) → 触发 SellerSendOffer
+		},
+		rentDetail: map[string]eco.SellerRentOrderDetailResult{
+			"RENT1": {OrderNum: "RENT1", ProgressStatus: 2, OfferID: "88001", HashName: "刀"},
+			"RENT2": {OrderNum: "RENT2", ProgressStatus: 2, SendOfferRole: 2},
+		},
+	}
+	sf := &fakeSteamAccept{}
+	spy := &auditSpy{}
+	deps := newTestDeps(ef, sf, spy)
+	Run := func() { _ = deps.RunECODelivery(context.Background()) }
+	Run()
+
+	if len(sf.accepted) != 1 || sf.accepted[0] != "88001" {
+		t.Fatalf("rent offer must be accepted once: %+v", sf.attempts)
+	}
+	if len(ef.sent) != 1 || ef.sent[0] != "RENT2" {
+		t.Fatalf("seller-role rent order must trigger send-offer: %v", ef.sent)
+	}
+	if len(spy.actions) != 1 || spy.actions[0] != "order.delivered" {
+		t.Fatalf("audit: %v", spy.actions)
+	}
+
+	// Cross-cycle idempotency: the accepted offer is not re-accepted; RENT2
+	// now has its offer id (post-send) and gets accepted this time.
+	ef.rentDetail["RENT2"] = eco.SellerRentOrderDetailResult{OrderNum: "RENT2", ProgressStatus: 2, OfferID: "88002"}
+	Run()
+	if len(sf.accepted) != 2 || sf.accepted[1] != "88002" {
+		t.Fatalf("second cycle: %+v", sf.accepted)
+	}
+	if len(spy.actions) != 2 {
+		t.Fatalf("audit after second cycle: %v", spy.actions)
 	}
 }

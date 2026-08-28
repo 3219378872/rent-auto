@@ -19,7 +19,7 @@ func TestLoadMigrations(t *testing.T) {
 			t.Fatalf("migrations not sorted at index %d", i)
 		}
 		prev = m.Version
-		if !strings.Contains(m.UpSQL, "CREATE TABLE") && !strings.Contains(m.UpSQL, "CREATE INDEX") && !strings.Contains(m.UpSQL, "ALTER TABLE") {
+		if !strings.Contains(m.UpSQL, "CREATE TABLE") && !strings.Contains(m.UpSQL, "CREATE INDEX") && !strings.Contains(m.UpSQL, "CREATE UNIQUE INDEX") && !strings.Contains(m.UpSQL, "ALTER TABLE") {
 			t.Fatalf("migration %s up sql looks empty", m.Version)
 		}
 		if m.DownSQL == "" {

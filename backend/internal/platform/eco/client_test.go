@@ -191,7 +191,23 @@ func TestOffshelfAndOrders(t *testing.T) {
 			}
 			return okEnv(`[{"GoodsNum":"G1","IsSuccess":true}]`)
 		case "/Api/Rent/SellerRentOrderList":
-			return okEnv(`{"TotalRecord":1,"PageResult":[{"OrderNum":"ZH1","RentType":2,"Status":8,"Price":9.9,"OrderAmount":297,"RentDay":30,"Deposits":150,"HashName":"Knife","AssetId":"a9","CreateTime":"2026-08-01 10:00:00","RentExpire":"2026-08-31 10:00:00"}]}`)
+			// Chunked query (platform caps windows at 31d): only the segment
+			// covering the order's CreateTime returns it; every request must
+			// stay within the 31d window or the platform answers code=7002.
+			st, err1 := time.Parse("2006-01-02 15:04:05", body["StartTime"].(string))
+			et, err2 := time.Parse("2006-01-02 15:04:05", body["EndTime"].(string))
+			if err1 != nil || err2 != nil {
+				t.Errorf("order list time fields: %v %v", body["StartTime"], body["EndTime"])
+			} else {
+				if et.Sub(st) > 31*24*time.Hour {
+					t.Errorf("segment span %v exceeds the 31d platform cap", et.Sub(st))
+				}
+				created := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+				if !st.After(created) && !et.Before(created) {
+					return okEnv(`{"TotalRecord":1,"PageResult":[{"OrderNum":"ZH1","RentType":2,"Status":8,"Price":9.9,"OrderAmount":297,"RentDay":30,"Deposits":150,"HashName":"Knife","AssetId":"a9","CreateTime":"2026-08-01 10:00:00","RentExpire":"2026-08-31 10:00:00"}]}`)
+				}
+			}
+			return okEnv(`{"TotalRecord":0,"PageResult":null}`)
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			return okEnv(`null`)
@@ -296,5 +312,32 @@ func TestCredentialFailuresMapToAuthExpired(t *testing.T) {
 		if !errors.Is(err, platform.ErrAuthExpired) {
 			t.Fatalf("code %s: want ErrAuthExpired, got %v", code, err)
 		}
+	}
+}
+
+// The rent-order detail path is the source of the rental trade-offer id —
+// rent orders never appear in the sale-order SellerOrderList view, so this
+// endpoint (and only this one) drives rent delivery acceptance. Route pinned
+// to the documented path (api-220956684) against transcription drift.
+func TestSellerRentOrderDetailRoute(t *testing.T) {
+	c, _ := newTestClient(t, func(t *testing.T, r *http.Request, body map[string]any) string {
+		if r.URL.Path != "/Api/Rent/SellerRentOrderDetail" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if body["OrderNum"] != "DB-1" {
+			t.Errorf("OrderNum = %v", body["OrderNum"])
+		}
+		return okEnv(`{"OrderNum":"DB-1","Status":2,"ProgressStatus":2,"SendOfferRole":2,
+			"OfferId":"9328619377","HashName":"AK","Price":3,"OrderAmount":100,"Deposits":4500}`)
+	})
+	d, err := c.SellerRentOrderDetail(context.Background(), "DB-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.OfferID != "9328619377" || d.ProgressStatus != 2 || d.SendOfferRole != 2 || d.Deposits != 4500 {
+		t.Fatalf("detail: %+v", d)
+	}
+	if _, err := c.SellerRentOrderDetail(context.Background(), ""); err == nil {
+		t.Fatal("empty order num must fail")
 	}
 }

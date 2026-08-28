@@ -184,23 +184,40 @@ const (
 )
 
 // orderSyncSince computes the orders_sync lookback anchor: the default floor,
-// extended down to (earliest open order start − margin) when an unfinished
-// long lease would otherwise age out of the upstream query window. The result
-// is capped at orderSyncMaxWindow so one stuck non-terminal row cannot make
-// the sync unbounded.
+// extended down to the earliest anchor that can prove an open order exists —
+// either an unfinished lease_orders row, or a leased listing (an order cannot
+// predate its listing, so this covers pre-existing leases before any
+// lease_orders row has been synced; bootstrap gap fixed 2026-08-27). The
+// result is capped at orderSyncMaxWindow so one stuck row cannot make the
+// sync unbounded.
 func (d *Deps) orderSyncSince(ctx context.Context) time.Time {
 	now := time.Now()
-	since := now.Add(-orderSyncFloor)
 	earliest, err := d.Store.EarliestOpenOrderStart(ctx)
 	if err != nil {
 		d.Log.Warn("order sync window anchor lookup failed; using default lookback", "err", err)
-		return since
+		earliest = nil
 	}
-	if earliest == nil || earliest.IsZero() {
-		return since
+	// Consulted regardless of whether lease_orders already has rows: the
+	// bootstrap case is exactly when it has none (order rows can never enter
+	// the DB if the window never reaches back to their start time).
+	leased, lerr := d.Store.EarliestLeasedListingStart(ctx)
+	if lerr != nil {
+		d.Log.Warn("order sync leased-listing anchor lookup failed", "err", lerr)
+		leased = nil
 	}
-	if lo := earliest.Add(-orderSyncMargin); lo.Before(since) {
-		since = lo
+	return orderSyncWindow(now, earliest, leased)
+}
+
+// orderSyncWindow is the pure anchor computation (unit-testable).
+func orderSyncWindow(now time.Time, openStart, leasedStart *time.Time) time.Time {
+	since := now.Add(-orderSyncFloor)
+	for _, t := range []*time.Time{openStart, leasedStart} {
+		if t == nil || t.IsZero() {
+			continue
+		}
+		if lo := t.Add(-orderSyncMargin); lo.Before(since) {
+			since = lo
+		}
 	}
 	if floor := now.Add(-orderSyncMaxWindow); since.Before(floor) {
 		since = floor

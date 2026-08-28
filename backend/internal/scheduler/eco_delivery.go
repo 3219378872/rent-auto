@@ -19,6 +19,8 @@ type EcoDeliveryDeps struct {
 		SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
 		SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error)
 		Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error)
+		SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]eco.SellerRentOrder, error)
+		SellerRentOrderDetail(ctx context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error)
 	}
 	Steam interface {
 		AcceptTradeOffer(ctx context.Context, offerID string) (bool, error)
@@ -38,6 +40,14 @@ const (
 	detailsStateWaitDeliver = 8     // ECO DetailsState filter: 待发货
 	orderStateOfferNotSent  = 1     // OrderStateCode: 报价未发送
 	acceptedSetMax          = 10000 // cross-cycle accepted-offer memory cap
+
+	// Rent delivery (api-220956683/684): rent orders NEVER appear in the
+	// sale-order SellerOrderList view (real-machine finding 2026-08-27) —
+	// they are listed by /Api/Rent/SellerRentOrderList with Status
+	// 等待发货=2, and the platform pre-creates the rental trade offer whose
+	// id is exposed via SellerRentOrderDetail.OfferId.
+	rentStatusWaitDeliver = 2
+	rentSendRoleSeller    = 2 // SendOfferRole: 卖家=2
 )
 
 // RunECODelivery executes the four-step fulfilment loop for every
@@ -92,30 +102,82 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 			continue
 		}
 		if ok {
-			d.mu.Lock()
-			d.accepted[detail.TradeOfferID] = true
-			// The accepted-set grows with every delivered order for the
-			// process lifetime. Volume is bounded by real deliveries, but a
-			// cap keeps the map from silently accumulating forever; on
-			// eviction, a re-accept attempt is idempotent (offer already
-			// accepted upstream) and merely logs.
-			if len(d.accepted) > acceptedSetMax {
-				d.accepted = map[string]bool{detail.TradeOfferID: true}
-				d.info(ctx, "accepted set overflow, reset", fmt.Sprintf("%d offers", acceptedSetMax))
+			d.markAccepted(ctx, detail.TradeOfferID, o.GoodsName, o.OrderNum)
+		}
+	}
+	return d.runRentDelivery(ctx, start, end)
+}
+
+// runRentDelivery is the rent-order fulfilment pass. The platform creates the
+// rental trade offer itself; if SendOfferRole says the seller must send and
+// no offer exists yet, SellerSendOffer (shared with the sale flow) triggers
+// it. Otherwise the loop just accepts the offer id from the rent detail.
+func (d *EcoDeliveryDeps) runRentDelivery(ctx context.Context, start, end time.Time) error {
+	rentOrders, err := d.Eco.SellerRentOrderList(ctx, start, end, []int{rentStatusWaitDeliver})
+	if err != nil {
+		if errors.Is(err, platform.ErrUnsupported) {
+			return nil
+		}
+		return fmt.Errorf("eco: rent order list: %w", err)
+	}
+	for _, o := range rentOrders {
+		detail, derr := d.Eco.SellerRentOrderDetail(ctx, o.OrderNum)
+		if derr != nil {
+			d.warn(ctx, "rent.detail_failed", o.OrderNum, derr.Error())
+			continue
+		}
+		if detail.OfferID == "" {
+			if detail.SendOfferRole == rentSendRoleSeller {
+				if _, serr := d.Eco.SendOffer(ctx, o.OrderNum); serr != nil {
+					d.warn(ctx, "rent.send_offer_failed", o.OrderNum, serr.Error())
+				} else {
+					d.info(ctx, "rent offer sent", o.OrderNum)
+				}
+				continue // offer id resolved on the next cycle
 			}
-			d.mu.Unlock()
-			if d.Audit != nil {
-				d.Audit(ctx, domain.AuditEntry{
-					Time: time.Now().UTC(), Actor: "system",
-					Action: "order.delivered", Channel: "eco",
-					Target: o.GoodsName,
-					Detail: map[string]any{"order": o.OrderNum, "offer": detail.TradeOfferID},
-				})
-			}
-			d.info(ctx, "delivered", fmt.Sprintf("%s/%s", o.OrderNum, detail.TradeOfferID))
+			d.info(ctx, "rent trade offer not ready yet", o.OrderNum)
+			continue
+		}
+		d.mu.Lock()
+		seen := d.accepted[detail.OfferID]
+		d.mu.Unlock()
+		if seen {
+			continue
+		}
+		ok, aerr := d.Steam.AcceptTradeOffer(ctx, detail.OfferID)
+		if aerr != nil {
+			d.warn(ctx, "rent.accept_offer_failed", detail.OfferID, aerr.Error())
+			continue
+		}
+		if ok {
+			d.markAccepted(ctx, detail.OfferID, detail.HashName, o.OrderNum)
 		}
 	}
 	return nil
+}
+
+func (d *EcoDeliveryDeps) markAccepted(ctx context.Context, offerID, goodsName, orderNum string) {
+	d.mu.Lock()
+	d.accepted[offerID] = true
+	// The accepted-set grows with every delivered order for the
+	// process lifetime. Volume is bounded by real deliveries, but a
+	// cap keeps the map from silently accumulating forever; on
+	// eviction, a re-accept attempt is idempotent (offer already
+	// accepted upstream) and merely logs.
+	if len(d.accepted) > acceptedSetMax {
+		d.accepted = map[string]bool{offerID: true}
+		d.info(ctx, "accepted set overflow, reset", fmt.Sprintf("%d offers", acceptedSetMax))
+	}
+	d.mu.Unlock()
+	if d.Audit != nil {
+		d.Audit(ctx, domain.AuditEntry{
+			Time: time.Now().UTC(), Actor: "system",
+			Action: "order.delivered", Channel: "eco",
+			Target: goodsName,
+			Detail: map[string]any{"order": orderNum, "offer": offerID},
+		})
+	}
+	d.info(ctx, "delivered", fmt.Sprintf("%s/%s", orderNum, offerID))
 }
 
 func (d *EcoDeliveryDeps) info(_ context.Context, msg, target string) {

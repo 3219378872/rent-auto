@@ -265,10 +265,28 @@ func (c *Client) OffShelf(ctx context.Context, commodityIDs []string) error {
 // ---- market lease quotes ----
 
 type MarketLeaseItem struct {
-	CommodityName      string   `json:"CommodityName"`
-	LeaseUnitPrice     *float64 `json:"LeaseUnitPrice"`
-	LongLeaseUnitPrice *float64 `json:"LongLeaseUnitPrice"`
-	LeaseDeposit       *string  `json:"LeaseDeposit"`
+	CommodityName string `json:"CommodityName"`
+	// 真机校订 (2026-08-27): UU returns LeaseUnitPrice / LongLeaseUnitPrice as
+	// JSON strings (mirrors LeaseDeposit), not numbers — a float64 field made
+	// every quote fetch fail with an unmarshal error and starved the baseline.
+	LeaseUnitPrice     *string `json:"LeaseUnitPrice"`
+	LongLeaseUnitPrice *string `json:"LongLeaseUnitPrice"`
+	LeaseDeposit       *string `json:"LeaseDeposit"`
+}
+
+func (m MarketLeaseItem) UnitPrice() float64 {
+	return strFDeref(m.LeaseUnitPrice)
+}
+
+func (m MarketLeaseItem) LongUnitPrice() float64 {
+	return strFDeref(m.LongLeaseUnitPrice)
+}
+
+func strFDeref(s *string) float64 {
+	if s == nil {
+		return 0
+	}
+	return strF(*s)
 }
 
 func (m MarketLeaseItem) Deposit() float64 {
