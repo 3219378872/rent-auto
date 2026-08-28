@@ -135,6 +135,8 @@ GET  .../mobileconf/ajaxop?op=allow&cid=<conf.id>&ck=<nonce>&<同款签名参数
 三次重试后仍找不到匹配确认项 → ConfirmationExpected 放弃本轮。
 **creator_id 匹配必须精确相等**（上游 steampy 默认 match_end=False）——
 2026-08-24 起移除无条件后缀匹配（曾可能误确认 creator_id 恰为报价号数字后缀的无关交易）。
+**creator_id 是 JSON 字符串**（2026-08-27 真机校订）：getlist 返回
+`creator_id:"<digits>"` 而非数字——按 int64 解码会让整个 confirmlist 解码失败。
 
 ## 4. UU 发货链路（uu/delivery.go）
 

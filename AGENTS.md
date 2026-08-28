@@ -124,6 +124,15 @@ ADR 撞号拆分（0007/0008 新号方案）/ ECO api-notes 待办节 #E1-E3 /
 YAML 复核实为 GetTotalMoney（资金流水为 GetFundFlow）；路径钉死回归测试；
 api-notes 已知坑 #7（端点路径以逐页 OpenAPI YAML 为准），见
 evidence/2026-08-27-eco-wallet-endpoint-404.md**。
+**首次真实上架轮（2026-08-27）：ECO QueryStock 端点+SteamStockStatus/Price/Tradable
+真机校订、UU 行情金额字段全字符串、recon 双渠道同资产去重+distinct 预算、
+EnsureGlobalStrategy 冲突目标修复（迁移 0007）；全局策略落地 eco_only 仅出租，
+≥¥500 四件 ECO 实挂成功（黑名单=运营侧一次性门槛，新入库低价模板不会自动拉黑），
+见 evidence/2026-08-27-ops-round-eco-rent-listing.md**。
+**租赁发货链路真机校订（2026-08-27 同日）：租赁单不在 SellerOrderList 视图、
+SellerRentOrderList 31 天窗上限销项 #E1（30 天分段）、Steam confirmlist
+creator_id 字符串、orders_sync 租出挂单锚点补冷启动缺口；卡 4 天的 M9 租单
+卖方确认完成（delivered），出租域发货四步流闭环，同上证据文档**。
 纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
 uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
 

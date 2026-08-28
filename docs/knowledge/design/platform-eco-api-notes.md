@@ -29,7 +29,7 @@ RentDeposits = max( 平台参考价×140%, RentPrice×RentMaxDay, LongRentPrice�
 | /Api/Rent/SellerRentOrderList | 出租订单 | StartTime/EndTime 必填(格式 yyyy-MM-dd HH:mm:ss)；状态枚举见下 |
 | /Api/Rent/SellerRentOrderDetails | 订单详情 | — |
 | /Api/Market/GetHashNameAndPriceList | **全量在售价 dump** | 两次调用间隔 **≥60s**（平台要求） |
-| /Api/Selling/QuerySteamStock + RefreshUserSteamStock | Steam库存 | 刷新为异步 |
+| /Api/Selling/QueryStock + RefreshUserSteamStock | Steam库存 | 2026-08-27 真机校订：QuerySteamStock 系转录 404，实际 QueryStock（api-220956670）；刷新为异步 |
 | /Api/Merchant/GetTotalMoney | 钱包余额 | ResultData 另含 LockMoney/PurchaseMoney/WaitSettlementMoney（当前仅消费 Money） |
 | /Api/Merchant/GetFundFlow | 资金流水 | 时间窗查询 |
 
@@ -39,6 +39,20 @@ RentOrderDetailStatus: 1待支付→pending_payment, 2待发货→delivering, 3�
 4归还中→returning, 5归还超时/10买断违约/11归还违约→breach, 6客服仲裁→arbitrating,
 7已归还/12已过户→done, 8已买断→bought_out, 9取消→cancelled
 RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删除→delisted
+SteamStockStatus（QueryStock 响应，api-220956670 权威）: 1待上架→in_stock,
+2出售上架/4出租上架/6租售上架/8预售上架/10打包上架→listed,
+3出售交易中/5出租交易中/7租售交易中/9预售交易中/11打包交易中→locked
+QueryStock 响应字段真机校订（2026-08-27）：**无 MarkPrice 字段**——价格用
+Price(平台市场价)+SteamPrice(Steam市场价)，另有 Tradable/CanPublish(bool)、
+PaintWear(string) 等；请求体用 `GameId`（非 SteamGameId），PageSize≤100。
+
+## SteamId 绑定（PublishRentAndSaleGoods 前置）
+
+发布/改价/下架均要求 SteamId 已绑定：适配器从 app_settings `eco_steam_id`
+（value_plain {"steam_id":...}，SetECOCreds 时一并保存）读取；缺省报
+`code=2001 SteamId不能为空`。2026-08-27 真机复盘：凭证保存时未带 steamId
+则后续全部发布失败——配置 ECO 渠道必须同时绑定 SteamId。
+权威绑定关系可调「查询已绑定Steam账号分页列表」(api-461308273)核对。
 
 ## 已知坑
 
@@ -52,7 +66,9 @@ RentGoodsStatus: 1已上架→active, 2出租中→leased, 3完成/4失效/5删�
    2026-08-24 起 RepriceLease 已按此固化并带 mock 反例
 7. **端点路径以官方 OpenAPI 块为准**：docx.ecosteam.cn 首页索引只有功能名不带路径，
    每个接口页的 OpenAPI YAML 才是权威（2026-08-27 真机 404 复盘：
-   GetMerchantMoney 系早期转录错误，实际为 GetTotalMoney；资金流水为 GetFundFlow）
+   GetMerchantMoney 系早期转录错误，实际为 GetTotalMoney；资金流水为 GetFundFlow；
+   同日 QuerySteamStock → 实际 **QueryStock**，同类转录错误第二例——
+   新端点上线前必须先抓 YAML 核对路径与字段名）
 
 ## Go 实现补充约定（M2b 落地结论）
 
@@ -79,11 +95,29 @@ round3 修复并固化反例）。凭据级失败码 4004/5005 映射 `ErrAuthEx
 > 规则：mock 无法覆盖、需要真实平台会话确认的行为在此登记；结论确认后回写正文并销项。
 > （本节 2026-08-27 round10 建立此前散落于 evidence/functional-spec 的待办统一归口。）
 
-- **#E1 SellerRentOrderList 时间窗上限（7002）**：官方对 StartTime/EndTime 跨度存在
-  上限，超限返回 7002（查询时间超限）。首次真实调用后如触发，orders_sync 改为
-  以"最早未终态订单"为锚的滚动窗口逐段拉取（m2b 证据文档承诺项，2026-08-25 登记）。
+- **#E1 ✅ 已销项（2026-08-27 真机确认）**：SellerRentOrderList 单次查询窗口上限
+  **31 天**，超限返回 `code=7002 msg=最大支持查询31天内数据`。客户端已实现
+  30 天分段自动聚合（`SellerRentOrderList` chunk 循环，≤365d 硬钳制），
+  orders_sync 长租回看窗（≤100d）无需改动即兼容。
 - **#E2 改价边界 PublishType=2**：PublishRentAndSaleGoods 以 PublishType=2 提交时
   是否支持只改租赁价不影响已配置的出售域字段，待真机验证；结论回写本文件
   「本项目使用的端点」表（functional-spec §5 Open Question 的结论落点）。
 - **#E3 长租阈值配置化**：>21 天为长租须填 LongRentPrice 是平台"目前"实现
   （已知坑#4）；真机确认后如平台调整，改价前需校验 LongRentPrice 必填性。
+
+## 出租发货流（2026-08-27 真机校订，重要）
+
+租赁订单**不会出现在** `/Api/open/order/SellerOrderList`（出售订单视图）——
+无论 DetailsState=8 还是带 SteamId 过滤，租赁单一律查不到（真机实测）。
+租赁发货必须走出租域接口：
+
+1. `/Api/Rent/SellerRentOrderList`（Status 过滤 等待发货=2）发现待发货租赁单；
+2. `/Api/Rent/SellerRentOrderDetail`（按 OrderNum）取 `OfferId`——
+   等待发货阶段即**平台预创建的租赁报价 ID**；`SendOfferRole`（买家=1/卖家=2）
+   指示发报价责任方；`ProgressStatus`（等待发货=2/发货中=3/…/租赁中=5）；
+3. 卖家用 Steam 移动确认器（identity_secret confirmlist）允许该报价，
+   租客接单后平台置为租赁中。
+
+OneClickResolveOffer 批量兜底的 AcceptOffers 项 `ErrorCode=0 + Error="" +
+NeedMobileConfirmation=true` 表示「待移动端确认」（我们的确认器流程即处理此事），
+**不是失败**——registry 已按此区分日志与审计。

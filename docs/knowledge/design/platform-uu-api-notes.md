@@ -102,6 +102,10 @@
 4. 改价前必须调 pre-change init 接口（change/price/v3/init/info），否则部分商品改价失败
 5. 风控：连续高频调用触发 84104；全局限频默认 3rps + 任务间 sleep 抖动
 6. compensation_type：0=非会员 7=V1（默认7）
+7. **行情接口金额字段全部是字符串**（2026-08-27 真机校订）：commodity/list/lease 返回的
+   `LeaseUnitPrice`/`LongLeaseUnitPrice`/`LeaseDeposit` 均为 JSON string——
+   按 float64 解码会让每一条行情请求都 unmarshal 失败、基线 starving（0 快照）。
+   Go 模型统一 `*string` + strF 解析（MarketLeaseItem.UnitPrice/LongUnitPrice）。
 
 ## 发货域端点（M9 增补）
 
