@@ -33,6 +33,7 @@ const (
 	rateLimitCooldown    = 5 * time.Minute
 	platformBlockCool    = 15 * time.Minute
 	ukExpiredCooldownMin = 2 * time.Minute
+	authExpiredCooldown  = 30 * time.Minute
 )
 
 // channelReady reports whether a channel has served out its risk-control cooldown.
@@ -44,7 +45,7 @@ func (d *Deps) channelReady(ch domain.Channel, now time.Time) bool {
 }
 
 // penalize puts a channel into cooldown when the platform signalled risk
-// control (rate limit / block / UK expiry); other errors are ignored.
+// control (rate limit / block / UK expiry / auth expiry); other errors are ignored.
 func (d *Deps) penalize(ch domain.Channel, err error) {
 	var until time.Time
 	switch {
@@ -54,6 +55,8 @@ func (d *Deps) penalize(ch domain.Channel, err error) {
 		until = time.Now().Add(platformBlockCool)
 	case errors.Is(err, uu.ErrUKExpired):
 		until = time.Now().Add(ukExpiredCooldownMin)
+	case errors.Is(err, platform.ErrAuthExpired):
+		until = time.Now().Add(authExpiredCooldown)
 	default:
 		return
 	}
@@ -106,6 +109,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 		return err
 	}
 	strategyCache := map[string]*pricing.Params{}
+	var stratErrs []error
 
 	for _, c := range cands {
 		es, err := d.Store.GetEffectiveStrategy(ctx, c.HashName)
@@ -114,6 +118,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			// silently skipped with a nil error upstream would report a
 			// successful reprice cycle. Surface loudly, keep the loop alive.
 			d.Log.Warn("effective strategy lookup failed", "hash", c.HashName, "err", err)
+			stratErrs = append(stratErrs, fmt.Errorf("strategy %s: %w", c.HashName, err))
 			continue
 		}
 		key := string(es.GlobalParams) + "|" + string(es.Params)
@@ -122,6 +127,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			pp, err := pricing.ParseParams(es.GlobalParams, es.Params)
 			if err != nil {
 				d.Log.Warn("strategy params parse failed", "hash", c.HashName, "err", err)
+				stratErrs = append(stratErrs, fmt.Errorf("strategy %s: %w", c.HashName, err))
 				continue
 			}
 			p = &pp
@@ -211,7 +217,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			d.Log.Warn("reprice call failed", "goods", c.GoodsRef, "err", err)
 		}
 	}
-	return nil
+	return errors.Join(stratErrs...)
 }
 
 // loadQuotes rebuilds the per-commodity ranked quote slice from stored

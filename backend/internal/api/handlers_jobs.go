@@ -130,6 +130,10 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "phone required")
 		return
 	}
+	if !s.smsAllow(s.clientIP(r)) {
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many sms attempts, retry later")
+		return
+	}
 	session := req.SessionID
 	if session == "" {
 		session = domain.RandomSessionID()
@@ -151,6 +155,7 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session, cv)
 	if err != nil {
+		s.audit(r, "channel.uu.sms_failed", map[string]any{"error": err.Error()})
 		writeErr(w, http.StatusBadGateway, "sms_failed", err.Error())
 		return
 	}

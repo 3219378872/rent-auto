@@ -230,6 +230,12 @@ func TestHTTP405MapsUKExpired(t *testing.T) {
 	}
 }
 
+func TestEnvelopeMissingCodeFailsClosed(t *testing.T) {
+	if _, err := decodeEnvelope([]byte(`{"Msg":"ok","Data":{}}`)); err == nil {
+		t.Fatal("want error for envelope without Code/code")
+	}
+}
+
 func TestRiskControlCode(t *testing.T) {
 	_, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path == "/api/user/Account/getUserInfo" {

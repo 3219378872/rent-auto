@@ -106,7 +106,28 @@ func ParseParams(globalJSON, templateJSON json.RawMessage) (Params, error) {
 			return p, err
 		}
 	}
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
 	return p, nil
+}
+
+// Validate rejects misconfigured ranges that would otherwise silently
+// collapse (e.g. FMin>FMax pins the factor at FMax for every template).
+func (p Params) Validate() error {
+	if p.Ctrl.FMin > p.Ctrl.FMax {
+		return fmt.Errorf("pricing: factor.min %.4f > max %.4f", p.Ctrl.FMin, p.Ctrl.FMax)
+	}
+	if p.Guard.MaxChangeRatio < 0 || p.Guard.NoiseRatio < 0 {
+		return fmt.Errorf("pricing: change/noise ratios must be >= 0")
+	}
+	if p.Guard.MinRent < 0 || p.Guard.MaxRent < 0 || p.Guard.MinRent > p.Guard.MaxRent {
+		return fmt.Errorf("pricing: min_rent/max_rent range invalid")
+	}
+	if p.Guard.DepositFloorRatio < 0 || p.Guard.DepositCapRatio < 0 {
+		return fmt.Errorf("pricing: deposit ratios must be >= 0")
+	}
+	return nil
 }
 
 func typedToRaw(p Params) map[string]any {
@@ -344,10 +365,13 @@ func Decide(in Input) Decision {
 		return Decision{SkipReason: "cooldown"}
 	}
 
-	// 4. change-rate cap + noise floor (only when a current price exists)
+	// 4. change-rate cap + noise floor (only when a current price exists).
+	// The cap is re-clamped to absolute bounds: near max_rent an upward
+	// jump must not escape the ceiling (and symmetrically for the floor).
 	if in.Cur.RentPrice > 0 {
 		old := in.Cur.RentPrice
 		capped := clampF(rent, old*(1-g.MaxChangeRatio), old*(1+g.MaxChangeRatio))
+		capped = clampF(capped, g.MinRent, g.MaxRent)
 		capped = Round2(capped)
 		if math.Abs(capped-old) > 1e-9 && capped != rent {
 			rent = capped

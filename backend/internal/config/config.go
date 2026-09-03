@@ -28,7 +28,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		Addr:          envOr("ADDR", ":8080"),
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		JWTTTL:        24 * time.Hour,
+		JWTTTL:        parseTTL(envOr("JWT_TTL", "24h")),
 		AdminUser:     envOr("ADMIN_USER", "admin"),
 		AdminPassHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		DryRunDefault: os.Getenv("DRY_RUN_DEFAULT") != "false",
@@ -73,6 +73,19 @@ func BootstrapPassword() (string, error) {
 func envOr(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return d
+}
+
+// parseTTL parses JWT_TTL (e.g. "12h"); unparseable/non-positive values fall
+// back to 24h, and anything above 24h is clamped to the spec ceiling.
+func parseTTL(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 24 * time.Hour
+	}
+	if d > 24*time.Hour {
+		return 24 * time.Hour
 	}
 	return d
 }

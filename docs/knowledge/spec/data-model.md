@@ -46,7 +46,7 @@ last_factor_event_at timestamptz  -- 因子事件锚点（stale 阶梯计时起�
 sublet_applied bool DEFAULT false -- ECO 转租策略已被平台接受（0008）：
                                   -- false 时 reprice 豁免噪声下限强制提交一次，
                                   -- 接受后置位（上架成功即置位；仅 ECO 语义）
-strategy_id FK
+strategy_id bigint               -- 逻辑引用（无 FK 约束，见 0002 DDL）
 listed_at, last_reprice_at, actual_synced_at
 UNIQUE(channel, goods_ref)
 ```

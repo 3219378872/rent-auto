@@ -7,6 +7,7 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 )
 
 // Adapter exposes ECO through the unified platform.Adapter.
@@ -163,7 +164,7 @@ func derivedDeposit(it platform.PublishLeaseRequest) float64 {
 			dep = v
 		}
 	}
-	return dep
+	return pricing.Round2(dep)
 }
 
 func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeaseRequest) ([]platform.RepriceLeaseResult, error) {

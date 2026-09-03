@@ -146,10 +146,18 @@
     unknown 非终态会拉长 orders_sync 动态回看窗口直至 100d 上限）。真机抓包补全后
     同步 `mapUUOrderStatus` 并销项
 
+## 时间口径（2026-09-03 与 ECO 对齐）
+
+- UU 订单时间串（`StartTime/EndTime`，`time.DateTime` 形）按**北京时间（UTC+8）
+  墙钟**解析（`uu.parseUUTime`，`ParseInLocation CST`）——与 ECO
+  `formatEcoTime/parseEcoTime` 同口径。此前按 UTC 直解，系统性早 8h。
+  若真机证明 UU 原生返回 UTC，回切并在此销项。
+
 ## HTTP 状态码处理约定（两平台统一策略，2026-08-24 round5 成文）
 
 - UU 客户端（`uu/client.go`）：**严格 200 + JSON body** 才进入信封解码；
-  非 200/非 JSON 一律 fail-closed 报错
+  非 200/非 JSON 一律 fail-closed 报错；**信封缺 `Code/code` 键亦 fail-closed**
+ （2026-09-03：缺键曾被判 Code=0 成功，现 `decodeEnvelope` 直接报错）
 - ECO 客户端（`eco/client.go`，round3 起）：**严格 200** 且信封必须含
   `ResultCode` 键——缺失视为协议错误而非 code=0（防代理错误页伪装成功）
 - 传输层失败不产生业务副作用；写操作调用方以 `err != nil || !res[i].Success`

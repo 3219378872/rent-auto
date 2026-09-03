@@ -15,6 +15,9 @@ import (
 // ---- listings ----
 
 func (s *Store) UpsertListingFromShelf(ctx context.Context, l domain.ShelfListing) error {
+	l.RentPrice = round2Money(l.RentPrice)
+	l.LongRentPrice = round2Money(l.LongRentPrice)
+	l.Deposit = round2Money(l.Deposit)
 	// ensure template exists (shelf rows carry display names)
 	if err := s.UpsertTemplate(ctx, Template{
 		HashName: l.HashName, DisplayName: l.DisplayName,

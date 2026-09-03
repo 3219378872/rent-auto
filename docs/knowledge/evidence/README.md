@@ -40,6 +40,7 @@
 | 2026-08-28 ECO 出租全量开启转租（平台动态定价） | [2026-08-28-eco-sublet-dynamic-pricing.md](2026-08-28-eco-sublet-dynamic-pricing.md) | 上架/改价载荷固定 SupportSublet=1+SubletPricingMethod=2（平台动态转租价）；存量经 listings.sublet_applied+噪声豁免立即补齐（迁移 0008）；api-notes 转租节建立 |
 | 2026-08-28 ECO 订单同步时区错位修复 | [2026-08-28-eco-orders-tz-8h-lag.md](2026-08-28-eco-orders-tz-8h-lag.md) | StartTime/EndTime 与响应时间串均为北京时间(UTC+8)；UTC 直发致新订单晚 8h 进 orders_sync 窗（Karambit 单缺失实锤）；formatEcoTime/parseEcoTime 统一 + upsert COALESCE 治愈存量；api-notes 已知坑 #8 |
 | 2026-08-28 ubuntu 主机生产迁移 | [2026-08-28-migrate-ubuntu-host.md](2026-08-28-migrate-ubuntu-host.md) | 全库 pg_dump 迁移+compose 三容器上线（8081/Tailscale-only）；渠道页空号根因=双 APP_MASTER_KEY 不一致，换 key 后 steam/uu/eco 任务真机跑通零 WARN；本地双实例已停 |
+| 2026-09-03 深度审查修复轮 | [2026-09-03-review-fixes.md](2026-09-03-review-fixes.md) | P1×6+P2×10 全清：UU 信封缺 Code 熔断/AuthExpired 30min 冷却/JWT_TTL 接线/定价示例嵌套化/UU 时间 CST 对齐/护栏帽后重钳；集成全绿，覆盖率门控 10 包全过 |
 
 ## 事故复盘
 

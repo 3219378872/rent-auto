@@ -373,8 +373,8 @@ func TestExecutorWriteBackAndPenalize(t *testing.T) {
 		t.Fatalf("no penalty expected on clean run: %+v", penalties)
 	}
 
-	// Transport failure → penalized, nothing persisted.
-	uu2 := &stubAdapter{ch: domain.ChannelUU, pubErr: errors.New("net down")}
+	// Risk-sentinel failure → penalized, nothing persisted.
+	uu2 := &stubAdapter{ch: domain.ChannelUU, pubErr: platform.ErrRateLimited}
 	wb2 := &fakeWriteBack{}
 	e2 := &Executor{
 		DryRun: false, Log: discardLogger(),
@@ -388,6 +388,19 @@ func TestExecutorWriteBackAndPenalize(t *testing.T) {
 	applied, failed = e2.Execute(context.Background(), plan[:1])
 	if applied != 0 || failed != 1 || len(penalties) != 1 || len(wb2.published) != 0 {
 		t.Fatalf("failure path: applied=%d failed=%d penalties=%v wb=%v", applied, failed, penalties, wb2.published)
+	}
+
+	// Deterministic failure → counted, but no cooldown penalty.
+	nPen := len(penalties)
+	uu3 := &stubAdapter{ch: domain.ChannelUU, pubErr: errors.New("bad params")}
+	e4 := &Executor{DryRun: false, Log: discardLogger(),
+		Adapters: map[domain.Channel]platform.Adapter{domain.ChannelUU: uu3}, Store: &fakeWriteBack{},
+		Penalize: func(_ context.Context, ch domain.Channel, _ error) { penalties = append(penalties, ch) }}
+	if a, f := e4.Execute(context.Background(), plan[:1]); a != 0 || f != 1 {
+		t.Fatalf("deterministic failure: applied=%d failed=%d", a, f)
+	}
+	if len(penalties) != nPen {
+		t.Fatalf("deterministic failure must not penalize: %+v", penalties)
 	}
 
 	// Dry-run: audit-only, store untouched.

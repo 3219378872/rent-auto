@@ -79,22 +79,27 @@ ECO 押金为派生值：`dep_eco = max(V×1.4, rent×D, long×D)`（D=max_days�
 
 ```jsonc
 {
-  "topn": 15, "k1": 0.97, "k2": 0.95, "k3": 0.98,
-  "min_lease_ratio": 0,           // short 下限 = ratio×V；0=关
+  // 注意：顶层扁平 k1/k2/topn 已废弃——实现为嵌套结构（engine.go Params），
+  // 顶层键会被静默丢弃。必须按以下嵌套写。
+  "baseline": {"topn": 15, "k1": 0.97, "k2": 0.95, "k3": 0.98,
+    "min_lease_ratio": 0},        // short 下限 = ratio×V；0=关
   "factor": {"min":0.85,"max":1.25,"step_up":0.03,"step_down":0.05,"stale_days":7},
   "uu_max_days": 60,
   "eco_max_days": 30,
   "guardrails": {
     "min_rent": 0.5, "max_rent": 20000,
-    "max_change_ratio": 0.15, "cooldown_minutes": 30,
+    "max_change_ratio": 0.15, "noise_ratio": 0.02, "cooldown_minutes": 30,
     "deposit_floor_ratio": 0.3,   // UU 押金下限 =ratio×V
     "deposit_cap_ratio": 2.0      // ECO 押金上限 =ratio×V
-  },
-  "route": "uu_primary_eco_fallback"
+  }
+  // route 存于 strategies.channel_route 列，不在 params 内
 }
 ```
 
 合并规则：template 策略深覆盖 global；未设字段回落 global→内置默认。
+值域校验（ParseParams.Validate）：`factor.min≤max`、`min_rent≤max_rent`、
+变化/噪声/押金比例 ≥0，否则拒绝并告警（模板误配不再静默坍缩）。
+护栏顺序：绝对界 → 冷却 → 变化帽（帽后重钳绝对界）→ 噪声底。
 
 ## 6. 黄金测试要求（M4 验收）
 

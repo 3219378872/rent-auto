@@ -166,9 +166,11 @@ func decodeEnvelope(data []byte) (*envelope, error) {
 		return nil, fmt.Errorf("uu: decode envelope: %w", err)
 	}
 	e := &envelope{}
-	if v, ok := rawInt(m, "Code", "code"); ok {
-		e.Code = v
+	v, ok := rawInt(m, "Code", "code")
+	if !ok {
+		return nil, fmt.Errorf("uu: decode envelope: missing Code/code")
 	}
+	e.Code = v
 	e.Msg = rawString(m, "Msg", "msg")
 	e.Data = m["Data"]
 	if e.Data == nil {

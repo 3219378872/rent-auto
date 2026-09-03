@@ -170,6 +170,21 @@ func TestDecideChangeCapClamp(t *testing.T) {
 	}
 }
 
+func TestDecideChangeCapRespectsAbsoluteBounds(t *testing.T) {
+	in := baseInput()
+	in.P.Guard.MaxRent = 2.1
+	in.Cur.RentPrice = 2.0
+	in.Cur.LastActionAt = in.Now.Add(-time.Hour)
+	in.Base.Short = 5.0 // raw target 5.0; +15% cap alone would be 2.3 > max
+	d := Decide(in)
+	if !d.OK {
+		t.Fatalf("skip: %s", d.SkipReason)
+	}
+	if d.Rent != 2.1 {
+		t.Fatalf("capped rent=%v want 2.1 (absolute ceiling)", d.Rent)
+	}
+}
+
 // IgnoreNoiseFloor must bypass ONLY the noise-floor skip: a sub-2% move that
 // would normally be dropped still submits (ECO sublet backfill), while the
 // change-rate cap keeps the payload within guardrails.
@@ -249,6 +264,15 @@ func TestParseParamsDeepMerge(t *testing.T) {
 
 // NaN/Inf must never reach a price: Baseline treats non-finite quotes as
 // absent, Decide rejects non-finite inputs outright (2026-08-24 round 3).
+func TestParseParamsRejectsBadRanges(t *testing.T) {
+	if _, err := ParseParams(json.RawMessage(`{"factor":{"min":1.3,"max":1.0}}`), nil); err == nil {
+		t.Fatal("FMin>FMax must fail")
+	}
+	if _, err := ParseParams(json.RawMessage(`{"guardrails":{"min_rent":5,"max_rent":1}}`), nil); err == nil {
+		t.Fatal("min_rent>max_rent must fail")
+	}
+}
+
 func TestNonFiniteDefenseLines(t *testing.T) {
 	if b, ok := Baseline([]Quote{q(math.Inf(1), 0, 0), q(1, 0, 0)}, DefaultParams().Baseline, 100); !ok || b.Short <= 0 || math.IsInf(b.Short, 0) {
 		t.Fatalf("inf quote must be skipped: ok=%v base=%+v", ok, b)

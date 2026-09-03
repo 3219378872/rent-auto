@@ -16,8 +16,11 @@ import (
 )
 
 const (
-	factorOrderBatch  = 500
-	factorOrderWindow = 72 * time.Hour // bound the join scan to recent finishes
+	factorOrderBatch = 500
+	// Bound the join scan to the orders_sync max lookback (100d, ADR-0004):
+	// a tighter window permanently skipped late-synced terminal orders —
+	// factor_applied stayed false forever but the row was never selected.
+	factorOrderWindow = 100 * 24 * time.Hour
 )
 
 // RunFactorEvents folds newly finished orders (rent_success / bought_out)

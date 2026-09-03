@@ -34,6 +34,8 @@ type Server struct {
 	PasswordHash func(ctx context.Context) (string, error)
 
 	logins       *loginLimiter
+	smsMu        sync.Mutex
+	smsFails     map[string]*failSlot // per-IP UU sms send throttle
 	dummyOnce    sync.Once
 	dummyHashVal string
 	trustProxies []*net.IPNet // explicit TRUST_PROXY_CIDRS; empty = default private ranges
@@ -55,8 +57,18 @@ type ChannelsService interface {
 }
 
 func NewServer(st *store.Store, jwt *auth.JWT, adminUser, version string, log *slog.Logger) *Server {
-	return &Server{Store: st, JWT: jwt, TTL: 24 * time.Hour, AdminUser: adminUser, Version: version, Log: log,
+	return NewServerWithTTL(st, jwt, adminUser, version, 24*time.Hour, log)
+}
+
+// NewServerWithTTL wires a configured JWT TTL (config.JWTTTL); NewServer
+// keeps the historical 24h default for tests and existing callers.
+func NewServerWithTTL(st *store.Store, jwt *auth.JWT, adminUser, version string, ttl time.Duration, log *slog.Logger) *Server {
+	if ttl <= 0 || ttl > 24*time.Hour {
+		ttl = 24 * time.Hour
+	}
+	return &Server{Store: st, JWT: jwt, TTL: ttl, AdminUser: adminUser, Version: version, Log: log,
 		logins:       newLoginLimiter(),
+		smsFails:     map[string]*failSlot{},
 		defaultTrust: parseCIDRs(defaultTrustCIDRs)}
 }
 

@@ -94,6 +94,7 @@ func (s *Store) CountActiveListings(ctx context.Context, channel domain.Channel)
 // (eco.applySubletPolicy), so a fresh ECO row starts as applied; UU rows keep
 // the flag false (concept is ECO-specific).
 func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, hashName, goodsRef string, rent, long, deposit float64, days int) error {
+	rent, long, deposit = round2Money(rent), round2Money(long), round2Money(deposit)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO listings(channel, asset_id, hash_name, goods_ref, desired_state, actual_state,
 		                      rent_price, long_rent_price, max_days, deposit, listed_at, actual_synced_at,

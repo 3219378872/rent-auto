@@ -68,6 +68,35 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
+func TestJWTTTLParsing(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("JWT_TTL", "12h")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.JWTTTL.String() != "12h0m0s" {
+		t.Fatalf("ttl = %v", c.JWTTTL)
+	}
+	t.Setenv("JWT_TTL", "48h")
+	c2, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.JWTTTL.String() != "24h0m0s" {
+		t.Fatalf("ttl above ceiling must clamp to 24h, got %v", c2.JWTTTL)
+	}
+	t.Setenv("JWT_TTL", "bogus")
+	c3, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c3.JWTTTL.String() != "24h0m0s" {
+		t.Fatalf("bad ttl must fall back to 24h, got %v", c3.JWTTTL)
+	}
+}
+
 // TRUST_PROXY_CIDRS parses a comma-separated CIDR allowlist; blank entries
 // and unset env yield an empty list (API falls back to private ranges).
 func TestTrustProxyCIDRsParsing(t *testing.T) {

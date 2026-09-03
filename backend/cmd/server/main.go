@@ -79,7 +79,7 @@ func run() error {
 			return err
 		}
 	} else {
-		log.Warn("APP_MASTER_KEY not set: channel credentials cannot be stored")
+		log.Error("APP_MASTER_KEY not set: channel credentials cannot be stored or loaded; set it to enable UU/ECO/Steam channels")
 	}
 
 	registry := channels.NewRegistry(st, box, log)
@@ -180,7 +180,7 @@ func run() error {
 		}
 	}
 
-	srv := api.NewServer(st, auth.NewJWT(cfg.JWTSecret), cfg.AdminUser, version, log)
+	srv := api.NewServerWithTTL(st, auth.NewJWT(cfg.JWTSecret), cfg.AdminUser, version, cfg.JWTTTL, log)
 	srv.SetTrustProxies(cfg.TrustProxies)
 	srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
 	srv.Jobs = schedulerAdapter{sch}

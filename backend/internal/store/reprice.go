@@ -62,7 +62,7 @@ func (s *Store) UpdateListingDecision(ctx context.Context, listingID int64, d st
 	_, err := s.Pool.Exec(ctx,
 		`UPDATE listings SET rent_price=$2, long_rent_price=$3, deposit=$4, max_days=$5,
 		        last_reprice_at=now(), actual_synced_at=now() WHERE id=$1`,
-		listingID, d.Rent, nullIf(d.Long), d.Deposit, d.Days)
+		listingID, round2Money(d.Rent), nullIf(round2Money(d.Long)), round2Money(d.Deposit), d.Days)
 	return err
 }
 

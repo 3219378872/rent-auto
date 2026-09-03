@@ -10,6 +10,17 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 )
 
+func TestParseUUTimeIsCSTWallClock(t *testing.T) {
+	got := parseUUTime("2026-08-28 12:00:00")
+	want := got.UTC().Format("2006-01-02 15:04:05")
+	if want != "2026-08-28 04:00:00" {
+		t.Fatalf("UU wall clock must parse as UTC+8, got UTC %s", want)
+	}
+	if !parseUUTime("").IsZero() {
+		t.Fatal("empty input must yield zero time")
+	}
+}
+
 func TestAdapterSurface(t *testing.T) {
 	c, err := newMockUU(t, func(w http.ResponseWriter, r *http.Request) bool {
 		switch r.URL.Path {

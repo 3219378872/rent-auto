@@ -147,7 +147,7 @@ func (s *Store) UpsertInventoryItem(ctx context.Context, it domain.InventoryItem
 func (s *Store) SetCostBasis(ctx context.Context, channel domain.Channel, assetID string, cost float64) error {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE inventory_items SET cost_basis=$3, cost_source='manual' WHERE channel=$1 AND asset_id=$2`,
-		channel, assetID, cost)
+		channel, assetID, round2Money(cost))
 	if err != nil {
 		return err
 	}
@@ -224,6 +224,9 @@ func normalizePage(limit, offset int) (int, int) {
 
 func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error {
 	finished := isTerminal(o.Status)
+	o.RentPrice = round2Money(o.RentPrice)
+	o.Amount = round2Money(o.Amount)
+	o.Deposits = round2Money(o.Deposits)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO lease_orders(channel, order_ref, asset_id, hash_name, order_type, status, rent_days, rent_price, order_amount, deposits, started_at, due_at, finished_at, income_recorded, raw, updated_at)
 		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
@@ -233,7 +236,7 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 		   order_amount=EXCLUDED.order_amount, deposits=EXCLUDED.deposits,
 		   started_at=COALESCE(EXCLUDED.started_at, lease_orders.started_at),
 		   due_at=COALESCE(EXCLUDED.due_at, lease_orders.due_at),
-		   finished_at=COALESCE(lease_orders.finished_at, EXCLUDED.finished_at),
+		   finished_at=COALESCE(EXCLUDED.finished_at, lease_orders.finished_at),
 		   income_recorded = lease_orders.income_recorded OR $14,
 		   raw=COALESCE(EXCLUDED.raw, lease_orders.raw), updated_at=now()`,
 		o.Channel, o.OrderRef, o.AssetID, o.HashName, o.OrderType, o.Status,

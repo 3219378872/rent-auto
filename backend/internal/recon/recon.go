@@ -14,9 +14,20 @@ import (
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/platform/uu"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
+
+// isRiskSentinel reports whether err carries a platform risk-control signal
+// worth a channel cooldown; deterministic failures (already delisted, bad
+// params) must not feed the backoff channel.
+func isRiskSentinel(err error) bool {
+	return errors.Is(err, platform.ErrRateLimited) ||
+		errors.Is(err, platform.ErrPlatformBlocked) ||
+		errors.Is(err, platform.ErrAuthExpired) ||
+		errors.Is(err, uu.ErrUKExpired)
+}
 
 // HealthFn reports per-channel reachability ("ok" when routable).
 type HealthFn func(ctx context.Context) map[string]string
@@ -342,7 +353,7 @@ func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed 
 			partial := errors.Is(err, platform.ErrPartialFailure)
 			ok2 := len(res) > 0 && res[0].Success && (err == nil || partial)
 			e.record(ctx, a, ok2, errString(err, res))
-			if err != nil && !partial {
+			if err != nil && !partial && isRiskSentinel(err) {
 				e.penalize(ctx, a.Channel, err)
 			}
 			if ok2 {
@@ -355,7 +366,9 @@ func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed 
 			err := ad.Delist(ctx, []string{a.GoodsRef})
 			e.record(ctx, a, err == nil, errText(err))
 			if err != nil {
-				e.penalize(ctx, a.Channel, err)
+				if isRiskSentinel(err) {
+					e.penalize(ctx, a.Channel, err)
+				}
 				failed++
 			} else {
 				applied++

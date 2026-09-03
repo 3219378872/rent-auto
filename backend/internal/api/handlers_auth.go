@@ -103,10 +103,35 @@ func (l *loginLimiter) fail(key, ip string) {
 	l.slot(l.ipFails, ip, now).count++
 }
 
-func (l *loginLimiter) reset(key string) {
+func (l *loginLimiter) reset(key, ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.fails, key)
+	delete(l.ipFails, ip)
+}
+
+// clientIP (trusted-proxy aware) lives on Server; see server.go.
+
+// smsAllow throttles UU sms sends per client IP (10 sends / 10min): the
+// upstream UU risk control (84104) and sms fees punish unbounded retries.
+func (s *Server) smsAllow(ip string) bool {
+	const maxSends = 10
+	now := time.Now()
+	s.smsMu.Lock()
+	defer s.smsMu.Unlock()
+	if s.smsFails == nil {
+		s.smsFails = map[string]*failSlot{}
+	}
+	sl := s.smsFails[ip]
+	if sl == nil || now.Sub(sl.start) > loginFailWindow {
+		sl = &failSlot{start: now}
+		s.smsFails[ip] = sl
+	}
+	if sl.count >= maxSends {
+		return false
+	}
+	sl.count++
+	return true
 }
 
 // clientIP (trusted-proxy aware) lives on Server; see server.go.
@@ -146,6 +171,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := s.PasswordHash(r.Context())
 	if err != nil {
+		s.Log.Error("login credential load failed", "err", err)
+		s.logins.fail(key, ip)
+		s.audit(r, "login.failed", map[string]any{"username": req.Username, "error": "credential_load"})
 		writeErr(w, http.StatusInternalServerError, "internal", "load credentials")
 		return
 	}
@@ -161,10 +189,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "bad credentials")
 		return
 	}
-	s.logins.reset(key)
+	s.logins.reset(key, ip)
 	tok, exp, err := s.JWT.Sign(req.Username, s.sessionEpoch(r.Context()), s.TTL)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "sign token")
+		s.internalError(w, err)
 		return
 	}
 	s.audit(r, "login.success", map[string]any{"username": req.Username})

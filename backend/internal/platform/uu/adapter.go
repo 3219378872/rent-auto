@@ -173,8 +173,8 @@ func (a *Adapter) LeaseOrders(ctx context.Context, since time.Time) ([]domain.Le
 	}
 	out := make([]domain.LeaseOrder, 0, len(raws))
 	for _, o := range raws {
-		started, _ := time.Parse(time.DateTime, o.StartTime)
-		due, _ := time.Parse(time.DateTime, o.EndTime)
+		started := parseUUTime(o.StartTime)
+		due := parseUUTime(o.EndTime)
 		lo := domain.LeaseOrder{
 			Channel:   domain.ChannelUU,
 			OrderRef:  o.OrderID,
@@ -196,8 +196,28 @@ func (a *Adapter) LeaseOrders(ctx context.Context, since time.Time) ([]domain.Le
 	return out, nil
 }
 
+// uuWallClock is the platform wall-clock zone for UU timestamps. UU serves a
+// domestic (UTC+8) market like ECO and emits the same "2006-01-02 15:04:05"
+// wall-clock strings; parsing them as UTC shifted every order 8h early
+// (ECO had the identical bug, fixed 2026-08-28 via ecoCST). If真机 proves UU
+// natively emits UTC, switch this loader back and document in api-notes.
+var uuWallClock = time.FixedZone("CST", 8*3600)
+
+// parseUUTime parses a UU timestamp string in the platform zone; empty or
+// unparseable input yields the zero time (caller upserts COALESCE-guard it).
+func parseUUTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.ParseInLocation(time.DateTime, s, uuWallClock); err == nil {
+		return t
+	}
+	t, _ := time.Parse(time.DateTime, s)
+	return t
+}
+
 // mapUUOrderStatus translates observed UU order status ints into the unified
-// state machine. Unknown values map to "" and are surfaced via Raw payloads in M3.
+// state machine. Unknown values map to "unknown" (0006 CHECK allows it).
 func mapUUOrderStatus(code int) string {
 	switch code {
 	case 0:
