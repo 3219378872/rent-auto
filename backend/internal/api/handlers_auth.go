@@ -112,6 +112,63 @@ func (l *loginLimiter) reset(key, ip string) {
 
 // clientIP (trusted-proxy aware) lives on Server; see server.go.
 
+// NOTE (fail-closed revocation, parallel lane owns server.go): the
+// requireAuth epoch comparison must NOT fall back to ver=0 when the session
+// store is nil/unreadable — that would skip revocation forever. The auth
+// package exposes auth.ErrStoreUnavailable / auth.FailClosedError for exactly
+// this: wrap the store read error and answer 401. This file intentionally
+// does not touch server.go to avoid clashing with that lane.
+
+// writeBucket is a process-wide per-IP fixed-window throttle for expensive
+// mutating endpoints (POST /jobs/*/run, PUT /channels/*). It lives here —
+// not on Server in server.go — so handlers gain rate limiting without
+// touching server.go (parallel lane owns the lock logic there).
+type writeBucket struct {
+	mu     sync.Mutex
+	slots  map[string]*failSlot
+	max    int
+	window time.Duration
+}
+
+func newWriteBucket(limit int, window time.Duration) *writeBucket {
+	return &writeBucket{slots: map[string]*failSlot{}, max: limit, window: window}
+}
+
+// allow counts the attempt and reports whether it is within budget.
+func (b *writeBucket) allow(ip string) bool {
+	now := time.Now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.slots) >= 4096 {
+		for k, s := range b.slots {
+			if now.Sub(s.start) > b.window {
+				delete(b.slots, k)
+			}
+		}
+	}
+	sl := b.slots[ip]
+	if sl == nil || now.Sub(sl.start) > b.window {
+		sl = &failSlot{start: now}
+		b.slots[ip] = sl
+	}
+	if sl.count >= b.max {
+		return false
+	}
+	sl.count++
+	return true
+}
+
+func (b *writeBucket) reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.slots = map[string]*failSlot{}
+}
+
+// writeBuckets throttle expensive mutating endpoints per IP: 30 attempts
+// per 10min window, one bucket for job runs and one for channel writes.
+var jobRunBucket = newWriteBucket(30, 10*time.Minute)
+var channelWriteBucket = newWriteBucket(30, 10*time.Minute)
+
 // smsAllow throttles UU sms sends per client IP (10 sends / 10min): the
 // upstream UU risk control (84104) and sms fees punish unbounded retries.
 func (s *Server) smsAllow(ip string) bool {
@@ -133,8 +190,6 @@ func (s *Server) smsAllow(ip string) bool {
 	sl.count++
 	return true
 }
-
-// clientIP (trusted-proxy aware) lives on Server; see server.go.
 
 type loginRequest struct {
 	Username string `json:"username"`
@@ -166,6 +221,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
 	key := ip + "|" + req.Username
 	if !s.logins.allow(key, ip) {
+		s.audit(r, "login.rate_limited", map[string]any{"username": req.Username})
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
 		return
 	}
@@ -174,7 +230,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.Log.Error("login credential load failed", "err", err)
 		s.logins.fail(key, ip)
 		s.audit(r, "login.failed", map[string]any{"username": req.Username, "error": "credential_load"})
-		writeErr(w, http.StatusInternalServerError, "internal", "load credentials")
+		// Generic 500: the store failure detail stays server-side; the
+		// client sees the same shape as any other internal error so login
+		// failures remain indistinguishable (no user enumeration).
+		s.internalError(w, err)
 		return
 	}
 	userOK := subtle.ConstantTimeCompare([]byte(req.Username), []byte(s.AdminUser)) == 1

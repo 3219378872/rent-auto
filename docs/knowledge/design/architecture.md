@@ -4,7 +4,7 @@
 ┌─────────────────────────── frontend (React+Vite+TS) ───────────────────────────┐
 │  Login / Dashboard / Inventory / Listings / Orders / Strategies / Channels / Audit │
 └───────────────▲──────────────────────────────────────────┬──────────────────────┘
-                │ REST /api/v1 (JWT)                       │ SSE: jobs/告警(后续)
+                │ REST /api/v1 (JWT)                       │ 轮询: jobs/告警（面板短轮询；SSE 延后）
 ┌───────────────┴──────────────────────────────────────────▼──────────────────────┐
 │ backend (Go, 单二进制)                                                            │
 │  api/     chi 路由 · JWT中间件 · 登录防爆破 · handlers（审计写入助手在此）             │

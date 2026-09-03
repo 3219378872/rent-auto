@@ -34,9 +34,13 @@ const repriceCols = `l.id, l.channel, l.hash_name, l.goods_ref, l.asset_id,
 	COALESCE(l.last_reprice_at, l.listed_at), l.sublet_applied`
 
 func (s *Store) ListRepriceCandidates(ctx context.Context, channel domain.Channel) ([]RepriceCandidate, error) {
+	// Leased listings are excluded: the asset is rented out, repricing the
+	// shelf row mid-lease is at best a no-op and at worst a platform reject;
+	// their price re-evaluation happens after the lease ends (recon never
+	// delists leased rows either).
 	rows, err := s.Pool.Query(ctx,
 		`SELECT `+repriceCols+` FROM listings l JOIN templates t ON t.hash_name=l.hash_name
-		 WHERE l.channel=$1 AND l.actual_state IN ('active','leased') AND t.blacklisted=false`,
+		 WHERE l.channel=$1 AND l.actual_state='active' AND t.blacklisted=false`,
 		channel)
 	if err != nil {
 		return nil, fmt.Errorf("list reprice candidates: %w", err)
@@ -59,9 +63,13 @@ func (s *Store) UpdateListingDecision(ctx context.Context, listingID int64, d st
 	Rent, Long, Deposit float64
 	Days                int
 }) error {
+	// NOTE: actual_synced_at is deliberately NOT refreshed here. It anchors
+	// the orphan/surplus grace window in recon (AllActiveListings.SyncedAt);
+	// a reprice is not an actual-state sync, and refreshing it would stretch
+	// the grace period on every price move and delay legitimate delists.
 	_, err := s.Pool.Exec(ctx,
 		`UPDATE listings SET rent_price=$2, long_rent_price=$3, deposit=$4, max_days=$5,
-		        last_reprice_at=now(), actual_synced_at=now() WHERE id=$1`,
+		        last_reprice_at=now() WHERE id=$1`,
 		listingID, round2Money(d.Rent), nullIf(round2Money(d.Long)), round2Money(d.Deposit), d.Days)
 	return err
 }
@@ -105,6 +113,13 @@ func ptrF(v float64) *float64 { x := v; return &x }
 func PtrF(v float64) *float64 { return ptrF(v) }
 
 func (s *Store) InsertPriceAction(ctx context.Context, pa PriceAction) (int64, error) {
+	// Every money leg normalizes through round2Money before INSERT.
+	round2MoneyPtr(pa.OldRent)
+	round2MoneyPtr(pa.NewRent)
+	round2MoneyPtr(pa.OldLong)
+	round2MoneyPtr(pa.NewLong)
+	round2MoneyPtr(pa.OldDeposit)
+	round2MoneyPtr(pa.NewDeposit)
 	var id int64
 	err := s.Pool.QueryRow(ctx,
 		`INSERT INTO price_actions(channel, hash_name, asset_id, listing_id, action,
@@ -375,6 +390,7 @@ func (s *Store) TemplatesNeedingQuotes(ctx context.Context) ([]struct {
 func (s *Store) UpdateEcoRefPrices(ctx context.Context, prices map[string]float64) (int64, error) {
 	var n int64
 	for h, p := range prices {
+		p = round2Money(p)
 		tag, err := s.Pool.Exec(ctx,
 			`UPDATE templates SET eco_ref_price=$2, updated_at=now()
 			 WHERE hash_name=$1 AND (eco_ref_price IS NULL OR eco_ref_price <> $2)`, h, p)

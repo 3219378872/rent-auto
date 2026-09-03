@@ -118,6 +118,10 @@ func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, po
 		if err := c.SendDeliveryOffer(ctx, t.OrderNo); err != nil {
 			return sent, gifts, fmt.Errorf("uu: send offer %s: %w", t.OrderNo, err)
 		}
+		// 轮询 err 不得吞没：终轮把 lastErr 原样带回，否则排障时只剩
+		// last=-1 猜谜（曾实锤：GetDeliveryOfferStatus 风控 84104 被吞）。
+		var lastErr error
+		var lastStatus int
 		for i := 0; i < pollAttempts; i++ {
 			if pollInterval != nil {
 				pollInterval()
@@ -127,8 +131,16 @@ func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, po
 				sent = append(sent, t.OrderNo)
 				break
 			}
+			if err != nil {
+				lastErr, lastStatus = err, st
+			} else {
+				lastErr, lastStatus = nil, st
+			}
 			if i == pollAttempts-1 {
-				return sent, gifts, fmt.Errorf("uu: offer %s not confirmed after %d polls (last=%d)", t.OrderNo, pollAttempts, st)
+				if lastErr != nil {
+					return sent, gifts, fmt.Errorf("uu: offer %s not confirmed after %d polls: %w", t.OrderNo, pollAttempts, lastErr)
+				}
+				return sent, gifts, fmt.Errorf("uu: offer %s not confirmed after %d polls (last=%d)", t.OrderNo, pollAttempts, lastStatus)
 			}
 		}
 	}

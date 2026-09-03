@@ -21,6 +21,11 @@ const (
 	// a tighter window permanently skipped late-synced terminal orders —
 	// factor_applied stayed false forever but the row was never selected.
 	factorOrderWindow = 100 * 24 * time.Hour
+	// factorResetEpsilon is the "already at f_min" tolerance for the
+	// stale-reset decision. Factors persist through Round4 (1e-4 quantum),
+	// so 1e-9 misread a quantized f_min (e.g. 0.8500000x) as "not the floor"
+	// and the reset to 1.00 never fired.
+	factorResetEpsilon = 1e-4
 )
 
 // RunFactorEvents folds newly finished orders (rent_success / bought_out)
@@ -47,6 +52,15 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Order-time terms for event classification (one batched lookup, no N+1).
+	terms, err := d.orderTerms(ctx, orderIDsOf(orders))
+	if err != nil {
+		// The batch stays unmarked, so the next run replays it.
+		d.Log.Warn("factor fold: order detail lookup failed", "err", err)
+		return err
+	}
+	// Listing max_days rides on FactorOrder (join snapshot) as the legacy
+	// fallback (see classifyFactorEvent) — no extra lookup needed.
 	paramsCache := map[string]*pricing.Params{}
 	foldIdx := map[int64]int{} // listingID → index into folds
 	var folds []store.FactorFold
@@ -82,16 +96,7 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 			folds = append(folds, store.FactorFold{ListingID: o.ListingID, Factor: base})
 		}
 		f := &folds[cur]
-		var ev pricing.FactorEvent
-		switch {
-		case o.Status == "bought_out":
-			ev = pricing.EventBoughtOut
-		case o.Status == "done" && (o.MaxDays <= 0 || o.RentDays < o.MaxDays):
-			// 订单完成且未租满整个周期 → 正向信号（spec §3）
-			ev = pricing.EventRentSuccess
-		default:
-			// full-term completion: spec defines no signal — fold silently
-		}
+		ev := classifyFactorEvent(o.Status, terms[o.OrderID], o.MaxDays)
 		if ev != "" {
 			next, _ := pricing.NextFactor(f.Factor, ev, p.Ctrl)
 			d.Log.Info("factor event planned", "listing", o.ListingID,
@@ -101,6 +106,91 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 		orderIDs = append(orderIDs, o.OrderID)
 	}
 	return d.Store.ApplyFactorFolds(ctx, folds, orderIDs)
+}
+
+// orderTerm carries the order-time classification inputs for one lease order.
+type orderTerm struct {
+	orderType string // short|long|"" (legacy UU rows: UU never sets order_type)
+	rentDays  int
+	termDays  int // due−started in days; <=0 = unknown
+}
+
+// classifyFactorEvent maps a finished order onto a controller event WITHOUT
+// letting a LATER strategy edit rewrite history: long leases use the order-time
+// term snapshot (rent_days < due−started); legacy rows without a term snapshot
+// fall back to the listing's configured max_days (best effort, documented).
+// pricing-spec §3: full-term completion defines no signal.
+//   - bought_out → bought_out (double step-up);
+//   - done + long with known term → rent_success only on early completion;
+//   - done + short/legacy → rent_success only when rent_days < term (known) or
+//     < fallback max_days; full term or unknowable term yields no signal.
+func classifyFactorEvent(status string, t orderTerm, fallbackMaxDays int) pricing.FactorEvent {
+	switch status {
+	case "bought_out":
+		return pricing.EventBoughtOut
+	case "done":
+		if t.orderType == "long" {
+			if t.termDays > 0 && t.rentDays > 0 && t.rentDays < t.termDays {
+				return pricing.EventRentSuccess
+			}
+			return ""
+		}
+		if t.termDays > 0 && t.rentDays > 0 {
+			if t.rentDays < t.termDays {
+				return pricing.EventRentSuccess
+			}
+			return ""
+		}
+		if fallbackMaxDays > 0 && t.rentDays > 0 {
+			if t.rentDays < fallbackMaxDays {
+				return pricing.EventRentSuccess
+			}
+			return ""
+		}
+		return pricing.EventRentSuccess
+	default:
+		return ""
+	}
+}
+
+func orderIDsOf(orders []store.FactorOrder) []int64 {
+	ids := make([]int64, 0, len(orders))
+	for _, o := range orders {
+		ids = append(ids, o.OrderID)
+	}
+	return ids
+}
+
+// orderTerms batch-loads order-time terms for event classification: order_type
+// plus the due−started span as the term snapshot. A missing row yields the
+// zero term (classified as short on done) — only reachable under a concurrent
+// delete, since the ids come from lease_orders itself.
+func (d *Deps) orderTerms(ctx context.Context, ids []int64) (map[int64]orderTerm, error) {
+	out := map[int64]orderTerm{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := d.Store.Pool.Query(ctx,
+		`SELECT id, COALESCE(order_type,''), COALESCE(rent_days,0),
+		        COALESCE(started_at, now()), COALESCE(due_at, now())
+		 FROM lease_orders WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var t orderTerm
+		var started, due time.Time
+		if err := rows.Scan(&id, &t.orderType, &t.rentDays, &started, &due); err != nil {
+			return nil, err
+		}
+		if !started.IsZero() && !due.IsZero() && due.After(started) {
+			t.termDays = int(due.Sub(started).Hours() / 24)
+		}
+		out[id] = t
+	}
+	return out, rows.Err()
 }
 
 // runStaleScan steps down factors for listings idle past their stale window.
@@ -132,7 +222,7 @@ func (d *Deps) runStaleScan(ctx context.Context) error {
 			continue
 		}
 		ev := pricing.EventStaleDay
-		if math.Abs(c.Factor-p.Ctrl.FMin) < 1e-9 {
+		if isAtFactorMin(c.Factor, p.Ctrl.FMin) {
 			ev = pricing.EventReset
 		}
 		next, reason := pricing.NextFactor(c.Factor, ev, p.Ctrl)
@@ -144,12 +234,18 @@ func (d *Deps) runStaleScan(ctx context.Context) error {
 			"hash", c.HashName, "reason", reason, "from", c.Factor, "to", next)
 		if ev == pricing.EventReset {
 			if d.Audit != nil {
+				// NextFactor clamps the 1.0 reset into [FMin,FMax] when the
+				// configured floor sits above neutral (reason carries
+				// |clamped_min); from/to/reason keep the audit truthful.
 				d.Audit(ctx, domain.AuditEntry{
 					Time: time.Now().UTC(), Actor: "system",
 					Action: "pricing.factor_reset", Channel: string(c.Channel),
 					Target: c.HashName,
 					Detail: map[string]any{
 						"listing": c.ListingID,
+						"from":    c.Factor,
+						"to":      next,
+						"reason":  reason,
 						"note":    "连续 stale 降价至下限仍无转化，因子已回归 1.00 —— 建议人工检查",
 					},
 				})
@@ -157,6 +253,13 @@ func (d *Deps) runStaleScan(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// isAtFactorMin reports whether a stored factor sits at the configured floor
+// within the Round4 quantum (factorResetEpsilon): quantized persistence means
+// exact equality never holds in general.
+func isAtFactorMin(factor, fmin float64) bool {
+	return math.Abs(factor-fmin) < factorResetEpsilon
 }
 
 func (d *Deps) listingFactor(ctx context.Context, listingID int64) (float64, error) {

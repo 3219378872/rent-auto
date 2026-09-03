@@ -47,6 +47,9 @@ factor ∈ [f_min, f_max]（默认 [0.85, 1.25]，初始 1.00）
 - **实现**：scheduler `factor_events` 任务（17min 周期）——终态订单经
   `factor_applied` 幂等标记折算；stale 扫描锚点为 `last_factor_event_at →
   last_reprice_at → listed_at`；冷启动（recon 发布路径）恒从 1.00 起
+- 事件分类（2026-09-03 全面修复轮）：long 订单用下单时 term 快照（due−started），
+  rent_days<term 才算 rent_success；legacy 无快照行回落 listings.max_days 连接值；
+  未知 term 不伪造正信号；重置判定容差 1e-4（对齐 Round4 量化）
 - 因子持久化于 listings.factor；重置条件：连续 stale 降价至 f_min 后仍无转化 → 回归 1.00 并审计告警 `pricing.factor_reset`
 - 冷启动：新上架商品 factor=1.00，前 cooldown 内不改价
 

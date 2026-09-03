@@ -31,6 +31,19 @@ func TestAnnualizedROI(t *testing.T) {
 	}
 }
 
+func TestNetIncome(t *testing.T) {
+	// data-model 口径 B: Income.Total is gross minus sold-out cost basis.
+	if NetIncome(100, 30) != 70 {
+		t.Fatalf("net=%v want 70", NetIncome(100, 30))
+	}
+	if NetIncome(10, 30) != -20 { // over-sold basis is a legitimate negative
+		t.Fatalf("net=%v want -20", NetIncome(10, 30))
+	}
+	if NetIncome(1.005, 0) != 1.0 { // rounds through canonical Round2
+		t.Fatalf("net rounding=%v", NetIncome(1.005, 0))
+	}
+}
+
 func mathRound4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }
 
 func TestRound2(t *testing.T) {

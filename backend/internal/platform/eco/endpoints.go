@@ -1,6 +1,7 @@
 package eco
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -293,23 +294,32 @@ type MarketPriceEntry struct {
 // GetMarketPriceDump pulls the full platform sell-price list.
 // Platform requires ≥60s between calls — schedule-level responsibility.
 // Response payload appears as either {"List":[…]} or a bare array depending on
-// deployment version; both shapes are accepted.
+// deployment version; both shapes are accepted. Anything else (e.g. a proxy
+// error page smuggled past the envelope) is a hard error — returning nil,nil
+// would silently starve every value anchor downstream.
 func (c *Client) GetMarketPriceDump(ctx context.Context) ([]MarketPriceEntry, error) {
 	raw, err := c.postRaw(ctx, "/Api/Market/GetHashNameAndPriceList", map[string]any{})
 	if err != nil || len(raw) == 0 {
 		return nil, err
 	}
-	var wrapped struct {
-		List []MarketPriceEntry `json:"List"`
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
 	}
-	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.List) > 0 {
+	if trimmed[0] == '{' {
+		var wrapped struct {
+			List []MarketPriceEntry `json:"List"`
+		}
+		if err := json.Unmarshal(raw, &wrapped); err != nil {
+			return nil, fmt.Errorf("eco: /Api/Market/GetHashNameAndPriceList payload: %w", err)
+		}
 		return wrapped.List, nil
 	}
 	var list []MarketPriceEntry
-	if err := json.Unmarshal(raw, &list); err == nil {
-		return list, nil
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("eco: /Api/Market/GetHashNameAndPriceList payload: %w", err)
 	}
-	return nil, nil
+	return list, nil
 }
 
 // SellerRentOrderDetailResult is /Api/Rent/SellerRentOrderDetail (api-220956684).

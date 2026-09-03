@@ -78,6 +78,12 @@
   deviceW2 上报的设备指纹携带版本信息，第三方简化请求无法证明）。
   平台 8-23~8-27 之间收紧（8-23 的 web 网关 HAR 尚可走通滑块流程）。
   待办⑤：真机 APP/官网浏览器登录抓包对齐，或验证「手动粘贴 token」替代路径
+  - **哨兵映射（review-fix 轮）**：`checkEnv` 将 5050 →
+    `platform.ErrVersionBlocked`、1110205 → `platform.ErrCaptchaRequired`
+   （`platform/adapter.go` 定义）。调度冷却按 generic（普通平台信号）+
+    审计处理，不设专用退避桶——两者都是"等人工/等新版本"而非"过会儿重试"。
+    注意：captcha 首发回复（Msg 含图形校验）仍走 `SmsModeCaptcha` 正常分支
+    （nil error，前端 TCaptcha 重试），哨兵只在其它路径遇到该码时生效。
 
 ## 本项目使用的端点（租赁域）
 
@@ -133,6 +139,18 @@
 13. **禁止手动设置 `Accept-Encoding`**：Go net/http 对手动设置的该头不做透明
     gzip 解压，平台返回的 gzip 响应体直达 JSON 解码器（`\x1f` 开头报错）；
     必须交给传输层自动协商。请求头统一由 `generateHeaders()` 构造
+14. **登录/改价信封全覆盖（review-fix 轮）**：匿名登录三件套
+   （`SendLoginSmsCode`/`SmsSignIn`/`GetSmsUpSignInConfig`）无 Client token，
+    故不走 `client.do`，但逐一执行同样的 `decodeEnvelope`+`checkEnv`——
+    5050/1110205/84101/84104 在此收敛为统一哨兵；`SmsSignIn` 的 `Code==0`
+    但 `Token` 缺失视为登录失败（空 token 落库=静默掉线）；改价 pre-change
+    init 回复同样过信封校验，业务码≠0 直接 abort（不再带着注定失败的批次
+    继续 PUT）。
+15. **发货轮询 lastErr（review-fix 轮）**：`DeliverPendingRentals` 终轮返回
+    轮询期最后一次真实错误（`%w` 透出哨兵），不再只报 `last=-1` 猜谜。
+16. **改价长度门控（review-fix 轮）**：`Adapter.RepriceLease` 要求
+    `len(批次回复项)==len(请求项)`，缺口单 fail closed 标失败并报
+    `ErrPartialFailure`——无点名单一律不乐观成功（与 ECO 侧同约）。
 
 
 ## 待真机校订（2026-08-24 第三轮审查增补）

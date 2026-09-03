@@ -8,6 +8,9 @@
 #
 # ⚠️ 未设置 SITE_ADDRESS 时退化为纯 HTTP :80 —— 仅限内网调试；
 #    公网明文暴露面板等于公开 Steam 密码 / ECO 私钥 / UU 会话凭证。
+# ⚠️ 直连后端 :8080 会绕过本文件的完整安全头（CSP/HSTS 仅 Caddy 下发）——
+#    API 层仅带 X-Content-Type-Options / X-Frame-Options / Referrer-Policy
+#    基线头；公网/生产流量必须经 Caddy 入口，绝不直连 :8080。
 {$SITE_ADDRESS::80} {
 	encode gzip zstd
 

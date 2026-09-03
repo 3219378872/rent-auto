@@ -140,10 +140,33 @@ func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeas
 	success, fails, err := a.c.ChangeLeasePrices(ctx, payload, defaultCompensationType)
 	results := make([]platform.RepriceLeaseResult, len(items))
 	failMap := map[int64]string{}
+	okSet := map[int64]bool{}
 	for _, f := range fails {
 		if f.IsSuccess != 1 {
 			failMap[f.CommodityID] = f.Message
+		} else {
+			okSet[f.CommodityID] = true
 		}
+	}
+	// 长度门控：批次回复必须逐单覆盖请求（len(fails)==len(items) 且逐单可
+	// 对应），否则未被点名的单子状态未知——fail closed 标失败并报
+	// ErrPartialFailure，绝不乐观成功。
+	if len(fails) != len(items) {
+		for i := range items {
+			results[i].GoodsRef = items[i].GoodsRef
+			goodsID, _ := strconv.ParseInt(items[i].GoodsRef, 10, 64)
+			if msg, bad := failMap[goodsID]; bad {
+				results[i].Success = false
+				results[i].Error = msg
+			} else if !okSet[goodsID] {
+				results[i].Success = false
+				results[i].Error = "uu: missing per-item reprice result"
+			} else {
+				results[i].Success = true
+			}
+		}
+		return results, fmt.Errorf("%w: %d/%d reprice results returned",
+			platform.ErrPartialFailure, len(fails), len(items))
 	}
 	okCount := success
 	for i := range items {
@@ -205,6 +228,8 @@ var uuWallClock = time.FixedZone("CST", 8*3600)
 
 // parseUUTime parses a UU timestamp string in the platform zone; empty or
 // unparseable input yields the zero time (caller upserts COALESCE-guard it).
+// 兜底分支同样按平台壁钟（CST）解析：用 time.Parse 会把壁钟串当 UTC，
+// 全部订单时刻整体早 8h（ECO 曾有同款 bug）。
 func parseUUTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
@@ -212,8 +237,13 @@ func parseUUTime(s string) time.Time {
 	if t, err := time.ParseInLocation(time.DateTime, s, uuWallClock); err == nil {
 		return t
 	}
-	t, _ := time.Parse(time.DateTime, s)
-	return t
+	// 兜底只接受其它已知版式，且一律按平台壁钟（CST）落点，防止 UTC 漂移 8h。
+	for _, layout := range []string{time.DateOnly, time.RFC3339} {
+		if t, err := time.ParseInLocation(layout, s, uuWallClock); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // mapUUOrderStatus translates observed UU order status ints into the unified

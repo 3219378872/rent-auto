@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform/uu"
+	"github.com/3219378872/rent-auto/backend/internal/secrets"
 )
 
 type JobStatus struct {
@@ -30,11 +33,58 @@ func (s *Server) handleJobsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Jobs.StatusList())
 }
 
+// masterKeyMissingMessage is the single unified client-facing wording for
+// credential writes refused without APP_MASTER_KEY (handlers_admin and
+// handlers_jobs share it). The registry also emits errors containing
+// "APP_MASTER_KEY"; isMasterKeyError matches both that and the secrets box
+// sentinel so the 500 mapping survives either error shape.
+const masterKeyMissingMessage = "APP_MASTER_KEY未配置，三渠道不可用"
+
+func isMasterKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, secrets.ErrNoMasterKey) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "APP_MASTER_KEY") || strings.Contains(msg, "master key")
+}
+
+// writeMasterKeyGuard answers 500 with the unified message when a credential
+// write failed for lack of APP_MASTER_KEY. Reports whether it handled err.
+func (s *Server) writeMasterKeyGuard(w http.ResponseWriter, r *http.Request, action string, err error) bool {
+	if !isMasterKeyError(err) {
+		return false
+	}
+	s.Log.Error("credential write refused: master key missing", "action", action, "err", err)
+	s.audit(r, action, map[string]any{"error": "master_key_missing"})
+	writeErr(w, http.StatusInternalServerError, "master_key_missing", masterKeyMissingMessage)
+	return true
+}
+
+// truncateAudit caps free-form upstream text kept in audit details so one
+// oversized payload (e.g. captcha verify_data) cannot bloat the audit table.
+func truncateAudit(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func (s *Server) handleJobTrigger(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if !jobRunBucket.allow(s.clientIP(r)) {
+		s.audit(r, "job.trigger.rate_limited", map[string]any{"job": name})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
+		return
+	}
 	if err := s.Jobs.Trigger(r.Context(), name); err != nil {
+		s.Log.Error("job trigger failed", "job", name, "err", err)
 		s.audit(r, "job.trigger.failed", map[string]any{"job": name, "error": err.Error()})
-		writeErr(w, http.StatusBadRequest, "trigger_failed", err.Error())
+		// Upstream error text stays server-side (log+audit); the client
+		// gets a stable generic message — codes stay machine-readable.
+		writeErr(w, http.StatusBadRequest, "trigger_failed", "trigger failed")
 		return
 	}
 	s.audit(r, "job.trigger", map[string]any{"job": name})
@@ -58,13 +108,14 @@ type uuCaptchaInput struct {
 }
 
 type uuSmsResponse struct {
-	SessionID    string `json:"session_id"`
-	Mode         string `json:"mode"`
-	Msg          string `json:"msg,omitempty"`
-	SmsUpContent string `json:"sms_up_content,omitempty"`
-	SmsUpNumber  string `json:"sms_up_number,omitempty"`
-	ReqTicket    string `json:"req_ticket,omitempty"` // captcha mode: echo back on retry
-	Secs         int    `json:"secs,omitempty"`       // server-side cooldown seconds
+	SessionID      string `json:"session_id"`
+	Mode           string `json:"mode"`
+	Msg            string `json:"msg,omitempty"`
+	SmsUpContent   string `json:"sms_up_content,omitempty"`
+	SmsUpNumber    string `json:"sms_up_number,omitempty"`
+	ReqTicket      string `json:"req_ticket,omitempty"` // captcha mode: echo back on retry
+	LoginReqTicket string `json:"login_req_ticket,omitempty"`
+	Secs           int    `json:"secs,omitempty"` // server-side cooldown seconds
 }
 
 type uuVerifyRequest struct {
@@ -110,10 +161,19 @@ func (s *Server) handleSteamCreds(w http.ResponseWriter, r *http.Request) {
 			"username/password/shared_secret/identity_secret all required")
 		return
 	}
+	if !channelWriteBucket.allow(s.clientIP(r)) {
+		s.audit(r, "channel.steam.creds_rate_limited", map[string]any{})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
+		return
+	}
 	if err := s.Steam.SetCredentials(r.Context(),
 		req.Username, req.Password, req.SharedSecret, req.IdentitySecret); err != nil {
+		if s.writeMasterKeyGuard(w, r, "channel.steam.creds_failed", err) {
+			return
+		}
+		s.Log.Error("steam creds write failed", "err", err)
 		s.audit(r, "channel.steam.creds_failed", map[string]any{"error": err.Error()})
-		writeErr(w, http.StatusBadRequest, "login_failed", err.Error())
+		writeErr(w, http.StatusBadRequest, "login_failed", "set credentials failed")
 		return
 	}
 	// security-spec：凭证变更审计带指纹（Steam 凭证展示规则：不可见——以
@@ -131,6 +191,7 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.smsAllow(s.clientIP(r)) {
+		s.audit(r, "channel.uu.sms_rate_limited", map[string]any{"phone_tail": phoneTail(req.Phone, 4)})
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many sms attempts, retry later")
 		return
 	}
@@ -155,22 +216,25 @@ func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.Channels.SendLoginSmsCode(r.Context(), req.Phone, session, cv)
 	if err != nil {
+		s.Log.Error("uu sms send failed", "err", err)
 		s.audit(r, "channel.uu.sms_failed", map[string]any{"error": err.Error()})
-		writeErr(w, http.StatusBadGateway, "sms_failed", err.Error())
+		writeErr(w, http.StatusBadGateway, "sms_failed", "send sms failed")
 		return
 	}
 	s.audit(r, "channel.uu.sms_sent", map[string]any{"mode": res.Mode, "msg": res.Msg})
 	out := uuSmsResponse{SessionID: session, Mode: res.Mode, Msg: res.Msg,
-		ReqTicket: res.ReqTicket, Secs: res.Secs}
+		ReqTicket: res.ReqTicket, LoginReqTicket: res.LoginReqTicket, Secs: res.Secs}
 	switch res.Mode {
 	case uu.SmsModeCaptcha:
 		// VerifyRaw answers api-notes 待办①② (app-gateway Data shape) from the
 		// wire instead of guessing — contents are ticket+secs, no PII.
-		s.audit(r, "channel.uu.captcha_required", map[string]any{"msg": res.Msg, "verify_data": res.VerifyRaw})
+		// Truncated: upstream controls this text and must not bloat audit.
+		s.audit(r, "channel.uu.captcha_required", map[string]any{"msg": res.Msg, "verify_data": truncateAudit(res.VerifyRaw, 256)})
 	case uu.SmsModeUplink:
 		cfg, err := s.Channels.GetSmsUpSignInConfig(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusBadGateway, "sms_up_config_failed", err.Error())
+			s.Log.Error("uu sms uplink config failed", "err", err)
+			writeErr(w, http.StatusBadGateway, "sms_up_config_failed", "sms uplink config failed")
 			return
 		}
 		out.SmsUpContent, out.SmsUpNumber = cfg.Content, cfg.Number
@@ -184,12 +248,18 @@ func (s *Server) handleUUSmsVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid payload")
 		return
 	}
+	if !s.smsAllow(s.clientIP(r)) {
+		s.audit(r, "channel.uu.verify_rate_limited", map[string]any{"phone_tail": phoneTail(req.Phone, 4)})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many sms attempts, retry later")
+		return
+	}
 	tail, err := s.Channels.VerifyUUSms(r.Context(), req.Phone, req.Code, req.SessionID, req.LoginReqTicket)
 	if err != nil {
+		s.Log.Error("uu sms verify failed", "err", err)
 		s.audit(r, "channel.uu.login_failed", map[string]any{"error": err.Error()})
 		// 400, not 401: this is an upstream code rejection, NOT a panel-session
 		// expiry — the frontend force-logouts on 401.
-		writeErr(w, http.StatusBadRequest, "verify_failed", err.Error())
+		writeErr(w, http.StatusBadRequest, "verify_failed", "verify failed")
 		return
 	}
 	// security-spec：凭证变更必须产生带尾号指纹的审计（UU token 规则：尾 8 位；
@@ -206,9 +276,18 @@ func (s *Server) handleECOCreds(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "partner_id and private_key_pem required")
 		return
 	}
+	if !channelWriteBucket.allow(s.clientIP(r)) {
+		s.audit(r, "channel.eco.creds_rate_limited", map[string]any{})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
+		return
+	}
 	if err := s.Channels.SetECOCreds(r.Context(), req.PartnerID, req.PrivateKeyPEM, req.SteamID); err != nil {
+		if s.writeMasterKeyGuard(w, r, "channel.eco.creds_failed", err) {
+			return
+		}
+		s.Log.Error("eco creds write failed", "err", err)
 		s.audit(r, "channel.eco.creds_failed", map[string]any{"error": err.Error()})
-		writeErr(w, http.StatusBadRequest, "invalid_creds", err.Error())
+		writeErr(w, http.StatusBadRequest, "invalid_creds", "set credentials failed")
 		return
 	}
 	// security-spec：ECO 私钥展示规则 = SHA-256 指纹前 12 位；partnerId 明文。
@@ -234,9 +313,18 @@ func (s *Server) handleUUToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "token required")
 		return
 	}
+	if !channelWriteBucket.allow(s.clientIP(r)) {
+		s.audit(r, "channel.uu.creds_rate_limited", map[string]any{})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
+		return
+	}
 	if err := s.Channels.SetUUToken(r.Context(), req.Token); err != nil {
+		if s.writeMasterKeyGuard(w, r, "channel.uu.creds_failed", err) {
+			return
+		}
+		s.Log.Error("uu token import failed", "err", err)
 		s.audit(r, "channel.uu.creds_failed", map[string]any{"error": err.Error()})
-		writeErr(w, http.StatusBadRequest, "invalid_token", err.Error())
+		writeErr(w, http.StatusBadRequest, "invalid_token", "set token failed")
 		return
 	}
 	// security-spec：凭证变更审计只带尾 8 位指纹，token 本体绝不入审计/日志。

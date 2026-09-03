@@ -342,46 +342,45 @@ func Decide(in Input) Decision {
 		return Decision{SkipReason: "non_finite_input"}
 	}
 	g := in.P.Guard
+	var reasons []string
 
 	// 1. target rent from baseline × factor
 	f := clampF(in.Factor, in.P.Ctrl.FMin, in.P.Ctrl.FMax)
 	rent := in.Base.Short * f
-	if in.P.Baseline.MinLeaseRatio > 0 {
-		rent = math.Max(rent, in.P.Baseline.MinLeaseRatio*in.V)
-	}
 
-	// 2. absolute bounds
+	// 2. absolute bounds first...
 	if rent < g.MinRent {
 		rent = g.MinRent
 	}
 	if rent > g.MaxRent {
 		rent = g.MaxRent
 	}
+
+	// 3. ...then the MinLeaseRatio floor, so a configured ratio is never
+	// silently pulled back under the floor by the absolute bounds above.
+	// A floor that overshoots the absolute bounds is a misconfiguration:
+	// the absolute bounds stay authoritative and the clip is recorded as a
+	// guardrail hit (audit trail in Decision.Reasons).
+	if in.P.Baseline.MinLeaseRatio > 0 && finite(in.P.Baseline.MinLeaseRatio*in.V) {
+		if floor := in.P.Baseline.MinLeaseRatio * in.V; rent < floor {
+			rent = floor
+			reasons = append(reasons, fmt.Sprintf("min_lease_ratio_floor=%.2f", Round2(floor)))
+		}
+	}
+	if rent < g.MinRent {
+		rent = g.MinRent
+		reasons = append(reasons, "guardrail:min_rent")
+	}
+	if rent > g.MaxRent {
+		rent = g.MaxRent
+		reasons = append(reasons, "guardrail:max_rent")
+	}
 	rent = Round2(rent)
 
-	// 3. cooldown
-	cd := time.Duration(g.CooldownMinutes) * time.Minute
-	if !in.Cur.LastActionAt.IsZero() && in.Now.Sub(in.Cur.LastActionAt) < cd {
-		return Decision{SkipReason: "cooldown"}
-	}
-
-	// 4. change-rate cap + noise floor (only when a current price exists).
-	// The cap is re-clamped to absolute bounds: near max_rent an upward
-	// jump must not escape the ceiling (and symmetrically for the floor).
-	if in.Cur.RentPrice > 0 {
-		old := in.Cur.RentPrice
-		capped := clampF(rent, old*(1-g.MaxChangeRatio), old*(1+g.MaxChangeRatio))
-		capped = clampF(capped, g.MinRent, g.MaxRent)
-		capped = Round2(capped)
-		if math.Abs(capped-old) > 1e-9 && capped != rent {
-			rent = capped
-		}
-		if math.Abs(rent-old)/math.Max(old, 0.01) < g.NoiseRatio && !in.IgnoreNoiseFloor {
-			return Decision{SkipReason: "noise"}
-		}
-	}
-
-	// 5. channel-specific long/days/deposit
+	// 4. channel-specific long/days/deposit BEFORE cooldown/noise: an ECO
+	// deposit-cap breach is an invalid decision carrying an audit reason and
+	// must never be masked by a cooldown/noise skip (likewise the UU floor
+	// lift must be computed on the final rent, not hidden behind an early return).
 	days := in.P.UUMaxDays
 	long := math.Min(rent*0.98, in.Base.Long)
 	dep := math.Max(in.Base.Deposit, g.DepositFloorRatio*in.V)
@@ -412,11 +411,34 @@ func Decide(in Input) Decision {
 		}
 	}
 
+	// 5. cooldown
+	cd := time.Duration(g.CooldownMinutes) * time.Minute
+	if !in.Cur.LastActionAt.IsZero() && in.Now.Sub(in.Cur.LastActionAt) < cd {
+		return Decision{SkipReason: "cooldown"}
+	}
+
+	// 6. change-rate cap + noise floor (only when a current price exists).
+	// The cap is re-clamped to absolute bounds: near max_rent an upward
+	// jump must not escape the ceiling (and symmetrically for the floor).
+	if in.Cur.RentPrice > 0 {
+		old := in.Cur.RentPrice
+		capped := clampF(rent, old*(1-g.MaxChangeRatio), old*(1+g.MaxChangeRatio))
+		capped = clampF(capped, g.MinRent, g.MaxRent)
+		capped = Round2(capped)
+		if math.Abs(capped-old) > 1e-9 && capped != rent {
+			rent = capped
+		}
+		if math.Abs(rent-old)/math.Max(old, 0.01) < g.NoiseRatio && !in.IgnoreNoiseFloor {
+			return Decision{SkipReason: "noise"}
+		}
+	}
+
 	long = Round2(math.Max(math.Min(long, rent), 0))
 	dep = Round2(dep)
 
+	reasons = append(reasons, fmt.Sprintf("factor=%.4f base=%.2f V=%.2f", f, in.Base.Short, in.V))
 	return Decision{
 		OK: true, Rent: rent, Long: long, MaxDays: days, Deposit: dep,
-		Reasons: []string{fmt.Sprintf("factor=%.4f base=%.2f V=%.2f", f, in.Base.Short, in.V)},
+		Reasons: reasons,
 	}
 }

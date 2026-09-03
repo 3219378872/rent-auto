@@ -6,7 +6,8 @@ services:
     environment:
       POSTGRES_USER: rentauto
       # 弱默认密码仅可接受于下方端口只绑回环的前提下；
-      # 任何对外/跨机部署必须在 deploy/.env 覆盖为强密码。
+      # 任何对外/跨机部署必须在 deploy/.env 覆盖为强密码（≥20 位随机串，
+      # 与其它密码不复用；泄露后立即轮换并检查 pgdata 备份）。
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rentauto}
       POSTGRES_DB: rentauto
     ports:
@@ -29,6 +30,10 @@ services:
       ADDR: :8080
       DATABASE_URL: postgres://rentauto:${POSTGRES_PASSWORD:-rentauto}@postgres:5432/rentauto?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:?在 deploy/.env 中设置 32 字节以上随机串}
+      # APP_MASTER_KEY 为空允许启动，但三渠道（UU/ECO/Steam）凭证不可读写：
+      # 凭证写入接口统一返回 500“APP_MASTER_KEY未配置，三渠道不可用”。
+      # 生产/真机必须在 deploy/.env 设置 32 字节 hex（openssl rand -hex 32），
+      # 一经写入凭证绝不轮换（轮换=历史凭证全部无法解密）。
       APP_MASTER_KEY: ${APP_MASTER_KEY:-}
       DRY_RUN_DEFAULT: ${DRY_RUN_DEFAULT:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}

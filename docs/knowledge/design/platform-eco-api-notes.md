@@ -8,7 +8,10 @@
 - Base：`https://openapi.ecosteam.cn`，全 POST JSON
 - 公共参数：`PartnerId`、`Timestamp`(秒，**5分钟有效**)、`Sign`（业务参数不含 Sign）
 - 响应：`{ResultCode, ResultMsg, ResultData}`；ResultCode=0 成功
-  关键错误码：5003 时间戳失效 / 5004 验签失败 / 6001 频率过快 / 4004 IP白名单 / 5005 身份ID无效
+  关键错误码：2001 SteamId缺失（确定性调用方 bug，不映射哨兵）/ 5003 时间戳失效
+  （签名环境故障→`ErrAuthExpired`）/ 5004 验签失败（保留 generic，可能是本地 bug）/
+  6001 频率过快（指数退避+抖动重试≤3）/ 7002 超31天窗（分段后永不触发，误用时按
+  `ErrRateLimited` 冷却）/ 4004 IP白名单 / 5005 身份ID无效（后两者→`ErrAuthExpired`）
 - **签名算法**：首层参数名按不区分大小写升序（0-9a-zA-Z）拼 `k=v&k=v`；
   数组/对象值序列化为**紧凑 JSON（无空格换行、不重排键）**；SHA256withRSA(PKCS8) 签名后 base64
 
@@ -114,8 +117,16 @@ false 的挂单在 reprice 时豁免噪声下限（价格不变也提交，冷�
 
 2026-08-24 起 ECO 客户端与 UU 对齐为严格策略：非 HTTP 200 一律 fail-closed；
 200 响应信封缺 `ResultCode` 键视为协议错误（此前默认 code=0 曾致幽灵下架，
-round3 修复并固化反例）。凭据级失败码 4004/5005 映射 `ErrAuthExpired` 哨兵，
-调度器风控冷却得以介入（round4）；5004 验签失败保留 generic（可能是本地 bug）。
+round3 修复并固化反例）。凭据/环境级失败码 4004/5005/5003 映射 `ErrAuthExpired`
+哨兵，调度器风控冷却得以介入（round4；5003 为 review-fix 轮追加：时钟偏移属
+签名环境故障）；7002 映射 `ErrRateLimited`（分段后正常流程永不触发，见 #E1）；
+2001（SteamId 缺失）故意保持 generic——确定性调用方 bug，重试/冷却永无帮助，
+不得喂给风控退避通道。6001 退避追加抖动（review-fix 轮）：无抖动的同步重试会
+与其它被限流 worker 同 tick 再触发 6001（thundering herd）。
+发货域逐单判定（review-fix 轮）：`SendOfferResult/AcceptOfferResult.Failed()` 按
+ErrorCode 判定（显式非 OK 码权威；send  legacy 无码载荷回退 Error 文案），
+`SellerSendOffer` 单项失败直接返回 error（调用方忽略结果体也不再误记"已发送"），
+批量结果用 `FailedSends()/FailedAccepts()` 分支。
 
 ## 待办（待真机校订）
 

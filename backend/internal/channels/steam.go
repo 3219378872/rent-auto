@@ -34,7 +34,17 @@ func NewSteamSession(st *store.Store, box *secrets.Box, log *slog.Logger) *Steam
 }
 
 // SetAuditFn wires the write-operation audit sink (see Registry.SetAuditFn).
-func (s *SteamSession) SetAuditFn(fn AuditHook) { s.auditFn = fn }
+func (s *SteamSession) SetAuditFn(fn AuditHook) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auditFn = fn
+}
+
+func (s *SteamSession) auditFnCopy() AuditHook {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.auditFn
+}
 
 // Restore rebuilds a session from stored tokens (fast path, no password login).
 func (s *SteamSession) Restore(ctx context.Context) error {
@@ -48,6 +58,7 @@ func (s *SteamSession) Restore(ctx context.Context) error {
 		if err == store.ErrNotFound {
 			return nil // not configured yet; silent
 		}
+		s.log.Error("steam tokens lookup failed", "err", err)
 		return err
 	}
 	if setting.ValueEnc == nil {
@@ -217,8 +228,8 @@ func (s *SteamSession) AcceptZeroCostOffers(ctx context.Context, log interface{ 
 		if ok {
 			accepted++
 			log.Info("steam offer accepted", "offer", o.TradeOfferID)
-			if s.auditFn != nil {
-				s.auditFn(ctx, domain.AuditEntry{
+			if fn := s.auditFnCopy(); fn != nil {
+				fn(ctx, domain.AuditEntry{
 					Time: time.Now().UTC(), Actor: "system",
 					Action: "order.accepted", Channel: "steam", Target: o.TradeOfferID,
 				})

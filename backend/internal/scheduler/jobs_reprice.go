@@ -109,7 +109,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 		return err
 	}
 	strategyCache := map[string]*pricing.Params{}
-	var stratErrs []error
+	var stratErrs, opErrs []error
 
 	for _, c := range cands {
 		es, err := d.Store.GetEffectiveStrategy(ctx, c.HashName)
@@ -165,7 +165,10 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			pa.Action = "skip"
 			pa.Decision, _ = json.Marshal(map[string]any{"skip": decision.SkipReason, "reasons": decision.Reasons})
 			pa.Success = true
-			_, _ = d.Store.InsertPriceAction(ctx, pa)
+			if _, err := d.Store.InsertPriceAction(ctx, pa); err != nil {
+				d.Log.Error("price action insert failed", "err", err)
+				opErrs = append(opErrs, fmt.Errorf("price_action skip %s/%d: %w", c.HashName, c.ListingID, err))
+			}
 			continue
 		}
 		pa.NewRent = store.PtrF(decision.Rent)
@@ -180,7 +183,10 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 
 		if effectiveDry {
 			pa.Success = true
-			_, _ = d.Store.InsertPriceAction(ctx, pa)
+			if _, err := d.Store.InsertPriceAction(ctx, pa); err != nil {
+				d.Log.Error("price action insert failed", "err", err)
+				opErrs = append(opErrs, fmt.Errorf("price_action dryrun %s/%d: %w", c.HashName, c.ListingID, err))
+			}
 			continue
 		}
 
@@ -197,6 +203,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 		}
 		if _, ierr := d.Store.InsertPriceAction(ctx, pa); ierr != nil {
 			d.Log.Error("price action insert failed", "err", ierr)
+			opErrs = append(opErrs, fmt.Errorf("price_action reprice %s/%d: %w", c.HashName, c.ListingID, ierr))
 		}
 		if err == nil && (len(res) == 0 || res[0].Success) {
 			newVals := struct {
@@ -205,19 +212,42 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			}{decision.Rent, decision.Long, decision.Deposit, decision.MaxDays}
 			if uerr := d.Store.UpdateListingDecision(ctx, c.ListingID, newVals); uerr != nil {
 				d.Log.Error("listing update failed", "listing", c.ListingID, "err", uerr)
+				opErrs = append(opErrs, fmt.Errorf("listing update %d: %w", c.ListingID, uerr))
 			}
 			if in.IgnoreNoiseFloor {
 				if merr := d.Store.MarkListingSubletApplied(ctx, c.ListingID); merr != nil {
 					// Leaving the flag false is safe: the next cycle retries the
 					// forced submission instead of silently skipping backfill.
 					d.Log.Error("sublet flag update failed", "listing", c.ListingID, "err", merr)
+					opErrs = append(opErrs, fmt.Errorf("sublet flag %d: %w", c.ListingID, merr))
 				}
 			}
 		} else if err != nil {
 			d.Log.Warn("reprice call failed", "goods", c.GoodsRef, "err", err)
+			opErrs = append(opErrs, fmt.Errorf("reprice %s: %w", c.GoodsRef, err))
+		} else {
+			// Platform answered without transport error but marked the item
+			// failed: the listing keeps its stale price, so the cycle must
+			// report failure (panel LastError) instead of silent success.
+			msg := res[0].Error
+			if msg == "" {
+				msg = "platform marked item failed"
+			}
+			d.Log.Warn("reprice item failed", "goods", c.GoodsRef, "err", msg)
+			opErrs = append(opErrs, fmt.Errorf("reprice %s: %s", c.GoodsRef, msg))
 		}
 	}
-	return errors.Join(stratErrs...)
+	// Strategy/config errors were already aggregated; per-listing operation
+	// errors (platform rejects, price_action/listing write failures) join
+	// them so a cycle with failed reprices never reports success.
+	return joinChannelErrs(stratErrs, opErrs)
+}
+
+// joinChannelErrs merges strategy/config errors with per-listing operation
+// errors into the channel result: nil only when every list was clean, so a
+// cycle with failed reprices never reports success (panel LastError).
+func joinChannelErrs(stratErrs, opErrs []error) error {
+	return errors.Join(append(stratErrs, opErrs...)...)
 }
 
 // loadQuotes rebuilds the per-commodity ranked quote slice from stored

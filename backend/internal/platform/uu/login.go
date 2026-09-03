@@ -77,6 +77,9 @@ func (c *Client) fetchUserInfo(ctx context.Context) error {
 // ---- SMS login flow (panel-driven; no interactive stdin) ----
 
 // SendLoginSmsCode requests an SMS login code for phone (+86).
+// NOTE: this stays a package-level func on a bare *http.Client (no Client
+// token/limiter exists pre-login), so it cannot go through client.do — it
+// performs the same decodeEnvelope+checkEnv信封校验 inline instead.
 // sessionID must be reused in SmsSignIn and across captcha retries. uk may be
 // empty. The platform reply decides the delivery mode: a Msg containing 成功
 // means a downstream SMS was sent; any other success Msg means the number was
@@ -211,20 +214,28 @@ func SmsSignIn(ctx context.Context, hc *http.Client, phone, code, sessionID, log
 	if err != nil {
 		return "", err
 	}
-	var resp struct {
-		Code int    `json:"Code"`
-		Msg  string `json:"Msg"`
-		Data struct {
-			Token string `json:"Token"`
-		} `json:"Data"`
+	// Envelope校验与其它端点一致：业务码经 checkEnv 翻译为统一哨兵
+	// （5050 版本门禁 / 1110205 图形挑战均在此收敛），不再手写 Code!=0 判断。
+	env, err := decodeEnvelope(body)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("uu: sms signin decode: %w", err)
+	if err := checkEnv(env, "SmsSignIn"); err != nil {
+		return "", err
 	}
-	if resp.Code != 0 || resp.Data.Token == "" {
-		return "", fmt.Errorf("uu: sms signin failed: %s", resp.Msg)
+	var d struct {
+		Token string `json:"Token"`
 	}
-	return resp.Data.Token, nil
+	// Data 嵌套一层 {"Token": ...}：解外层 Data 再取 Token。
+	if len(env.Data) > 0 {
+		if err := json.Unmarshal(env.Data, &d); err != nil {
+			return "", fmt.Errorf("uu: sms signin payload: %w", err)
+		}
+	}
+	if d.Token == "" {
+		return "", fmt.Errorf("uu: sms signin: empty token (msg=%s)", env.Msg)
+	}
+	return d.Token, nil
 }
 
 // GetUUUK obtains the anti-bot "uk" parameter via the deviceW2 encrypted endpoint.

@@ -206,7 +206,17 @@ func (c *Client) ChangeLeasePrices(ctx context.Context, items []ChangeLeaseItem,
 		"changePriceChannel": 0, "commodityIdList": ids,
 		"gameId": "730", "Sessionid": c.device,
 	}
-	if _, err := c.do(ctx, "POST", "/api/youpin/bff/new/commodity/commodity/change/price/v3/init/info", initPayload); err != nil {
+	// Pre-change init 回复同样是信封：业务码 ≠0（风控/版本门禁）必须在此
+	// 失败，否则带着一个注定失败的批次继续 PUT 改价，审计记一条假成功。
+	initData, err := c.do(ctx, "POST", "/api/youpin/bff/new/commodity/commodity/change/price/v3/init/info", initPayload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("uu: prechange init: %w", err)
+	}
+	initEnv, err := decodeEnvelope(initData)
+	if err != nil {
+		return 0, nil, fmt.Errorf("uu: prechange init: %w", err)
+	}
+	if err := checkEnv(initEnv, "prechange init"); err != nil {
 		return 0, nil, fmt.Errorf("uu: prechange init: %w", err)
 	}
 	for i := range items {

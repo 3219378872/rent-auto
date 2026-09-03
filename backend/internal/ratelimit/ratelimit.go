@@ -36,10 +36,12 @@ func (b *Bucket) Wait(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 }

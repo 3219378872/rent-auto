@@ -161,13 +161,20 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 			}
 			existing := listedByHash[k]
 			assetListed := false
+			// live counts only non-leased listings: a leased copy holds no shelf
+			// slot for budgeting — the asset is rented out, so its wantCopies
+			// slot is free for another routable copy. (The same asset is still
+			// never published twice: assetListed covers every state.)
+			live := 0
 			for _, l := range existing {
 				if l.AssetID == it.AssetID {
 					assetListed = true
-					break
+				}
+				if l.State != "leased" {
+					live++
 				}
 			}
-			if assetListed || len(existing) >= wantCopies[it.HashName][ch] {
+			if assetListed || live >= wantCopies[it.HashName][ch] {
 				continue
 			}
 			d := decide(ctx, ch, it)
@@ -190,6 +197,12 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	kept := map[key]int{}
 	cutoff := now.Add(-orphanGrace)
 	for _, l := range snap.Listings {
+		// Leased listings are NEVER touched — and they occupy no kept
+		// budget either: counting them would let a rented copy crowd out an
+		// active surplus copy that should be delisted.
+		if l.State == "leased" {
+			continue // revisit after the lease ends
+		}
 		k := key{l.HashName, l.Channel}
 		chs := desiredByHash[l.HashName]
 		routed := containsChannel(chs, l.Channel)
@@ -208,9 +221,6 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 		default:
 			kept[k]++ // correctly placed within the wanted copy budget
 			continue
-		}
-		if l.State == "leased" {
-			continue // never touch a rented listing; revisit after lease end
 		}
 		if reason != "not_routed" && reason != "uu_unhealthy_failover" {
 			// orphan/surplus: only act once the state persisted past the grace

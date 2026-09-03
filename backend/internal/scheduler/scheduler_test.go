@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,5 +146,66 @@ func TestOrderSyncWindowAnchors(t *testing.T) {
 	capWant := now.Add(-100 * 24 * time.Hour)
 	if got := orderSyncWindow(now, &ancient, nil); !got.Equal(capWant) {
 		t.Fatalf("cap: want %v, got %v", capWant, got)
+	}
+}
+
+// classifyFactorEvent judges finished orders by order-time term signals —
+// never by the CURRENT listings.max_days (review fix: that column is
+// rewritten by every reprice).
+func TestClassifyFactorEvent(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   string
+		term     orderTerm
+		fallback int
+		want     string // "" = no signal
+	}{
+		{"bought_out", "bought_out", orderTerm{orderType: "long", rentDays: 30, termDays: 30}, 30, "bought_out"},
+		{"done_short", "done", orderTerm{orderType: "short", rentDays: 5, termDays: 30}, 30, "rent_success"},
+		{"done_legacy_uu_empty_type", "done", orderTerm{rentDays: 7}, 30, "rent_success"},
+		{"done_legacy_full_term", "done", orderTerm{rentDays: 30}, 30, ""},
+		{"done_long_early", "done", orderTerm{orderType: "long", rentDays: 10, termDays: 30}, 30, "rent_success"},
+		{"done_long_full_term", "done", orderTerm{orderType: "long", rentDays: 30, termDays: 30}, 30, ""},
+		{"done_long_over_term", "done", orderTerm{orderType: "long", rentDays: 31, termDays: 30}, 30, ""},
+		{"done_long_unknown_term", "done", orderTerm{orderType: "long", rentDays: 10}, 30, ""},
+		{"done_long_unknown_rent", "done", orderTerm{orderType: "long", termDays: 30}, 30, ""},
+		{"non_terminal", "leasing", orderTerm{orderType: "short", rentDays: 5, termDays: 30}, 30, ""},
+	}
+	for _, c := range cases {
+		if got := classifyFactorEvent(c.status, c.term, c.fallback); string(got) != c.want {
+			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// isAtFactorMin must tolerate the Round4 persistence quantum: a factor
+// quantized at the floor (diff ~5e-5) is "at min"; 1e-3 away is not.
+func TestIsAtFactorMinEpsilon(t *testing.T) {
+	if !isAtFactorMin(0.85, 0.85) {
+		t.Fatal("exact floor must match")
+	}
+	if !isAtFactorMin(0.85005, 0.85) {
+		t.Fatal("Round4-quantized floor must match (old 1e-9 missed it)")
+	}
+	if isAtFactorMin(0.851, 0.85) {
+		t.Fatal("1e-3 above floor must not match")
+	}
+	if factorResetEpsilon != 1e-4 {
+		t.Fatalf("epsilon=%v, want 1e-4 (Round4 quantum)", factorResetEpsilon)
+	}
+}
+
+// joinChannelErrs: clean cycles return nil; any strategy or operation error
+// surfaces joined (panel LastError contract).
+func TestJoinChannelErrs(t *testing.T) {
+	if err := joinChannelErrs(nil, nil); err != nil {
+		t.Fatalf("clean cycle must be nil: %v", err)
+	}
+	err := joinChannelErrs(
+		[]error{errors.New("strategy H: boom")},
+		[]error{errors.New("reprice G1: kaboom")},
+	)
+	if err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "kaboom") {
+		t.Fatalf("joined error must carry both: %v", err)
 	}
 }

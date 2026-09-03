@@ -3,6 +3,8 @@ package steam
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/3219378872/rent-auto/backend/internal/platform"
 )
 
 // Steam WebAPI responses carry the application-level result code in the
@@ -59,9 +61,37 @@ var eresultNames = map[int]string{
 	117: "NoLauncherSpecified", 118: "MustAgreeToSSA", 119: "LauncherMigrated",
 }
 
+// eresultAuthExpired collects codes that mean the session/credential is dead
+// and only a fresh login helps: wrong/rejected secrets, login throttles and
+// limit-exceeded on the auth surface (5/25/84/85/87/88). Callers branch on
+// platform.ErrAuthExpired to rebuild the session instead of retrying blind.
+var eresultAuthExpired = map[int]bool{
+	5:  true, // InvalidPassword
+	25: true, // LimitExceeded
+	84: true, // RateLimitExceeded
+	85: true, // AccountLoginDeniedNeedTwoFactor
+	87: true, // AccountLoginDeniedThrottle
+	88: true, // TwoFactorCodeMismatch
+}
+
+// eresultRateLimited collects transient pressure codes worth a scheduler
+// cooldown (platform.ErrRateLimited), distinct from the auth-throttle family
+// above: Busy, account/phone activity caps, pending overflow and cooldowns.
+var eresultRateLimited = map[int]bool{
+	10:  true, // Busy
+	95:  true, // AccountLimitExceeded
+	96:  true, // AccountActivityLimitExceeded
+	97:  true, // PhoneActivityLimitExceeded
+	108: true, // TooManyPending
+	110: true, // WGNetworkSendExceeded
+	116: true, // CommunityCooldown
+}
+
 // checkEresult turns the X-eresult header value into an error.
 // absent (<0) → nil (non-WebAPI responses / redirect hops without the header);
 // {1, 22} → nil; explicit ignore list (e.g. 29 for guard updates) → nil.
+// Anything else maps to a unified sentinel (auth vs rate, see above) while
+// keeping the `eresult=<n> <Name>` text for logs; unknown codes stay generic.
 func checkEresult(method string, eresult int, ignore ...int) error {
 	if eresult < 0 || eresult == 1 || eresult == 22 {
 		return nil
@@ -75,5 +105,13 @@ func checkEresult(method string, eresult int, ignore ...int) error {
 	if s, ok := eresultNames[eresult]; ok {
 		name = s
 	}
-	return fmt.Errorf("steam: %s failed (eresult=%d %s)", method, eresult, name)
+	base := fmt.Errorf("steam: %s failed (eresult=%d %s)", method, eresult, name)
+	switch {
+	case eresultAuthExpired[eresult]:
+		return fmt.Errorf("%w: %w", platform.ErrAuthExpired, base)
+	case eresultRateLimited[eresult]:
+		return fmt.Errorf("%w: %w", platform.ErrRateLimited, base)
+	default:
+		return base
+	}
 }

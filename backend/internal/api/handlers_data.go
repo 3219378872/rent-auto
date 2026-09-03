@@ -14,6 +14,12 @@ func pageParams(r *http.Request) (int, int) {
 	if page < 1 {
 		page = 1
 	}
+	if size <= 0 {
+		size = 50
+	}
+	if size > 200 {
+		size = 200
+	}
 	return size, (page - 1) * size
 }
 

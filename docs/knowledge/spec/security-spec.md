@@ -20,8 +20,10 @@
 
 ## 会话与吊销（ADR-0006）
 
-- 面板 JWT 为 HS256 + exp(≤24h，可经 `JWT_TTL` 下调如 `12h`；超 24h 钳制 24h)，claims 携带会话纪元 `ver`
-- UU 短信发送按 IP 限流（10 次/10min，`handleUUSms`），失败记 `channel.uu.sms_failed` 审计
+- 面板 JWT 为 HS256 + exp(≤24h，可经 `JWT_TTL` 下调如 `12h`；超 24h 钳制 24h)，claims 携带会话纪元 `ver`；
+  header.alg 显式要求 HS256（拒 none/混淆），sub 非空、iat 漂移 ≤60s；store 不可用时 fail-closed 401（2026-09-03 全面修复轮）
+- UU 短信发送按 IP 限流（10 次/10min，`handleUUSms`），verify 入口同限；失败记 `channel.uu.sms_failed` 审计；429 记 `*.rate_limited` 审计
+- 写通道与任务触发按 IP 限流（30 次/10min，`PUT /channels/*`、`POST /jobs/*/run`）
 - 吊销机制：`POST /api/v1/auth/logout` 使 `jwt_session_epoch` +1，
   全部旧 token 立即 401（单管理员语义=登出所有会话）
 - 登录限流：per-(IP,username) 固定窗口锁定；条目超阈值自动清扫

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,6 +23,9 @@ const (
 	codeRateLimited = 6001
 	codeIPWhitelist = 4004 // credential/env-class: merchant IP not whitelisted
 	codeIdentityID  = 5005 // credential-class: identity id invalid
+	codeMissingSid  = 2001 // deterministic caller bug: SteamId empty
+	codeBadTime     = 5003 // timestamp invalid/expired (clock skew or replay)
+	codeWindowLimit = 7002 // query window exceeds 31 days (segmented away by SellerRentOrderList)
 )
 
 // Client is the ECOSteam open API client.
@@ -104,10 +108,20 @@ func (c *Client) checkEnv(e *envelope, path string) error {
 		return nil
 	case codeRateLimited:
 		return fmt.Errorf("%w at %s", platform.ErrRateLimited, path)
-	case codeIPWhitelist, codeIdentityID:
-		// Credential-class failures: without a unified sentinel the scheduler's
+	case codeIPWhitelist, codeIdentityID, codeBadTime:
+		// Credential/env-class failures: without a unified sentinel the scheduler's
 		// risk-control cooldown never engages and every cycle retries blind.
+		// 5003 counts here: a bad timestamp is a signing-environment fault
+		// (clock skew), not a per-request bug.
 		return fmt.Errorf("%w at %s code=%d msg=%s", platform.ErrAuthExpired, path, e.Code, e.Msg)
+	case codeWindowLimit:
+		// 7002 31天窗上限：SellerRentOrderList 已按 30 天分段，正常流程永不
+		// 触发；一旦出现说明调用方误用，回退为限流哨兵触发调度冷却 + 审计。
+		return fmt.Errorf("%w at %s code=%d msg=%s", platform.ErrRateLimited, path, e.Code, e.Msg)
+	case codeMissingSid:
+		// 2001 系确定性调用方 bug（SteamId 缺失）：重试/冷却永无帮助，
+		// 故意不映射哨兵，避免喂给风控退避通道。
+		return fmt.Errorf("eco: %s code=%d msg=%s", path, e.Code, e.Msg)
 	default:
 		return fmt.Errorf("eco: %s code=%d msg=%s", path, e.Code, e.Msg)
 	}
@@ -119,12 +133,14 @@ const rateRetryAttempts = 3
 var rateRetryBase = 500 * time.Millisecond
 
 // post signs and executes one API call; result may be nil to ignore payload.
-// A 6001 (rate limited) response is retried with exponential backoff.
+// A 6001 (rate limited) response is retried with exponential backoff plus
+// jitter: without it, every throttled worker retries on the same tick and
+// re-triggers 6001 in lockstep (thundering herd).
 func (c *Client) post(ctx context.Context, path string, biz map[string]any, result any) error {
 	for attempt := 0; ; attempt++ {
 		err := c.postOnce(ctx, path, biz, result)
 		if attempt < rateRetryAttempts-1 && errors.Is(err, platform.ErrRateLimited) {
-			delay := rateRetryBase << attempt // 0.5s, 1s
+			delay := rateRetryBase<<attempt + time.Duration(rand.Int63n(int64(rateRetryBase)))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

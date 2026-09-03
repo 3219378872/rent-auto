@@ -19,9 +19,11 @@ const apiBase = "https://api.youpin898.com"
 
 // Envelope codes / business codes observed on the wire.
 const (
-	codeOK          = 0
-	codeAuthExpired = 84101 // login state invalid
-	codeRiskControl = 84104 // rate limited / risk control
+	codeOK              = 0
+	codeAuthExpired     = 84101   // login state invalid
+	codeRiskControl     = 84104   // rate limited / risk control
+	codeVersionBlocked  = 5050    // version/registration gate: third-party SMS login refused
+	codeCaptchaRequired = 1110205 // behavior-verify (slider/click captcha) challenge
 )
 
 // ErrUKExpired maps HTTP 405 responses (upstream: "UK token expired").
@@ -217,6 +219,13 @@ func checkEnv(e *envelope, path string) error {
 		return platform.ErrAuthExpired
 	case codeRiskControl:
 		return fmt.Errorf("%w at %s", platform.ErrPlatformBlocked, path)
+	case codeVersionBlocked:
+		// 5050 版本/注册门禁（api-notes §认证域）：第三方短信登录被拦。
+		// 调度按 generic 冷却 + 审计，不设专用退避。
+		return fmt.Errorf("%w at %s msg=%s", platform.ErrVersionBlocked, path, e.Msg)
+	case codeCaptchaRequired:
+		// 1110205 图形校验挑战：调用方需走 TCaptcha 重试链。
+		return fmt.Errorf("%w at %s msg=%s", platform.ErrCaptchaRequired, path, e.Msg)
 	default:
 		return fmt.Errorf("uu: %s code=%d msg=%s", path, e.Code, e.Msg)
 	}

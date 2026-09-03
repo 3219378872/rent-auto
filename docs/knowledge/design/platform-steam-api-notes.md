@@ -86,6 +86,12 @@ POST steamcommunity.com/trade/new/acknowledge {sessionid, message=1}   ← 新�
   → round10（2026-08-27）修复：`AccessExp==0` 视为"过期未知"强制走刷新路径
   （刷新便宜、失败回落重登录），并打 Warn 日志。
   持久化：token 三元组 + 过期时间戳存 `app_settings`(AES-GCM 加密)
+- **X-eresult 全覆盖（review-fix 轮）**：`RefreshAccessToken` 与
+  `GetReceivedActiveOffers` 此前直连 `s.http.Do`、不看 `X-eresult`——失活 token
+  的 200+应用错会被解码成空结果静默通过。现统一走 `doRawFull` +
+  `checkEresult`：5/25/84/85/87/88 → `ErrAuthExpired`（会话重建），
+  10/95/96/97/108/110/116 → `ErrRateLimited`（调度冷却），其余 generic。
+  `doRawFull` 手动重定向链加 8 跳上限（防 Location 环路无限递归）。
 
 ## 2. Steam Guard 双算法（guard.py，已做 Python 向量交叉验证）
 

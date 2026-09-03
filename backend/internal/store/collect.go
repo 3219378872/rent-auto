@@ -53,11 +53,13 @@ func nilIfZero(v int64) *int64 {
 	return &v
 }
 
-// MarkMissingListings flips actual_state to 'stale'/'none' for channel rows not seen in sync.
+// MarkMissingListings flips actual_state to 'none' for channel rows not seen in sync.
+// Leased rows are never touched: the shelf feed excludes rented items, so
+// flipping them would fabricate disappearances and trigger duplicate publishes.
 func (s *Store) MarkMissingListings(ctx context.Context, channel domain.Channel, seenRefs map[string]bool) (int64, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE listings SET actual_state='none'
-		 WHERE channel=$1 AND actual_state IN ('active','leased')
+		 WHERE channel=$1 AND actual_state IN ('active')
 		   AND NOT (goods_ref = ANY($2))`,
 		channel, refsToArray(seenRefs))
 	if err != nil {
@@ -202,6 +204,7 @@ func (s *Store) InsertSnapshots(ctx context.Context, snaps []Snapshot) error {
 		if ts.IsZero() {
 			ts = now
 		}
+		sn.Price = round2Money(sn.Price)
 		batch.Queue(
 			`INSERT INTO market_snapshots(hash_name, source, kind, rank, price, captured_at)
 			 VALUES($1,$2,$3,$4,$5,$6)`,
@@ -224,6 +227,7 @@ type FundFlow struct {
 }
 
 func (s *Store) UpsertFundFlow(ctx context.Context, f FundFlow) error {
+	f.Amount = round2Money(f.Amount)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO fund_flows(channel, flow_ref, amount, type, occurred_at)
 		 VALUES($1,$2,$3,$4,$5)

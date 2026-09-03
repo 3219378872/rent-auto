@@ -152,9 +152,19 @@ func (s *Session) doRawStatus(req *http.Request) ([]byte, int, error) {
 	return body, status, err
 }
 
+// maxRedirectHops caps manual redirect following in doRawFull: the default
+// client does NOT follow (no CheckRedirect override needed — responses stream
+// through here precisely because redirect policy is manual), so a malicious
+// or looping Location chain would otherwise recurse forever.
+const maxRedirectHops = 8
+
 // doRawFull is doRawStatus plus the Steam WebAPI X-eresult header value
 // (-1 when absent).
 func (s *Session) doRawFull(req *http.Request) ([]byte, int, int, error) {
+	return s.doRawFullDepth(req, 0)
+}
+
+func (s *Session) doRawFullDepth(req *http.Request, depth int) ([]byte, int, int, error) {
 	//nolint:gosec // G704：URL 来自 Steam 登录响应的 transfer_info（上游固定域名），协议要求原样回放
 	resp, err := s.http.Do(req)
 	if err != nil {
@@ -167,11 +177,15 @@ func (s *Session) doRawFull(req *http.Request) ([]byte, int, int, error) {
 	}
 	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 		if loc := resp.Header.Get("Location"); loc != "" {
+			if depth >= maxRedirectHops {
+				return nil, resp.StatusCode, -1,
+					fmt.Errorf("steam: %s %s: too many redirects (cap %d)", req.Method, req.URL.Host, maxRedirectHops)
+			}
 			next, err := http.NewRequestWithContext(req.Context(), req.Method, loc, nil)
 			if err != nil {
 				return nil, resp.StatusCode, -1, err
 			}
-			return s.doRawFull(next)
+			return s.doRawFullDepth(next, depth+1)
 		}
 	}
 	eresult := -1
@@ -478,6 +492,9 @@ func (s *Session) finalize(ctx context.Context) error {
 }
 
 // RefreshAccessToken rotates access_token using the refresh_token.
+// The WebAPI result rides the X-eresult header (HTTP 200 ≠ success) —
+// check it before trusting the body, or a dead refresh token surfaces as a
+// misleading "empty access token" downstream error.
 func (s *Session) RefreshAccessToken(ctx context.Context) error {
 	if s.Tokens.RefreshToken == "" || s.Tokens.SteamID == "" {
 		return errors.New("steam: no refresh token")
@@ -490,18 +507,23 @@ func (s *Session) RefreshAccessToken(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := s.http.Do(req)
+	body, status, er, err := s.doRawFull(req)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	if status != http.StatusOK {
+		return fmt.Errorf("steam: refresh access token: http %d", status)
+	}
+	if err := checkEresult("GenerateAccessTokenForApp", er); err != nil {
+		return err
+	}
 	var parsed struct {
 		Response struct {
 			AccessToken string `json:"access_token"`
 		} `json:"response"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return err
+	if err := jsonUnmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("steam: refresh decode: %w", err)
 	}
 	if parsed.Response.AccessToken == "" {
 		return errors.New("steam: refresh returned empty access token")

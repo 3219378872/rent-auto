@@ -58,10 +58,14 @@ type ActiveListing struct {
 }
 
 // AllActiveListings lists rows whose actual state is active/leased.
+// actual_synced_at 按 nullable 直读：NULL（从未同步）映射为零值 SyncedAt，
+// 调用方 PlanFrom 的 IsZero 分支（grace 未知 fail safe 跳过）保持有效——
+// 此前 COALESCE(actual_synced_at, listed_at) 把"未知"伪装成"listed_at 已同步"，
+// 让孤儿宽限对从未同步的行错误放行。
 func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT id, channel, hash_name, goods_ref, asset_id, actual_state,
-		        COALESCE(actual_synced_at, listed_at)
+		        actual_synced_at
 		 FROM listings
 		 WHERE actual_state IN ('active','leased')`)
 	if err != nil {
@@ -71,8 +75,12 @@ func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) 
 	var out []ActiveListing
 	for rows.Next() {
 		var l ActiveListing
-		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef, &l.AssetID, &l.State, &l.SyncedAt); err != nil {
+		var syncedAt *time.Time
+		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef, &l.AssetID, &l.State, &syncedAt); err != nil {
 			return nil, err
+		}
+		if syncedAt != nil {
+			l.SyncedAt = *syncedAt
 		}
 		out = append(out, l)
 	}

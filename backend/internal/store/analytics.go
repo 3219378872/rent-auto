@@ -66,7 +66,7 @@ func (s *Store) RecordIncomeBatch(ctx context.Context, orders []TerminalUnrecord
 			 ON CONFLICT(stat_date, channel, category) DO UPDATE SET
 			   income = daily_stats.income + EXCLUDED.income,
 			   order_count = daily_stats.order_count + EXCLUDED.order_count`,
-			o.Finished.UTC().Format("2006-01-02"), o.Channel, o.Category, o.Amount, 1); err != nil {
+			o.Finished.UTC().Format("2006-01-02"), o.Channel, o.Category, round2Money(o.Amount), 1); err != nil {
 			return fmt.Errorf("upsert daily stat: %w", err)
 		}
 		ids = append(ids, o.ID)
@@ -131,6 +131,11 @@ type CategoryYield struct {
 // CategoryYields computes per-category yield per data-model 口径 B:
 // numerator = recorded income − sold-out inventory cost, denominator = all-time
 // category cost basis (every status, not just held stock).
+//
+// 已知偏差 (review): category 取自当前 templates 映射——daily_stats.category
+// 在 rollup 时按当时模板写入，而 costs/sold 按查询时模板分组——都不是订单发生
+// 时的品类快照。模板改品类会追溯性漂移历史收益归属。精确到订单时刻需要先给
+// lease_orders/daily_stats 加品类快照列；在那之前本口径保持现状，特此说明。
 func (s *Store) CategoryYields(ctx context.Context) ([]CategoryYield, error) {
 	rows, err := s.Pool.Query(ctx,
 		`WITH costs AS (
@@ -172,11 +177,13 @@ func (s *Store) CategoryYields(ctx context.Context) ([]CategoryYield, error) {
 	return out, rows.Err()
 }
 
-// AssetValuation returns Σ inventory value (anchor preferred, mark fallback).
+// AssetValuation returns Σ inventory value over value_anchor only. Templates
+// without an anchor contribute nothing: the old mark_price fallback mixed a
+// channel-side list price into the valuation anchor and inflated total assets.
 func (s *Store) AssetValuation(ctx context.Context) (float64, error) {
 	var v *float64
 	err := s.Pool.QueryRow(ctx,
-		`SELECT SUM(COALESCE(t.value_anchor, i.mark_price, 0))
+		`SELECT SUM(t.value_anchor)
 		 FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
 		 WHERE i.status IN ('in_stock','listed','leased')`).Scan(&v)
 	if err != nil || v == nil {
@@ -185,11 +192,15 @@ func (s *Store) AssetValuation(ctx context.Context) (float64, error) {
 	return *v, nil
 }
 
-// HeldDeposits sums deposits of in-flight orders per channel.
+// HeldDeposits sums deposits of leasing orders per channel. Only 'leasing'
+// counts: delivering/returning are in-transit (押金归属不明) and arbitrating
+// is dispute-frozen — including them overstated held funds and total assets.
+// (returning could arguably count while the deposit is still withheld, but
+// the conservative 口径 excludes it; revisit with 真机 deposit-lifecycle data.)
 func (s *Store) HeldDeposits(ctx context.Context) (map[domain.Channel]float64, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT channel, SUM(deposits) FROM lease_orders
-		 WHERE status IN ('delivering','leasing','returning','arbitrating')
+		 WHERE status='leasing'
 		 GROUP BY channel`)
 	if err != nil {
 		return nil, err
@@ -282,7 +293,8 @@ func (s *Store) LeasedCount(ctx context.Context) (int, error) {
 
 // RecordWalletSnapshot stores a wallet balance as a fund-flow row.
 func (s *Store) RecordWalletSnapshot(ctx context.Context, channel domain.Channel, amount float64) error {
-	ref := fmt.Sprintf("wallet-%s-%s", channel, time.Now().UTC().Format("20060102150405"))
+	amount = round2Money(amount)
+	ref := walletFlowRef(channel, time.Now().UTC())
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO fund_flows(channel, flow_ref, amount, type, occurred_at)
 		 VALUES($1,$2,$3,'wallet_snapshot',$4)

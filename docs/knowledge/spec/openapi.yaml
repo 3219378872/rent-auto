@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.7.0"
+  version: "0.8.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -274,7 +274,10 @@ paths:
               type: object
               properties:
                 params: { type: object, description: 策略参数 JSON（深合并默认值） }
-                route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback] }
+                route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback],
+                  description: 路由（别名；与 channel_route 二选一，channel_route 优先） }
+                channel_route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback],
+                  description: 路由（面板 canonical 字段；与 route 双收） }
                 real_execution_enabled: { type: boolean, description: false=策略级 dry-run }
       responses:
         "200":
@@ -557,6 +560,7 @@ components:
         tradable: { type: boolean }
         status: { type: string, enum: [in_stock, listed, leased, locked, sold] }
         abrade: { type: number, format: double }
+        cost_basis: { type: number, format: double, description: 成本价（PUT /inventory/{channel}/{asset_id}/cost 录入） }
     ListingRow:
       type: object
       properties:
@@ -573,6 +577,16 @@ components:
         deposit: { type: number, format: double, nullable: true }
         listed_at: { type: string, format: date-time, nullable: true }
         last_reprice_at: { type: string, format: date-time, nullable: true }
+        factor: { type: number, format: double, description: 反馈控制器乘子（基线×factor=执行价） }
+        last_decision:
+          type: object
+          nullable: true
+          description: 最新 price_action 摘要（面板决策依据列）
+          properties:
+            action: { type: string, enum: [publish, reprice, delist, skip] }
+            at: { type: string, format: date-time, nullable: true }
+            new_rent: { type: number, format: double, nullable: true }
+            skip: { type: string, description: skip 原因（decision jsonb） }
     OrderRow:
       type: object
       properties:
@@ -646,7 +660,8 @@ components:
                 type: object
                 properties:
                   channel: { $ref: "#/components/schemas/Channel" }
-                  total: { type: number, format: double }
+                  income: { type: number, format: double }
+                  orders: { type: integer }
         leased_out: { type: integer }
         annualized_roi: { type: number, format: double }
         categories:
@@ -655,14 +670,16 @@ components:
             type: object
             properties:
               category: { type: string }
+              cost: { type: number, format: double, description: 全量成本基（口径 B 分母） }
               income: { type: number, format: double }
-              yield_ratio: { type: number, format: double }
+              yield: { type: number, format: double }
         series_30d:
           type: array
           items:
             type: object
             properties:
-              day: { type: string, format: date }
+              date: { type: string, format: date, description: UTC 日（canonical；day 为同义别名） }
+              day: { type: string, format: date, description: date 的同义别名 }
               income: { type: number, format: double }
     JobStatus:
       type: object
@@ -679,10 +696,11 @@ components:
         session_id: { type: string }
         mode:
           type: string
-          enum: [downlink, uplink, captcha]
-          description: 下行=收验证码；上行=用户自发短信；captcha=需人工过图形验证
+          enum: [down, up, captcha]
+          description: down=收验证码（login_req_ticket 随附）；up=用户自发短信；captcha=需人工过图形验证（req_ticket 随附）
         msg: { type: string }
         req_ticket: { type: string, description: captcha 模式的关联票据 }
+        login_req_ticket: { type: string, description: down 模式成功响应的关联票据（sms-verify 回传） }
         secs: { type: integer, description: 冷却秒数（0=未知） }
         sms_up_content: { type: string, description: 上行模式短信内容 }
         sms_up_number: { type: string, description: 上行模式目标号码 }

@@ -16,6 +16,16 @@ var (
 	ErrRateLimited     = errors.New("platform: rate limited")
 	ErrPlatformBlocked = errors.New("platform: blocked by platform risk control")
 	ErrPartialFailure  = errors.New("platform: partial failure")
+	// ErrVersionBlocked reports a platform version/registration gate that
+	// rejects third-party logins (UU Code=5050, 2026-08-27: version string,
+	// uk header and both gateways all rejected; upstream Steamauto shares
+	// the condition). Scheduler treats it as a generic cooldown + audit —
+	// no dedicated backoff bucket.
+	ErrVersionBlocked = errors.New("platform: client version blocked by platform")
+	// ErrCaptchaRequired reports a risk-control captcha challenge (UU
+	// Code=1110205 behavior-verify ticket flow). Like ErrVersionBlocked it
+	// cools down as a generic platform signal with an audit trail.
+	ErrCaptchaRequired = errors.New("platform: captcha challenge required")
 )
 
 // Limiter paces outbound platform calls; scheduler installs per-channel buckets.

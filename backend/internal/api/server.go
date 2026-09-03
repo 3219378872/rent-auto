@@ -38,8 +38,10 @@ type Server struct {
 	smsFails     map[string]*failSlot // per-IP UU sms send throttle
 	dummyOnce    sync.Once
 	dummyHashVal string
+	trustMu      sync.RWMutex
 	trustProxies []*net.IPNet // explicit TRUST_PROXY_CIDRS; empty = default private ranges
 	defaultTrust []*net.IPNet // lazily parsed defaultTrustCIDRs
+	epochMu      sync.Mutex   // serializes bumpSessionEpoch (see method comment)
 }
 
 type SteamService interface {
@@ -107,7 +109,7 @@ func (s *Server) Routes() http.Handler {
 	root.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "unknown endpoint")
 	})
-	return withRecover(s.Log)(withRequestLog(s.Log)(withBodyLimit(root)))
+	return withRecover(s.Log)(withRequestLog(s.Log)(withSecurityHeaders(withBodyLimit(root))))
 }
 
 // maxBodyBytes caps request bodies — the largest legitimate payload is a small
@@ -120,6 +122,20 @@ func withBodyLimit(next http.Handler) http.Handler {
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withSecurityHeaders sets baseline hardening headers at the API layer so a
+// direct :8080 connection (bypassing Caddy, e.g. LAN/debug access) is not
+// header-naked. HSTS stays Caddy-only: it is meaningless (and harmful) over
+// plain HTTP. Production must still go through Caddy (TLS + full CSP).
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -140,7 +156,10 @@ var defaultTrustCIDRs = []string{
 // Must be called before serving; the list is parsed here so request-time
 // trustList() reads are race-free.
 func (s *Server) SetTrustProxies(cidrs []string) {
-	s.trustProxies = parseCIDRs(cidrs)
+	parsed := parseCIDRs(cidrs)
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	s.trustProxies = parsed
 }
 
 func parseCIDRs(list []string) []*net.IPNet {
@@ -154,6 +173,8 @@ func parseCIDRs(list []string) []*net.IPNet {
 }
 
 func (s *Server) trustList() []*net.IPNet {
+	s.trustMu.RLock()
+	defer s.trustMu.RUnlock()
 	if len(s.trustProxies) > 0 {
 		return s.trustProxies
 	}
@@ -262,7 +283,15 @@ func (s *Server) sessionEpoch(ctx context.Context) int64 {
 
 // bumpSessionEpoch invalidates every outstanding token by advancing the epoch;
 // returns the new epoch.
+//
+// NOTE: read-then-write via GetSetting/UpsertSettingPlain, not a single
+// atomic UPDATE ... = epoch+1 RETURNING. The store has no atomic-increment
+// method, and at single-admin scale (one login/logout writer at a time) the
+// lost-update window is negligible; epochMu at least serializes in-process
+// writers so concurrent logouts cannot interleave.
 func (s *Server) bumpSessionEpoch(ctx context.Context) int64 {
+	s.epochMu.Lock()
+	defer s.epochMu.Unlock()
 	next := s.sessionEpoch(ctx) + 1
 	if s.Store != nil {
 		if err := s.Store.UpsertSettingPlain(ctx, keyJWTEpoch, next); err != nil {

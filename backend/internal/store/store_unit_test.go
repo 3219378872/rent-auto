@@ -1,8 +1,12 @@
 package store
 
 import (
+	"math"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/3219378872/rent-auto/backend/internal/domain"
 )
 
 func TestLoadMigrations(t *testing.T) {
@@ -38,5 +42,45 @@ func TestLoadMigrationsRejectsOrphanDown(t *testing.T) {
 	}
 	if err := validatePairMap(map[string]string{"0001_x": ""}, map[string]string{"0001_x": ""}); err != nil {
 		t.Fatalf("healthy pair rejected: %v", err)
+	}
+}
+
+func TestRound2MoneySemantics(t *testing.T) {
+	// Mirrors pricing.Round2 without importing pricing (dependency direction).
+	if round2Money(1.005) != 1.0 || round2Money(1.006) != 1.01 || round2Money(-1.005) != -1.0 {
+		t.Fatalf("half-away: %v %v %v", round2Money(1.005), round2Money(1.006), round2Money(-1.005))
+	}
+	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 1e15, -1e15} {
+		if round2Money(bad) != 0 {
+			t.Fatalf("round2Money(%v) must collapse to 0", bad)
+		}
+	}
+}
+
+func TestRound2MoneyPtr(t *testing.T) {
+	if round2MoneyPtr(nil) != nil {
+		t.Fatal("nil must stay nil")
+	}
+	p := 1.005
+	q := round2MoneyPtr(&p)
+	if q != &p || p != 1.0 {
+		t.Fatalf("in-place rounding failed: %v", p)
+	}
+}
+
+func TestWalletFlowRefUnique(t *testing.T) {
+	now := time.Now()
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		// Same channel AND same timestamp: the old second-precision format
+		// collided here and dropped wallet history rows.
+		r := walletFlowRef(domain.ChannelUU, now)
+		if !strings.HasPrefix(r, "wallet-uu-") {
+			t.Fatalf("ref format: %q", r)
+		}
+		if seen[r] {
+			t.Fatalf("duplicate wallet ref: %q", r)
+		}
+		seen[r] = true
 	}
 }

@@ -12,11 +12,15 @@ import (
 )
 
 type Config struct {
-	Addr          string
-	DatabaseURL   string
-	JWTSecret     []byte
-	JWTTTL        time.Duration
-	MasterKey     []byte // 32B AES-GCM key; empty disables credential encryption (dev only)
+	Addr        string
+	DatabaseURL string
+	JWTSecret   []byte
+	JWTTTL      time.Duration
+	MasterKey   []byte // 32B AES-GCM key; empty disables credential encryption (dev only).
+	// NOTE: empty MasterKey intentionally still loads — fail-closed is
+	// enforced at the credential-write path (registry refuses to seal and
+	// the handlers answer 500“APP_MASTER_KEY未配置，三渠道不可用”). Making
+	// Load() itself fail would break dev bootstrap and existing callers.
 	AdminUser     string
 	AdminPassHash string // bcrypt hash from env; empty -> bootstrap flow
 	DryRunDefault bool   // mirrors env DRY_RUN_DEFAULT

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -22,6 +21,10 @@ type rawOffer struct {
 }
 
 // GetReceivedActiveOffers returns received, active offers (raw counts only).
+// The WebAPI result rides the X-eresult header: a throttled or logged-out
+// token answers HTTP 200 with an application error, which must map to the
+// unified sentinels (auth → session rebuild, rate → cooldown) instead of
+// decoding into a silently empty offer list.
 func (s *Session) GetReceivedActiveOffers(ctx context.Context) ([]rawOffer, error) {
 	q := url.Values{
 		"access_token":        {s.Tokens.AccessToken},
@@ -37,17 +40,22 @@ func (s *Session) GetReceivedActiveOffers(ctx context.Context) ([]rawOffer, erro
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.http.Do(req)
+	body, status, er, err := s.doRawFull(req)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("steam: trade offers: http %d", status)
+	}
+	if err := checkEresult("GetTradeOffers", er); err != nil {
+		return nil, err
+	}
 	var parsed struct {
 		Response struct {
 			TradeOffersReceived []rawOffer `json:"trade_offers_received"`
 		} `json:"response"`
 	}
-	if err := jsonDecode(resp.Body, &parsed); err != nil {
+	if err := jsonUnmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("steam: trade offers decode: %w", err)
 	}
 	return parsed.Response.TradeOffersReceived, nil
@@ -63,10 +71,6 @@ var (
 )
 
 var ErrSevenDayHold = errors.New("steam: 7-day trade hold (new device)")
-
-func jsonDecode(r io.Reader, v any) error {
-	return json.NewDecoder(r).Decode(v)
-}
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 

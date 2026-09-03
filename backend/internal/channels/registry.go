@@ -47,12 +47,19 @@ type AuditHook func(ctx context.Context, e domain.AuditEntry)
 
 // SetAuditFn wires the audit sink. Must be called before any write operation
 // can run (main wires it during assembly, before the scheduler starts).
-func (r *Registry) SetAuditFn(fn AuditHook) { r.auditFn = fn }
+func (r *Registry) SetAuditFn(fn AuditHook) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditFn = fn
+}
 
 // audit dispatches a write-operation audit entry when the hook is wired.
 func (r *Registry) audit(ctx context.Context, e domain.AuditEntry) {
-	if r.auditFn != nil {
-		r.auditFn(ctx, e)
+	r.mu.RLock()
+	fn := r.auditFn
+	r.mu.RUnlock()
+	if fn != nil {
+		fn(ctx, e)
 	}
 }
 
@@ -75,6 +82,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	// Phase 1 — read + decrypt stored credentials (short lock hold).
 	uuToken := ""
 	if setting, err := r.st.GetSetting(ctx, keyUUToken); err != nil && err != store.ErrNotFound {
+		r.log.Error("uu credential lookup failed", "err", err)
 		return err
 	} else if err == nil {
 		switch {
@@ -105,6 +113,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	ecoCredsOK := false
 	var ecoPartner, ecoKeyPEM, ecoSteamID string
 	if ecoSetting, err := r.st.GetSetting(ctx, keyECOCreds); err != nil && err != store.ErrNotFound {
+		r.log.Error("eco credential lookup failed", "err", err)
 		return err
 	} else if err == nil && ecoSetting.ValueEnc != nil && r.box != nil {
 		plain, derr := r.box.Open(string(ecoSetting.ValueEnc))
@@ -141,7 +150,10 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	var newEcoC *eco.Client
 	if ecoCredsOK {
 		opts := []eco.Option{}
-		if l, ok := r.lim[domain.ChannelECO]; ok {
+		r.mu.RLock()
+		l, hasLim := r.lim[domain.ChannelECO]
+		r.mu.RUnlock()
+		if hasLim {
 			opts = append(opts, eco.WithLimiter(l))
 		}
 		c, err := eco.NewClient(ecoPartner, []byte(ecoKeyPEM), opts...)
@@ -160,7 +172,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 			r.ad[domain.ChannelUU] = newUU.ad
 			r.uuClient = newUU.c
 		} else {
-			r.dropUU()
+			r.dropUULocked()
 		}
 	}
 	if ecoCredsOK {
@@ -169,7 +181,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 			r.ecoClient = newEcoC
 			r.ecoSteamID = ecoSteamID
 		} else {
-			r.dropECO()
+			r.dropECOLocked()
 		}
 	}
 	return nil
@@ -257,31 +269,54 @@ func (r *Registry) SetUUToken(ctx context.Context, token string) error {
 }
 
 func (r *Registry) uuOptions() []uu.Option {
+	r.mu.RLock()
+	l, hasLim := r.lim[domain.ChannelUU]
+	h := r.uuHTTP
+	r.mu.RUnlock()
 	opts := []uu.Option{}
-	if l, ok := r.lim[domain.ChannelUU]; ok {
+	if hasLim {
 		opts = append(opts, uu.WithLimiter(l))
 	}
 	opts = append(opts, uu.WithLogger(r.log))
-	if r.uuHTTP != nil {
-		opts = append(opts, uu.WithHTTPClient(r.uuHTTP))
+	if h != nil {
+		opts = append(opts, uu.WithHTTPClient(h))
 	}
 	return opts
 }
 
 // SetUUHTTPClient pins the HTTP client used to build UU clients. Production
 // code never calls this; tests use it to point the UU API at a local mock.
-func (r *Registry) SetUUHTTPClient(h *http.Client) { r.uuHTTP = h }
+func (r *Registry) SetUUHTTPClient(h *http.Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uuHTTP = h
+}
 
 // dropUU removes the UU adapter AND every bare-client passthrough so the
 // registry never reports "not configured" while convenience channels still
 // fire platform calls with stale credentials.
 func (r *Registry) dropUU() {
-	delete(r.ad, domain.ChannelUU)
-	r.uuClient = nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropUULocked()
 }
 
 // dropECO is the ECO counterpart of dropUU.
 func (r *Registry) dropECO() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropECOLocked()
+}
+
+// dropUULocked / dropECOLocked are the lock-held variants for use when the
+// caller already owns r.mu (Refresh Phase 3).
+func (r *Registry) dropUULocked() {
+	delete(r.ad, domain.ChannelUU)
+	r.uuClient = nil
+}
+
+// dropECOLocked is the ECO counterpart of dropUULocked.
+func (r *Registry) dropECOLocked() {
 	delete(r.ad, domain.ChannelECO)
 	r.ecoClient = nil
 	r.ecoSteamID = ""
@@ -420,7 +455,14 @@ func (r *Registry) DeliverPendingRentals(ctx context.Context) (sent []string, gi
 	if c == nil {
 		return nil, 0, platform.ErrUnsupported
 	}
-	sent, gifts, err = c.DeliverPendingRentals(ctx, 5, func() { time.Sleep(1500 * time.Millisecond) })
+	sent, gifts, err = c.DeliverPendingRentals(ctx, 5, func() {
+		t := time.NewTimer(1500 * time.Millisecond)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		}
+	})
 	for _, orderNo := range sent {
 		r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 			Action: "order.offer_sent", Channel: string(domain.ChannelUU), Target: orderNo})

@@ -169,7 +169,9 @@ func safeCall(ctx context.Context, fn func(context.Context) (err error)) (err er
 
 // Stop stops the tick loop and waits for all in-flight job executions —
 // including manually triggered ones — so a platform write cut mid-shutdown is
-// impossible. Idempotent.
+// impossible. Idempotent. The wait is bounded by 30s: on timeout Stop logs a
+// warning and returns so shutdown cannot hang forever on a wedged platform
+// call (jobs themselves carry a 10-minute context budget).
 func (s *Scheduler) Stop() {
 	s.mu.Lock()
 	select {
@@ -178,7 +180,17 @@ func (s *Scheduler) Stop() {
 		close(s.stop)
 	}
 	s.mu.Unlock()
-	s.done.Wait()
+	done := make(chan struct{})
+	go func() { s.done.Wait(); close(done) }()
+	t := time.NewTimer(30 * time.Second)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		if s.log != nil {
+			s.log.Warn("scheduler stop timed out waiting for in-flight jobs")
+		}
+	}
 }
 
 // Trigger runs one job immediately (manual run from the panel). The job runs

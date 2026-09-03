@@ -86,6 +86,7 @@ func (s *Server) handleStrategiesList(w http.ResponseWriter, r *http.Request) {
 type strategyUpdate struct {
 	Params      *json.RawMessage `json:"params,omitempty"`
 	Route       *string          `json:"channel_route,omitempty"`
+	RouteAlias  *string          `json:"route,omitempty"`
 	RealEnabled *bool            `json:"real_execution_enabled,omitempty"`
 }
 
@@ -96,6 +97,9 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid json")
 		return
+	}
+	if req.RouteAlias != nil && req.Route == nil {
+		req.Route = req.RouteAlias
 	}
 	if req.Route != nil && !validRoutes[*req.Route] {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid channel_route")

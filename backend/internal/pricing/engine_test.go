@@ -3,6 +3,7 @@ package pricing
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,5 +302,80 @@ func TestNonFiniteDefenseLines(t *testing.T) {
 	f, reason := NextFactor(math.NaN(), EventRentSuccess, DefaultParams().Ctrl)
 	if !finite(f) || f != 1.0 || reason == "" {
 		t.Fatalf("NaN factor recovery: f=%v reason=%q", f, reason)
+	}
+}
+
+// MinLeaseRatio floor applies AFTER the absolute bounds so a configured ratio
+// is never pulled back under the floor (review fix); a floor overshooting the
+// ceiling is clipped with the guardrail hit recorded in Reasons.
+func TestDecideMinLeaseRatioAfterAbsoluteBounds(t *testing.T) {
+	in := baseInput()
+	in.P.Baseline.MinLeaseRatio = 0.05 // floor = 5.00 on V=100
+	d := Decide(in)                    // raw target 2.0 × 1.0
+	if !d.OK || d.Rent != 5.0 {
+		t.Fatalf("floor decision: %+v", d)
+	}
+	found := false
+	for _, r := range d.Reasons {
+		if strings.Contains(r, "min_lease_ratio_floor") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("floor hit not recorded: %v", d.Reasons)
+	}
+}
+
+func TestDecideMinLeaseRatioClippedByMaxRent(t *testing.T) {
+	in := baseInput()
+	in.P.Baseline.MinLeaseRatio = 0.05 // floor 5.00, ceiling 4
+	in.P.Guard.MaxRent = 4
+	d := Decide(in)
+	if !d.OK || d.Rent != 4 {
+		t.Fatalf("clipped decision: %+v", d)
+	}
+	found := false
+	for _, r := range d.Reasons {
+		if strings.Contains(r, "guardrail:max_rent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("guardrail clip not recorded: %v", d.Reasons)
+	}
+}
+
+// ECO deposit-cap breach is invalid even inside cooldown/noise windows — the
+// cap verdict must never be masked by an early skip (review fix).
+func TestDecideDepositCapBeatsCooldownAndNoise(t *testing.T) {
+	mkCapBreach := func() Input {
+		in := baseInput()
+		in.Channel = domain.ChannelECO
+		in.V = 10000 // rent×30 days ≫ cap 2×V
+		in.Base = Base{Short: 800, Long: 700, Deposit: 0}
+		return in
+	}
+	in := mkCapBreach()
+	in.Cur.RentPrice = 800
+	in.Cur.LastActionAt = in.Now.Add(-5 * time.Minute)
+	if d := Decide(in); d.OK || d.SkipReason != "deposit_cap_exceeded" {
+		t.Fatalf("cap must beat cooldown: %+v", d)
+	}
+	in = mkCapBreach()
+	in.Cur.RentPrice = 800
+	in.Cur.LastActionAt = in.Now.Add(-time.Hour)
+	if d := Decide(in); d.OK || d.SkipReason != "deposit_cap_exceeded" {
+		t.Fatalf("cap must beat noise: %+v", d)
+	}
+}
+
+// EventReset with a floor above neutral (exotic FMin>1 config) must clamp to
+// the bounds and record the clamp (review fix).
+func TestNextFactorResetClampedToBounds(t *testing.T) {
+	cp := DefaultParams().Ctrl
+	cp.FMin, cp.FMax = 1.1, 1.5
+	f, reason := NextFactor(1.2, EventReset, cp)
+	if f != 1.1 || !strings.Contains(reason, "clamped_min") {
+		t.Fatalf("reset clamp: f=%v reason=%q", f, reason)
 	}
 }

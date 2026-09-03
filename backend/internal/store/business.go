@@ -26,6 +26,10 @@ type Template struct {
 }
 
 func (s *Store) UpsertTemplate(ctx context.Context, t Template) error {
+	// Channel mark prices are money legs: normalize before persistence
+	// (AGENTS.md 硬规则). Nil-ness is preserved — absent stays absent.
+	round2MoneyPtr(t.UUMarkPrice)
+	round2MoneyPtr(t.EcoRefPrice)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO templates(hash_name, display_name, category, uu_template_id, uu_mark_price, eco_ref_price)
 		 VALUES($1,$2,$3,$4,$5,$6)
@@ -130,6 +134,8 @@ type InventoryFilter struct {
 }
 
 func (s *Store) UpsertInventoryItem(ctx context.Context, it domain.InventoryItem, costBasis *float64) error {
+	it.MarkPrice = round2Money(it.MarkPrice)
+	round2MoneyPtr(costBasis)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO inventory_items(channel, asset_id, hash_name, market_hash_name, template_id, mark_price, tradable, status, cost_basis, last_synced_at)
 		 VALUES($1,$2,$3,$4,NULLIF($5,0)::bigint,$6,$7,$8,$9,now())

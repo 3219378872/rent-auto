@@ -17,6 +17,11 @@ import (
 // Delegates to the canonical pricing implementation (AGENTS.md 硬规则).
 func Round2(v float64) float64 { return pricing.Round2(v) }
 
+// NetIncome returns recorded income minus sold-out cost basis: the net
+// 口径 (data-model 口径 B) used for Income.Total and the ROI numerator.
+// Rounds through the canonical pricing implementation (AGENTS.md 硬规则).
+func NetIncome(gross, soldCost float64) float64 { return Round2(gross - soldCost) }
+
 // AnnualizedROI = netIncome / cost × (365d / observation days).
 // Returns 0 when inputs are insufficient (never negative-days or div-by-zero panics).
 func AnnualizedROI(netIncome, cost float64, firstCost, now time.Time) float64 {
@@ -113,17 +118,6 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 		incomeByCh = []store.ChannelTotal{}
 	}
 	d.Income.ByChannel = incomeByCh
-	d.Income.Total = Round2(total)
-
-	today, err := st.TodayIncome(ctx)
-	if err != nil {
-		return nil, err
-	}
-	d.Income.Today = Round2(today)
-
-	if d.LeasedOut, err = st.LeasedCount(ctx); err != nil {
-		return nil, err
-	}
 
 	// 年化收益率 per data-model 口径: net = income − sold-out cost,
 	// denominator = all-time cost basis; observation starts at first cost entry.
@@ -135,12 +129,28 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 	if err != nil {
 		return nil, err
 	}
+	// Income.Total is the NET 口径 (gross recorded income minus sold-out
+	// cost basis): sold inventory converted its cost into the income figure,
+	// so reporting gross double-counts deployed capital as return.
+	netTotal := NetIncome(total, soldCost)
+	d.Income.Total = netTotal
+
+	today, err := st.TodayIncome(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.Income.Today = Round2(today)
+
+	if d.LeasedOut, err = st.LeasedCount(ctx); err != nil {
+		return nil, err
+	}
+
 	first, err := st.FirstCostDate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if first != nil && cost > 0 {
-		d.AnnualizedROI = AnnualizedROI(total-soldCost, cost, *first, time.Now())
+		d.AnnualizedROI = AnnualizedROI(netTotal, cost, *first, time.Now())
 	} // else: no observation window yet — report 0 rather than absurd extrapolation
 
 	cats, err := st.CategoryYields(ctx)

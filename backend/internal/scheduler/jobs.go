@@ -87,21 +87,27 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 			Fn: func(ctx context.Context) error { return runMarketSnapshot(ctx, d.Store, uuQuotes, log) }},
 		{Name: "value_anchor", Kind: KindInterval, Every: time.Hour, Jitter: 5 * time.Minute,
 			Fn: func(ctx context.Context) error {
+				var errs []error
 				if ecoDump != nil {
 					if prices, err := ecoDump(ctx); err == nil && len(prices) > 0 {
 						n, uerr := d.Store.UpdateEcoRefPrices(ctx, prices)
 						if uerr != nil {
 							log.Warn("eco ref price persist failed", "err", uerr)
+							errs = append(errs, fmt.Errorf("eco ref persist: %w", uerr))
 						} else {
 							log.Info("eco ref prices updated", "rows", n)
 						}
 					} else if err != nil {
 						log.Warn("eco dump failed", "err", err)
+						errs = append(errs, fmt.Errorf("eco dump: %w", err))
 					}
 				}
 				n, err := bench.RecomputeAnchors(ctx, d.Store)
 				log.Info("anchors recomputed", "rows", n, "err", err)
-				return err
+				if err != nil {
+					errs = append(errs, err)
+				}
+				return errors.Join(errs...)
 			}},
 		{Name: "reconcile", Kind: KindInterval, Every: 10 * time.Minute, Jitter: 60 * time.Second,
 			Fn: func(ctx context.Context) error {
@@ -145,6 +151,7 @@ func runMarketSnapshot(ctx context.Context, st *store.Store, fetch func(ctx cont
 		quotes, err := fetch(ctx, tp.UUTemplateID, minP, maxP)
 		if err != nil {
 			log.Warn("quote fetch failed", "hash", tp.HashName, "err", err)
+			errs = append(errs, fmt.Errorf("quotes %s: %w", tp.HashName, err))
 			continue
 		}
 		var snaps []store.Snapshot

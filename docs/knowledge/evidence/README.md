@@ -41,6 +41,8 @@
 | 2026-08-28 ECO 订单同步时区错位修复 | [2026-08-28-eco-orders-tz-8h-lag.md](2026-08-28-eco-orders-tz-8h-lag.md) | StartTime/EndTime 与响应时间串均为北京时间(UTC+8)；UTC 直发致新订单晚 8h 进 orders_sync 窗（Karambit 单缺失实锤）；formatEcoTime/parseEcoTime 统一 + upsert COALESCE 治愈存量；api-notes 已知坑 #8 |
 | 2026-08-28 ubuntu 主机生产迁移 | [2026-08-28-migrate-ubuntu-host.md](2026-08-28-migrate-ubuntu-host.md) | 全库 pg_dump 迁移+compose 三容器上线（8081/Tailscale-only）；渠道页空号根因=双 APP_MASTER_KEY 不一致，换 key 后 steam/uu/eco 任务真机跑通零 WARN；本地双实例已停 |
 | 2026-09-03 深度审查修复轮 | [2026-09-03-review-fixes.md](2026-09-03-review-fixes.md) | P1×6+P2×10 全清：UU 信封缺 Code 熔断/AuthExpired 30min 冷却/JWT_TTL 接线/定价示例嵌套化/UU 时间 CST 对齐/护栏帽后重钳；集成全绿，覆盖率门控 10 包全过 |
+| 2026-09-03 全面深度审查修复轮 | [2026-09-03-comprehensive-review-fixes.md](2026-09-03-comprehensive-review-fixes.md) | P0×4+P1/P2 全清：模板级dry-run/leased误判/发货dry-run/Registry并发/Round2/因子哨兵/安全加固/openapi v0.8.0；make gate PASSED |
+| 2026-09-03 平台客户端+前端契约修复轮 | [2026-09-03-platform-contract-fixes.md](2026-09-03-platform-contract-fixes.md) | 占位：UU/ECO/Steam 哨兵与信封收敛+openapi v0.8.0（证据正文由主流程归档） |
 
 ## 事故复盘
 

@@ -114,8 +114,13 @@ type AuditFilter struct {
 
 func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]domain.AuditEntry, int, error) {
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 {
 		limit = 50
+	}
+	// 钳制而非重置：>200 收敛到 200（攻击性格aggregation.probe 等大页调用
+	// 不被静默缩成 50 导致"丢审计"错觉；与 normalizePage 同口径）。
+	if limit > 200 {
+		limit = 200
 	}
 	offset := f.Offset
 	if offset < 0 {

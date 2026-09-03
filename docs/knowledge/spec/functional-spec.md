@@ -21,7 +21,7 @@
 
 ## 2. REST API 契约
 
-契约文件：`spec/openapi.yaml`（M1 建立，随里程碑演进）。
+契约文件：`docs/knowledge/spec/openapi.yaml`（M1 建立，随里程碑演进；当前 v0.8.0）。
 通用约定：
 - 前缀 `/api/v1`；JSON UTF-8；金额字段一律两位小数 float
 - 分页参数 `page`(1-based)、`page_size`(≤200，round10 与 store 钳制/openapi 统一口径)；响应 `{items,total}`
@@ -54,6 +54,7 @@
 - 新策略首次执行必须 dry_run=true：完整走决策链但只写 `price_actions(dry_run=true)` 不调平台
 - 面板策略页可切换 enable_real_execution
 - （2026-08-24 起）reconcile 与 reprice 同受 `DRY_RUN_DEFAULT || !real_execution_enabled` 双层门禁；门禁查询失败强制 dry-run
+- （2026-09-03 起）reconcile 按模板逐 Action 门禁：全局 dry-run 兜底，模板非 real 进 dry 分批；发货/0CD（uu_delivery/steam_offers/eco_delivery/zero_cd）同门 skipped 审计
 
 ### AC-T2 护栏（全部任务强制）
 - 价格边界 [min_rent, max_rent]；单次改价幅度 ≤ max_change_ratio(默认15%)

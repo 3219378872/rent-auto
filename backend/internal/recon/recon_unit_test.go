@@ -539,3 +539,68 @@ func TestPlanFromDedupesAssetSyncedByBothChannels(t *testing.T) {
 		t.Fatalf("same asset must publish exactly once, got %d (%+v)", pubs, plan)
 	}
 }
+
+// A leased listing holds no publish-budget slot: one leased + zero live rows
+// against two routable copies must still publish the unlisted copy (the old
+// len(existing) budget blocked it once the leased row filled the count).
+func TestPlanFromPublishBudgetIgnoresLeased(t *testing.T) {
+	v := 100.0
+	snap := Snapshot{
+		Items: []store.RoutableItem{
+			{AssetID: "a1", HashName: "H", V: &v, Route: "uu_only"},
+			{AssetID: "a2", HashName: "H", V: &v, Route: "uu_only"},
+		},
+		Listings: []store.ActiveListing{
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G-leased", AssetID: "a9", State: "leased"},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G1", AssetID: "a1", State: "active"},
+		},
+		Health: map[string]string{"uu": "ok", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+	var pubs []Action
+	for _, a := range plan {
+		if a.Kind == "publish" {
+			pubs = append(pubs, a)
+		} else {
+			t.Fatalf("unexpected delist: %+v", a)
+		}
+	}
+	// want=2, live(non-leased)=1 → exactly one publish for the unlisted a2
+	// (a1 already listed in any state is never re-published).
+	if len(pubs) != 1 || pubs[0].AssetID != "a2" {
+		t.Fatalf("publishes: %+v", pubs)
+	}
+}
+
+// Leased rows occupy no kept budget either: with want=1, a leased copy plus
+// two active copies must delist the active surplus — never the legitimately
+// kept active copy the old kept-counter sacrificed first.
+func TestPlanFromSurplusKeptIgnoresLeased(t *testing.T) {
+	v := 100.0
+	old := time.Now().Add(-48 * time.Hour)
+	snap := Snapshot{
+		Items: []store.RoutableItem{
+			{AssetID: "a1", HashName: "H", V: &v, Route: "uu_only"},
+		},
+		Listings: []store.ActiveListing{
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G-leased", AssetID: "a9", State: "leased", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G1", AssetID: "a1", State: "active", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G2", AssetID: "a2", State: "active", SyncedAt: old},
+		},
+		Health: map[string]string{"uu": "ok", "eco": "ok"},
+	}
+	plan := PlanFrom(context.Background(), snap, old.Add(2*DefaultOrphanGrace), DefaultOrphanGrace,
+		func(context.Context, domain.Channel, store.RoutableItem) *pricing.Decision { return okDecision(1) })
+	var dels []Action
+	for _, a := range plan {
+		if a.Kind == "delist" {
+			dels = append(dels, a)
+		} else {
+			t.Fatalf("unexpected publish: %+v", a)
+		}
+	}
+	if len(dels) != 1 || dels[0].GoodsRef != "G2" {
+		t.Fatalf("surplus delists: %+v", dels)
+	}
+}
