@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
@@ -26,46 +25,12 @@ func SyncInventory(ctx context.Context, ad platform.Adapter, st *store.Store, lo
 	if err != nil {
 		return 0, err
 	}
-	n := 0
-	for _, it := range items {
-		if it.HashName == "" {
-			continue
-		}
-		tpl := store.Template{HashName: it.HashName, DisplayName: it.DisplayName}
-		switch ad.Channel() {
-		case domain.ChannelUU:
-			tpl.UUTemplateID = nilIfZero64(it.TemplateID)
-			tpl.UUMarkPrice = pricePtr(it.MarkPrice)
-		case domain.ChannelECO:
-			tpl.EcoRefPrice = pricePtr(it.MarkPrice)
-		}
-		if err := st.UpsertTemplate(ctx, tpl); err != nil {
-			return n, err
-		}
-		if err := st.UpsertInventoryItem(ctx, it, nil); err != nil {
-			return n, err
-		}
-		n++
+	if err := st.ApplyInventorySnapshot(ctx, ad.Channel(), items); err != nil {
+		return 0, err
 	}
+	n := len(items)
 	log.Info("inventory synced", "channel", string(ad.Channel()), "items", n)
 	return n, nil
-}
-
-func nilIfZero64(v int64) *int64 {
-	if v == 0 {
-		return nil
-	}
-	return &v
-}
-
-func pricePtr(v float64) *float64 {
-	// Round2 first: non-finite upstream prices (NaN/Inf) collapse to 0 and are
-	// treated as absent instead of poisoning the value anchor.
-	p := pricing.Round2(v)
-	if p <= 0 {
-		return nil
-	}
-	return &p
 }
 
 // SyncShelf pulls the channel lease shelf into listings (actual state).

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Inventory from './Inventory'
 
 const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }))
@@ -21,6 +21,14 @@ beforeEach(() => {
 })
 
 describe('Inventory page', () => {
+  it('labels and filters inventory missing from a complete snapshot without marking it sold', async () => {
+    getMock.mockResolvedValue({ items: [{ ...oneItem, status: 'missing' }], total: 1 })
+    render(<Inventory />)
+    expect(await screen.findByText('同步未见', { selector: 'span.badge' })).toBeDefined()
+    await act(async () => { fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'missing' } }) })
+    expect(getMock.mock.calls.at(-1)?.[0]).toContain('status=missing')
+  })
+
   it('renders rows with book yield computed from cost', async () => {
     getMock.mockResolvedValue({ items: [oneItem], total: 1 })
     render(<Inventory />)
@@ -39,8 +47,8 @@ describe('Inventory page', () => {
     // valid input → PUT + reload
     fireEvent.change(input, { target: { value: '90.5' } })
     fireEvent.click(screen.getByRole('button', { name: '存' }))
-    await vi.waitFor(() => expect(putMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1))
     expect(putMock).toHaveBeenCalledWith('/inventory/uu/A1/cost', { cost: 90.5 })
-    await vi.waitFor(() => expect(getMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2))
   })
 })

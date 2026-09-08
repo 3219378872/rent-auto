@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import Audit from './Audit'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
@@ -18,6 +18,8 @@ beforeEach(() => {
   getMock.mockResolvedValue({ items: [entry], total: 75 })
 })
 
+afterEach(() => vi.useRealTimers())
+
 describe('Audit page', () => {
   it('renders entries with detail JSON and page meta', async () => {
     render(<Audit />)
@@ -29,11 +31,10 @@ describe('Audit page', () => {
   it('applies the action filter on input (debounced)', async () => {
     render(<Audit />)
     await screen.findByText('strategy.update')
+    vi.useFakeTimers()
     fireEvent.change(screen.getByPlaceholderText('动作过滤，如 reprice'), { target: { value: 'reprice' } })
-    await vi.waitFor(() => {
-      const last = getMock.mock.calls.at(-1)?.[0] as string
-      expect(last).toContain('action=reprice')
-    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(getMock.mock.calls.at(-1)?.[0]).toContain('action=reprice')
     // filter change must reset the page back to 1
     expect(getMock.mock.calls.at(-1)?.[0]).toContain('page=1')
   })
@@ -41,10 +42,7 @@ describe('Audit page', () => {
   it('encodes the since filter as ISO timestamp', async () => {
     render(<Audit />)
     await screen.findByText('strategy.update')
-    fireEvent.change(screen.getByLabelText('起始时间'), { target: { value: '2026-08-01T08:00' } })
-    await vi.waitFor(() => {
-      const last = getMock.mock.calls.at(-1)?.[0] as string
-      expect(last).toContain('since=2026-08-01T')
-    })
+    await act(async () => { fireEvent.change(screen.getByLabelText('起始时间'), { target: { value: '2026-08-01T08:00' } }) })
+    expect(getMock.mock.calls.at(-1)?.[0]).toContain('since=2026-08-01T')
   })
 })

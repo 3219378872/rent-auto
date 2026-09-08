@@ -24,7 +24,7 @@ describe('channelIssues', () => {
       .toEqual(['ECO：error: expired token', 'STEAM：not_configured'])
   })
   it('returns empty when everything is ok', () => {
-    expect(channelIssues({ uu: 'ok' })).toEqual([])
+    expect(channelIssues({ uu: 'ok', eco: 'ok', steam: 'ok:76561198000000000' })).toEqual([])
   })
 })
 

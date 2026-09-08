@@ -14,11 +14,8 @@ import (
 var (
 	ErrInvalidToken = errors.New("auth: invalid token")
 	ErrExpiredToken = errors.New("auth: token expired")
-	// ErrStoreUnavailable marks session-epoch store read failures. The
-	// requireAuth epoch comparison (server.go, owned by a parallel lane)
-	// must treat this as fail-closed 401 — a nil/unreadable store must
-	// never fall back to ver=0 and skip revocation. Use FailClosedError
-	// to wrap the underlying store error.
+	// ErrStoreUnavailable marks session-epoch failures that require fail-closed
+	// authorization; a missing backend must never imply a zero epoch.
 	ErrStoreUnavailable = errors.New("auth: credential store unavailable")
 )
 

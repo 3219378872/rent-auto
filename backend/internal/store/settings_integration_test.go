@@ -5,22 +5,19 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 func openTestDB(t *testing.T) (*Store, func()) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
 	st := New(pool)
 	if _, err := MigrateUp(context.Background(), pool); err != nil {

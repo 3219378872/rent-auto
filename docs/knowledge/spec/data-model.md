@@ -26,11 +26,12 @@ hash_name FK→templates
 template_id int64               -- UU 模板 id（行情采集定位，0002）
 market_hash_name                -- 冗余展示
 mark_price numeric              -- 平台标记价（锚点候选，0002）
-status                          -- in_stock|listed|leased|locked|sold
+status                          -- in_stock|listed|leased|locked|sold|missing
 tradable bool; abrade numeric
 cost_basis numeric              -- 成本价（录入来源手工/平台）
 cost_source                     -- manual|uu_sync|eco_sync|import
-cost_updated_at                 -- 最早成本录入时间=年化观测起点（0004）
+cost_updated_at                 -- 首次实际成本录入时间；无成本时 NULL
+cost_modified_at                -- 最后成本修订时间，用于镜像成本冲突裁定（0010）
 last_synced_at; raw jsonb       -- 平台原始载荷（排障用）
 ```
 
@@ -48,6 +49,7 @@ sublet_applied bool DEFAULT false -- ECO 转租策略已被平台接受（0008�
                                   -- 接受后置位（上架成功即置位；仅 ECO 语义）
 strategy_id bigint               -- 逻辑引用（无 FK 约束，见 0002 DDL）
 listed_at, last_reprice_at, actual_synced_at
+recon_mismatch_since/reason     -- 首次持续对账偏差，不由正常货架心跳刷新
 UNIQUE(channel, goods_ref)
 ```
 
@@ -62,6 +64,10 @@ started_at, due_at, finished_at, updated_at; raw jsonb
 income_recorded bool            -- 终态且已计入收益
 factor_applied bool             -- 是否已折算进 listing 因子（0005，防重复折算）
 ```
+
+finished_at 优先使用明确的实际完成事实；未获此字段时记首次终态观测时间，后续同步保持稳定。
+due_at 是约定到期日，不再作为实际完成日替代。现有 UU/ECO 适配器尚无已校订的 finished_at 映射，
+历史既有数据不宣称已恢复真实完成事实。
 
 **统一状态机**：pending_payment → delivering → leasing → returning → done | bought_out | cancelled | arbitrating | breach
 （UU/ECO 原始状态码映射表存 design/platform-*-api-notes.md；
@@ -109,6 +115,13 @@ UNIQUE(stat_date, channel, category)
 asset_snapshot jsonb             -- 当日总资产构成
 ```
 
+### order_income_ledger — 当前已记账订单投影
+
+`order_id` 主键关联 lease_orders；保存已应用的 UTC 记账日、渠道、品类、金额。
+订单金额/日期/身份补全或终态撤回时，在锁定订单的同一事务中先冲销旧投影，再写入新投影，
+同步 daily_stats 与 income_recorded。旧布尔标记不再是是否需要修正的唯一判断。
+迁移以持久化订单重建收入/单量口径，保留 daily_stats 其他列；无法恢复上游未提供的历史真实完结日。
+
 ### app_settings — KV 设置（含加密值）
 ```
 key PK; value_enc bytea NULL; value_plain jsonb NULL; updated_at
@@ -127,3 +140,9 @@ id bigserial PK; ts; actor(system|user:<name>); channel?; action; target?; detai
 - **年化收益率** = (Σ净收益 / Σ全量成本基准) × (365d / 观测天数)；观测起点=最早成本录入日(cost_updated_at)；无起点时不外推（显示 0）
 - **分类收益率** = 该品类 Σ(订单收入−已售成本) / Σ该品类全量成本基准
 - **日界口径**：daily_stats 一律按 UTC 日切分，读写两端一致
+- **实物归一**：单 Steam 账号/CS2 范围内按非空 asset_id 归一，双渠道镜像只计一次。
+  状态/模板取最近非 missing 观测，全部 missing 时不计持有估值；成本优先人工来源、
+  再取最新成本修订，空资产标识按行隔离；多件同模板实物不能按 hash_name 合并。
+  手工修改成本同步已有镜像；成本观测起点保持首次录入，不能用每次同步时间替代。
+- **完整快照**：仅完整成功库存响应可将未见资产标 missing；missing 不代表售出，
+  不计当前估值，但保留历史成本。listed 仍属于期望货架，leased 不得重复发布。

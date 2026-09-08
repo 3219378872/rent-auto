@@ -305,9 +305,8 @@ func TestNonFiniteDefenseLines(t *testing.T) {
 	}
 }
 
-// MinLeaseRatio floor applies AFTER the absolute bounds so a configured ratio
-// is never pulled back under the floor (review fix); a floor overshooting the
-// ceiling is clipped with the guardrail hit recorded in Reasons.
+// The revenue floor participates in the same feasible interval as the hard
+// price bounds; conflicting intervals are rejected by the next test.
 func TestDecideMinLeaseRatioAfterAbsoluteBounds(t *testing.T) {
 	in := baseInput()
 	in.P.Baseline.MinLeaseRatio = 0.05 // floor = 5.00 on V=100
@@ -326,22 +325,13 @@ func TestDecideMinLeaseRatioAfterAbsoluteBounds(t *testing.T) {
 	}
 }
 
-func TestDecideMinLeaseRatioClippedByMaxRent(t *testing.T) {
+func TestDecideMinLeaseRatioConflictsWithMaxRent(t *testing.T) {
 	in := baseInput()
 	in.P.Baseline.MinLeaseRatio = 0.05 // floor 5.00, ceiling 4
 	in.P.Guard.MaxRent = 4
 	d := Decide(in)
-	if !d.OK || d.Rent != 4 {
-		t.Fatalf("clipped decision: %+v", d)
-	}
-	found := false
-	for _, r := range d.Reasons {
-		if strings.Contains(r, "guardrail:max_rent") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("guardrail clip not recorded: %v", d.Reasons)
+	if d.OK || d.SkipReason != "guardrail_conflict" {
+		t.Fatalf("conflicting decision: %+v", d)
 	}
 }
 

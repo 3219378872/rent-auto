@@ -26,7 +26,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
-const version = "0.7.0"
+const version = "0.9.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -42,21 +42,20 @@ func run() error {
 	}
 	log := logging.New(cfg.LogLevel)
 
-	ctx := context.Background()
+	rootCtx, stopCtx := context.WithCancel(context.Background())
+	defer stopCtx()
+	ctx := rootCtx
 	pool, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	unlock, ok, err := store.TryAdvisoryLock(ctx, pool)
+	guard, err := store.AcquireInstanceLock(ctx, pool)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return errors.New("another instance is already running (advisory lock held)")
-	}
-	defer unlock()
+	defer guard.Close()
 
 	applied, err := store.MigrateUp(ctx, pool)
 	if err != nil {
@@ -109,8 +108,26 @@ func run() error {
 	sch := scheduler.New(log)
 
 	// Reconcile pipeline: plan desired-vs-actual shelf state, then execute.
-	planner := &recon.Planner{Store: st, Log: log, Health: registry.Health}
+	planner := &recon.Planner{Store: st, Log: log, Health: func(ctx context.Context) map[string]string {
+		health := map[string]string{"uu": "not_configured", "eco": "not_configured"}
+		for _, adapter := range registry.All() {
+			ch := adapter.Channel()
+			if !deps.ChannelReady(ch) {
+				health[string(ch)] = "cooldown"
+				continue
+			}
+			err := adapter.Healthy(ctx)
+			deps.NoteChannelError(ctx, ch, err)
+			if err != nil {
+				health[string(ch)] = err.Error()
+			} else {
+				health[string(ch)] = "ok"
+			}
+		}
+		return health
+	}}
 	executor := &recon.Executor{Log: log,
+		ChannelReady: deps.ChannelReady,
 		Audit: func(ctx context.Context, e domain.AuditEntry) {
 			if err := st.InsertAudit(ctx, e); err != nil {
 				log.Warn("audit insert failed", "action", e.Action, "err", err)
@@ -137,7 +154,11 @@ func run() error {
 			}
 			return nil
 		}
+		if !deps.ChannelReady(domain.ChannelUU) {
+			return platform.ErrRateLimited
+		}
 		sent, gifts, err := registry.DeliverPendingRentals(ctx)
+		deps.NoteChannelError(ctx, domain.ChannelUU, err)
 		log.Info("uu delivery", "sent", len(sent), "gifts_skipped", gifts, "err", err)
 		return err
 	}
@@ -159,7 +180,7 @@ func run() error {
 	}
 
 	ecoDeps := &scheduler.EcoDeliveryDeps{
-		Eco:   liveECOClient{r: registry},
+		Eco:   liveECOClient{r: registry, deps: &deps},
 		Steam: steamSess,
 		Audit: func(ctx context.Context, e domain.AuditEntry) {
 			if err := st.InsertAudit(ctx, e); err != nil {
@@ -177,14 +198,22 @@ func run() error {
 			}
 			return nil
 		}
+		if !deps.ChannelReady(domain.ChannelECO) {
+			return platform.ErrRateLimited
+		}
 		err := ecoDeps.RunECODelivery(ctx)
 		if err != nil {
 			log.Warn("eco delivery", "err", err)
 			return err
 		}
 		// 平台批量兜底（归还方向等），失败不阻塞主链路
-		if err := registry.EcoOneClickResolve(ctx); err != nil && err != platform.ErrUnsupported {
+		if !deps.ChannelReady(domain.ChannelECO) {
+			return platform.ErrRateLimited
+		}
+		if err := registry.EcoOneClickResolve(ctx); err != nil && !errors.Is(err, platform.ErrUnsupported) {
+			deps.NoteChannelError(ctx, domain.ChannelECO, err)
 			log.Warn("eco oneclick resolve", "err", err)
+			return err
 		}
 		return nil
 	}
@@ -197,7 +226,12 @@ func run() error {
 			}
 			return nil
 		}
-		return registry.ClearZeroCD(ctx)
+		if !deps.ChannelReady(domain.ChannelUU) {
+			return platform.ErrRateLimited
+		}
+		err := registry.ClearZeroCD(ctx)
+		deps.NoteChannelError(ctx, domain.ChannelUU, err)
+		return err
 	}
 
 	reconcileFn := func(ctx context.Context) error {
@@ -226,15 +260,16 @@ func run() error {
 		cooldownSkipped := len(plan) - len(kept)
 		if executor.DryRun {
 			// Global dry-run is the floor: everything records without platform calls.
-			applied, failed := executor.Execute(ctx, kept)
+			applied, failed, execErr := executor.ExecuteWithError(ctx, kept)
 			log.Info("reconcile done", "plan", len(kept), "applied", applied, "failed", failed,
 				"cooldown_skipped", cooldownSkipped, "dry_run", true)
-			return nil
+			return execErr
 		}
 		// Template-level dry-run: each publish/delist is gated by its hash's
 		// effective strategy; RealEnabled=false forces a dry-run record.
 		// Strategy lookup failure fails closed (skip + error log, no platform call).
 		var dryPlan, livePlan []recon.Action
+		var errs []error
 		strategySkipped := 0
 		for _, a := range kept {
 			es, err := st.GetEffectiveStrategy(ctx, a.HashName)
@@ -242,9 +277,10 @@ func run() error {
 				log.Error("reconcile strategy lookup failed; skipping action (fail-closed)",
 					"hash", a.HashName, "kind", a.Kind, "err", err)
 				strategySkipped++
+				errs = append(errs, err)
 				continue
 			}
-			if !es.RealEnabled {
+			if !es.GlobalRealEnabled || !es.RealEnabled {
 				dryPlan = append(dryPlan, a)
 			} else {
 				livePlan = append(livePlan, a)
@@ -253,13 +289,15 @@ func run() error {
 		applied, failed := 0, 0
 		if len(dryPlan) > 0 {
 			executor.DryRun = true
-			da, df := executor.Execute(ctx, dryPlan)
+			da, df, err := executor.ExecuteWithError(ctx, dryPlan)
+			errs = append(errs, err)
 			applied += da
 			failed += df
 		}
 		if len(livePlan) > 0 {
 			executor.DryRun = false
-			la, lf := executor.Execute(ctx, livePlan)
+			la, lf, err := executor.ExecuteWithError(ctx, livePlan)
+			errs = append(errs, err)
 			applied += la
 			failed += lf
 		}
@@ -267,10 +305,13 @@ func run() error {
 		log.Info("reconcile done", "plan", len(kept), "applied", applied, "failed", failed,
 			"cooldown_skipped", cooldownSkipped, "strategy_skipped", strategySkipped,
 			"dry_plan", len(dryPlan), "live_plan", len(livePlan), "dry_run", false)
-		return nil
+		return errors.Join(errs...)
 	}
 
-	for _, job := range scheduler.Jobs(&deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), zeroCDFn, reconcileFn, uuDeliveryFn, steamOffersFn, ecoDeliveryFn, log) {
+	jobs := scheduler.Jobs(&deps, registry.All, uuQuotesFn(registry), ecoDumpFn(registry), zeroCDFn, reconcileFn, uuDeliveryFn, steamOffersFn, ecoDeliveryFn, log)
+	jobs = append(jobs, scheduler.Job{Name: "channel_recovery", Kind: scheduler.KindInterval, Every: time.Minute, Fn: registry.Recover})
+	for _, job := range jobs {
+		job.Fn = guardedJob(rootCtx, guard, job.Fn)
 		if err := sch.Register(job); err != nil {
 			return err
 		}
@@ -278,7 +319,12 @@ func run() error {
 
 	srv := api.NewServerWithTTL(st, auth.NewJWT(cfg.JWTSecret), cfg.AdminUser, version, cfg.JWTTTL, log)
 	srv.SetTrustProxies(cfg.TrustProxies)
-	srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
+	if cfg.AdminPassHash != "" {
+		srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }
+	} else {
+		srv.PasswordHash = st.AdminPasswordHash
+		srv.PasswordChange = st.ChangeAdminPassword
+	}
 	srv.Jobs = schedulerAdapter{sch}
 	srv.Channels = registry
 	srv.Steam = steamSess
@@ -304,46 +350,19 @@ func run() error {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	rootCtx, stopCtx := context.WithCancel(context.Background())
-	defer stopCtx()
-	// Advisory-lock heartbeat: re-probe every 5min. A re-acquired lock means
-	// the original holder connection died — never auto-preempt, only alert.
+	errCh := make(chan error, 2)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("advisory heartbeat panic recovered", "panic", r)
+		if err := guard.Watch(rootCtx, time.Second); err != nil {
+			log.Error("instance lock lost; stopping automation", "err", err)
+			stopCtx()
+			auditCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if auditErr := st.InsertAudit(auditCtx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system", Action: "system.advisory_lock_lost"}); auditErr != nil {
+				log.Warn("lock-loss audit failed", "err", auditErr)
 			}
-		}()
-		t := time.NewTicker(5 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-rootCtx.Done():
-				return
-			case <-t.C:
-				probeUnlock, probeOK, probeErr := store.TryAdvisoryLock(rootCtx, pool)
-				if probeErr == nil && probeOK {
-					// Lock was free: the original guard is gone. Release the
-					// probe immediately (no preemption) and alert loudly.
-					probeUnlock()
-					log.Error("advisory lock lost: another probe acquired it; not preempting, operator action required")
-					if aerr := st.InsertAudit(rootCtx, domain.AuditEntry{Time: time.Now().UTC(),
-						Actor: "system", Action: "system.advisory_lock_lost",
-						Detail: map[string]any{"error": "lock was free on re-probe"}}); aerr != nil {
-						log.Warn("audit insert failed", "action", "system.advisory_lock_lost", "err", aerr)
-					}
-					continue
-				}
-				if probeUnlock != nil {
-					probeUnlock()
-				}
-				if probeErr != nil && (probeOK || probeUnlock != nil) {
-					log.Warn("advisory lock re-probe failed", "err", probeErr)
-				}
-			}
+			errCh <- err
 		}
 	}()
-	errCh := make(chan error, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -365,16 +384,36 @@ func run() error {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
+	var runErr error
 	select {
 	case err := <-errCh:
-		return err
+		if !errors.Is(err, http.ErrServerClosed) {
+			runErr = err
+		}
 	case sig := <-stop:
 		log.Info("shutting down", "signal", sig.String())
-		stopCtx()
-		sch.Stop()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	}
+	stopCtx()
+	sch.Stop()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return errors.Join(runErr, httpSrv.Shutdown(shutdownCtx))
+}
+
+func guardedJob(root context.Context, guard *store.InstanceLock, fn func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		jobCtx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(root, cancel)
 		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
+		defer stop()
+		if root.Err() != nil {
+			return root.Err()
+		}
+		if err := guard.Check(jobCtx); err != nil {
+			return err
+		}
+		return fn(jobCtx)
 	}
 }
 
@@ -395,7 +434,10 @@ func globalRealEnabled(ctx context.Context, st *store.Store, log *slog.Logger) b
 // liveECOClient forwards ECO order calls to whatever client is currently
 // configured in the registry, so panel credential updates take effect on the
 // next delivery cycle without a restart.
-type liveECOClient struct{ r *channels.Registry }
+type liveECOClient struct {
+	r    *channels.Registry
+	deps *scheduler.Deps
+}
 
 type ecoOrderClient interface {
 	SellerOrderList(ctx context.Context, start, end time.Time, detailsState *int, steamID string) ([]eco.SellerOrder, error)
@@ -406,6 +448,9 @@ type ecoOrderClient interface {
 }
 
 func (l liveECOClient) client() (ecoOrderClient, error) {
+	if !l.deps.ChannelReady(domain.ChannelECO) {
+		return nil, platform.ErrRateLimited
+	}
 	if c := l.r.EcoOrderClient(); c != nil {
 		return c, nil
 	}
@@ -417,7 +462,9 @@ func (l liveECOClient) SellerOrderList(ctx context.Context, start, end time.Time
 	if err != nil {
 		return nil, err
 	}
-	return c.SellerOrderList(ctx, start, end, detailsState, steamID)
+	rows, err := c.SellerOrderList(ctx, start, end, detailsState, steamID)
+	l.deps.NoteChannelError(ctx, domain.ChannelECO, err)
+	return rows, err
 }
 
 func (l liveECOClient) SendOffer(ctx context.Context, orderNum string) (*eco.SendOfferResult, error) {
@@ -425,7 +472,9 @@ func (l liveECOClient) SendOffer(ctx context.Context, orderNum string) (*eco.Sen
 	if err != nil {
 		return nil, err
 	}
-	return c.SendOffer(ctx, orderNum)
+	result, err := c.SendOffer(ctx, orderNum)
+	l.deps.NoteChannelError(ctx, domain.ChannelECO, err)
+	return result, err
 }
 
 func (l liveECOClient) Detail(ctx context.Context, orderNum string) (*eco.SellerOrderDetail, error) {
@@ -433,7 +482,9 @@ func (l liveECOClient) Detail(ctx context.Context, orderNum string) (*eco.Seller
 	if err != nil {
 		return nil, err
 	}
-	return c.Detail(ctx, orderNum)
+	result, err := c.Detail(ctx, orderNum)
+	l.deps.NoteChannelError(ctx, domain.ChannelECO, err)
+	return result, err
 }
 
 func (l liveECOClient) SellerRentOrderList(ctx context.Context, start, end time.Time, status []int) ([]eco.SellerRentOrder, error) {
@@ -441,7 +492,9 @@ func (l liveECOClient) SellerRentOrderList(ctx context.Context, start, end time.
 	if err != nil {
 		return nil, err
 	}
-	return c.SellerRentOrderList(ctx, start, end, status)
+	rows, err := c.SellerRentOrderList(ctx, start, end, status)
+	l.deps.NoteChannelError(ctx, domain.ChannelECO, err)
+	return rows, err
 }
 
 func (l liveECOClient) SellerRentOrderDetail(ctx context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error) {
@@ -449,7 +502,9 @@ func (l liveECOClient) SellerRentOrderDetail(ctx context.Context, orderNum strin
 	if err != nil {
 		return nil, err
 	}
-	return c.SellerRentOrderDetail(ctx, orderNum)
+	result, err := c.SellerRentOrderDetail(ctx, orderNum)
+	l.deps.NoteChannelError(ctx, domain.ChannelECO, err)
+	return result, err
 }
 
 func uuQuotesFn(r *channels.Registry) func(context.Context, int64, float64, float64) ([]pricing.Quote, error) {
@@ -511,7 +566,11 @@ func resolveAdminPassword(ctx context.Context, st *store.Store, cfg *config.Conf
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return "", err
 	}
-	pw, err := config.BootstrapPassword()
+	pw, err := config.ReadBootstrapPassword(cfg.AdminBootstrapFile)
+	fresh := errors.Is(err, os.ErrNotExist)
+	if fresh {
+		pw, err = config.BootstrapPassword()
+	}
 	if err != nil {
 		return "", err
 	}
@@ -519,10 +578,15 @@ func resolveAdminPassword(ctx context.Context, st *store.Store, cfg *config.Conf
 	if err != nil {
 		return "", err
 	}
+	if fresh {
+		if err := config.WriteBootstrapPassword(cfg.AdminBootstrapFile, pw); err != nil {
+			return "", err
+		}
+	}
 	if err := st.UpsertSettingEnc(ctx, "admin_password_hash", []byte(h)); err != nil {
 		return "", err
 	}
-	log.Warn("BOOTSTRAP admin password generated ONCE — change it after first login", "password", pw)
+	log.Info("bootstrap admin password available in restricted file", "path", cfg.AdminBootstrapFile)
 	if err := st.InsertAudit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system", Action: "bootstrap.admin_password"}); err != nil {
 		log.Warn("audit insert failed", "action", "bootstrap.admin_password", "err", err)
 	}

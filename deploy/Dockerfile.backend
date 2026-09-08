@@ -8,8 +8,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/server ./cmd/serv
 
 # ---- runtime ----
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app
+RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app \
+    && mkdir -p /var/lib/rent-auto \
+    && chown app:app /var/lib/rent-auto \
+    && chmod 0700 /var/lib/rent-auto
 COPY --from=build /out/server /usr/local/bin/server
 USER app
+ENV ADMIN_BOOTSTRAP_FILE=/var/lib/rent-auto/admin-password
 EXPOSE 8080
 ENTRYPOINT ["server"]

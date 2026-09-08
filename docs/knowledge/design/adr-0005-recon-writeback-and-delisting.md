@@ -3,6 +3,9 @@
 日期：2026-08-24
 状态：已接受
 
+2026-09-08 补充：宽限锚点及库存状态以 [ADR-0009](adr-0009-recon-observation-state.md)
+为准，使用持久化首次不一致时间，不能以每次同步刷新的 `actual_synced_at` 计时。
+
 ## 背景
 
 第二轮审查确认 recon 四项结构性缺陷（2026-08-24-review-and-fixes.md 遗留#1）：

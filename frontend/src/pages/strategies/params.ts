@@ -59,8 +59,8 @@ function flatOf(raw: Record<string, unknown>, keys: string[]): Record<string, un
   return hit ? flat : undefined
 }
 
-export function normalizeParams(raw: Record<string, unknown>): StrategyParams {
-  const d = cloneDefaults()
+export function normalizeParams(raw: Record<string, unknown>, inherited: StrategyParams = DEFAULTS): StrategyParams {
+  const d = inherited
   return {
     baseline: applyGroup(d.baseline, raw.baseline ?? flatOf(raw, ['topn', 'k1', 'k2', 'k3', 'min_lease_ratio'])),
     factor: applyGroup(d.factor, raw.factor ?? flatOf(raw, ['min', 'max', 'step_up', 'step_down', 'stale_days'])),
@@ -77,9 +77,9 @@ export function normalizeParams(raw: Record<string, unknown>): StrategyParams {
 }
 
 export function validateParams(f: StrategyParams): string {
-  if (f.factor.min >= f.factor.max) return '反馈因子下限必须小于上限'
-  if (f.guardrails.min_rent >= f.guardrails.max_rent) return '租金下限必须小于上限'
-  if (f.guardrails.max_change_ratio <= 0) return '单次改价幅度上限必须大于 0'
+  if (f.factor.min > f.factor.max) return '反馈因子下限不可大于上限'
+  if (f.guardrails.min_rent > f.guardrails.max_rent) return '租金下限不可大于上限'
+  if (f.guardrails.max_change_ratio < 0) return '单次改价幅度上限不可为负数'
   if (f.eco_max_days < 8) return 'ECO 最长租期不可低于 8 天'
   if (f.baseline.topn < 1) return '行情取样条数至少为 1'
   return ''

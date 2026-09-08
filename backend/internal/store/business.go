@@ -137,12 +137,16 @@ func (s *Store) UpsertInventoryItem(ctx context.Context, it domain.InventoryItem
 	it.MarkPrice = round2Money(it.MarkPrice)
 	round2MoneyPtr(costBasis)
 	_, err := s.Pool.Exec(ctx,
-		`INSERT INTO inventory_items(channel, asset_id, hash_name, market_hash_name, template_id, mark_price, tradable, status, cost_basis, last_synced_at)
-		 VALUES($1,$2,$3,$4,NULLIF($5,0)::bigint,$6,$7,$8,$9,now())
+		`INSERT INTO inventory_items(channel, asset_id, hash_name, market_hash_name, template_id, mark_price, tradable, status, cost_basis, last_synced_at, cost_updated_at, cost_modified_at)
+		 VALUES($1,$2,$3,$4,NULLIF($5,0)::bigint,$6,$7,$8,$9,now(),
+		        CASE WHEN $9::numeric IS NOT NULL THEN now() END, CASE WHEN $9::numeric IS NOT NULL THEN now() END)
 		 ON CONFLICT(channel, asset_id) DO UPDATE SET
 		   hash_name=EXCLUDED.hash_name, market_hash_name=EXCLUDED.market_hash_name,
 		   template_id=EXCLUDED.template_id, mark_price=EXCLUDED.mark_price,
-		   tradable=EXCLUDED.tradable, status=EXCLUDED.status, last_synced_at=now()`,
+		   tradable=EXCLUDED.tradable, status=EXCLUDED.status, last_synced_at=now(),
+		   cost_basis=COALESCE(inventory_items.cost_basis,EXCLUDED.cost_basis),
+		   cost_updated_at=COALESCE(inventory_items.cost_updated_at,EXCLUDED.cost_updated_at),
+		   cost_modified_at=COALESCE(inventory_items.cost_modified_at,EXCLUDED.cost_modified_at)`,
 		it.Channel, it.AssetID, it.HashName, it.DisplayName, it.TemplateID, it.MarkPrice, it.Tradable, it.Status, costBasis)
 	if err != nil {
 		return fmt.Errorf("upsert inventory %s/%s: %w", it.Channel, it.AssetID, err)
@@ -152,7 +156,17 @@ func (s *Store) UpsertInventoryItem(ctx context.Context, it domain.InventoryItem
 
 func (s *Store) SetCostBasis(ctx context.Context, channel domain.Channel, assetID string, cost float64) error {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE inventory_items SET cost_basis=$3, cost_source='manual' WHERE channel=$1 AND asset_id=$2`,
+		`WITH target AS (
+		   SELECT id,asset_id FROM inventory_items WHERE channel=$1 AND asset_id=$2
+		 ), first_cost AS (
+		   SELECT MIN(cost_updated_at) AS first_at FROM inventory_items i
+		   WHERE cost_basis IS NOT NULL AND EXISTS(SELECT 1 FROM target
+		     WHERE target.id=i.id OR (target.asset_id<>'' AND target.asset_id=i.asset_id))
+		 )
+		 UPDATE inventory_items SET cost_basis=$3,cost_source='manual',cost_modified_at=now(),
+		 cost_updated_at=COALESCE((SELECT first_at FROM first_cost),cost_updated_at,now())
+		 WHERE EXISTS(SELECT 1 FROM target WHERE
+		       target.id=inventory_items.id OR (target.asset_id<>'' AND target.asset_id=inventory_items.asset_id))`,
 		channel, assetID, round2Money(cost))
 	if err != nil {
 		return err
@@ -229,26 +243,27 @@ func normalizePage(limit, offset int) (int, int) {
 // ---- lease orders ----
 
 func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error {
-	finished := isTerminal(o.Status)
 	o.RentPrice = round2Money(o.RentPrice)
 	o.Amount = round2Money(o.Amount)
 	o.Deposits = round2Money(o.Deposits)
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO lease_orders(channel, order_ref, asset_id, hash_name, order_type, status, rent_days, rent_price, order_amount, deposits, started_at, due_at, finished_at, income_recorded, raw, updated_at)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+		        CASE WHEN $16 THEN COALESCE($13::timestamptz,now()) END,$14,$15,now())
 		 ON CONFLICT(channel, order_ref) DO UPDATE SET
+		   asset_id=COALESCE(NULLIF(EXCLUDED.asset_id,''),lease_orders.asset_id),
+		   hash_name=COALESCE(NULLIF(EXCLUDED.hash_name,''),lease_orders.hash_name),
 		   status=EXCLUDED.status, order_type=EXCLUDED.order_type,
 		   rent_days=EXCLUDED.rent_days, rent_price=EXCLUDED.rent_price,
 		   order_amount=EXCLUDED.order_amount, deposits=EXCLUDED.deposits,
 		   started_at=COALESCE(EXCLUDED.started_at, lease_orders.started_at),
 		   due_at=COALESCE(EXCLUDED.due_at, lease_orders.due_at),
-		   finished_at=COALESCE(EXCLUDED.finished_at, lease_orders.finished_at),
-		   income_recorded = lease_orders.income_recorded OR $14,
+		   finished_at=CASE WHEN $16 THEN COALESCE($13::timestamptz,lease_orders.finished_at,now()) END,
 		   raw=COALESCE(EXCLUDED.raw, lease_orders.raw), updated_at=now()`,
 		o.Channel, o.OrderRef, o.AssetID, o.HashName, o.OrderType, o.Status,
 		o.RentDays, o.RentPrice, o.Amount, o.Deposits,
-		nullTime(o.StartedAt), nullTime(o.DueAt), nullTimePtr(finishedAt(o, finished)),
-		false, o.Raw)
+		nullTime(o.StartedAt), nullTime(o.DueAt), nullTimePtr(o.FinishedAt),
+		false, o.Raw, isTerminal(o.Status))
 	if err != nil {
 		return fmt.Errorf("upsert order %s/%s: %w", o.Channel, o.OrderRef, err)
 	}
@@ -309,20 +324,8 @@ func (s *Store) EarliestLeasedListingStart(ctx context.Context) (*time.Time, err
 	return t, nil
 }
 
-func finishedAt(o domain.LeaseOrder, terminal bool) *time.Time {
-	if !terminal {
-		return nil
-	}
-	if o.DueAt.IsZero() {
-		t := time.Now().UTC()
-		return &t
-	}
-	t := o.DueAt
-	return &t
-}
-
 func nullTimePtr(t *time.Time) any {
-	if t == nil {
+	if t == nil || t.IsZero() {
 		return nil
 	}
 	return *t

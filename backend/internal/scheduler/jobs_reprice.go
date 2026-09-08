@@ -47,19 +47,11 @@ func (d *Deps) channelReady(ch domain.Channel, now time.Time) bool {
 // penalize puts a channel into cooldown when the platform signalled risk
 // control (rate limit / block / UK expiry / auth expiry); other errors are ignored.
 func (d *Deps) penalize(ch domain.Channel, err error) {
-	var until time.Time
-	switch {
-	case errors.Is(err, platform.ErrRateLimited):
-		until = time.Now().Add(rateLimitCooldown)
-	case errors.Is(err, platform.ErrPlatformBlocked):
-		until = time.Now().Add(platformBlockCool)
-	case errors.Is(err, uu.ErrUKExpired):
-		until = time.Now().Add(ukExpiredCooldownMin)
-	case errors.Is(err, platform.ErrAuthExpired):
-		until = time.Now().Add(authExpiredCooldown)
-	default:
+	cooldown := riskCooldown(err)
+	if cooldown == 0 {
 		return
 	}
+	until := time.Now().Add(cooldown)
 	d.mu.Lock()
 	if d.cooldowns == nil {
 		d.cooldowns = map[domain.Channel]time.Time{}
@@ -71,6 +63,21 @@ func (d *Deps) penalize(ch domain.Channel, err error) {
 	d.mu.Unlock()
 	d.Log.Warn("channel risk-control cooldown",
 		"channel", string(ch), "until", until.Format(time.RFC3339), "err", err.Error())
+}
+
+func riskCooldown(err error) time.Duration {
+	switch {
+	case errors.Is(err, platform.ErrRateLimited):
+		return rateLimitCooldown
+	case errors.Is(err, platform.ErrPlatformBlocked):
+		return platformBlockCool
+	case errors.Is(err, uu.ErrUKExpired):
+		return ukExpiredCooldownMin
+	case errors.Is(err, platform.ErrAuthExpired):
+		return authExpiredCooldown
+	default:
+		return 0
+	}
 }
 
 // ChannelReady reports whether ch has served out its risk-control cooldown.
@@ -112,6 +119,9 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 	var stratErrs, opErrs []error
 
 	for _, c := range cands {
+		if !d.ChannelReady(ad.Channel()) {
+			break
+		}
 		es, err := d.Store.GetEffectiveStrategy(ctx, c.HashName)
 		if err != nil {
 			// A store outage here must not look like "nothing to do": candidates
@@ -133,7 +143,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			p = &pp
 			strategyCache[key] = p
 		}
-		effectiveDry := d.DryRun || !es.RealEnabled
+		effectiveDry := d.DryRun || !es.GlobalRealEnabled || !es.RealEnabled
 
 		quotes := d.loadQuotes(ctx, c.HashName, p.Baseline.TopN)
 		base, hasBase := pricing.Baseline(quotes, p.Baseline, valOr0(c.V))
@@ -142,7 +152,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			Channel: c.Channel, HasV: c.V != nil, V: valOr0(c.V),
 			Base: base, HasBase: hasBase,
 			Factor:        c.Factor,
-			Cur:           pricing.Current{RentPrice: c.RentPrice, LastActionAt: tsOrZero(c.LastActionAt)},
+			Cur:           pricing.Current{RentPrice: c.RentPrice, LastActionAt: tsOrZero(c.LastActionAt), LongPrice: c.LongPrice, Deposit: c.Deposit, MaxDays: c.MaxDays, TermsKnown: true},
 			P:             *p,
 			Now:           now,
 			RentMaxDayMin: ad.Caps().RentMaxDayMin,
@@ -158,7 +168,7 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			Channel: c.Channel, HashName: c.HashName, AssetID: c.AssetID, ListingID: c.ListingID,
 			Action:  "reprice",
 			OldRent: store.PtrF(c.RentPrice), OldLong: store.PtrF(c.LongPrice),
-			OldDays: intPtr(0), OldDeposit: store.PtrF(c.Deposit),
+			OldDays: intPtr(c.MaxDays), OldDeposit: store.PtrF(c.Deposit),
 			DryRun: effectiveDry,
 		}
 		if !decision.OK {
@@ -190,22 +200,34 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			continue
 		}
 
+		if !d.ChannelReady(ad.Channel()) {
+			break
+		}
 		res, err := ad.RepriceLease(ctx, []platform.RepriceLeaseRequest{{
 			GoodsRef: c.GoodsRef, AssetRef: c.AssetID,
 			RentPrice: decision.Rent, LongRentPrice: decision.Long,
 			MaxDays: decision.MaxDays, Deposit: decision.Deposit,
 		}})
-		if len(res) > 0 {
-			pa.Success = res[0].Success
-			pa.Error = res[0].Error
-		} else if err != nil {
+		if err != nil {
+			d.penalize(ad.Channel(), err)
+		}
+		pa.Success = err == nil && len(res) == 1 && res[0].Success
+		switch {
+		case err != nil:
 			pa.Error = err.Error()
+		case len(res) != 1:
+			pa.Error = "missing or unexpected item result"
+		case !res[0].Success:
+			pa.Error = res[0].Error
+			if pa.Error == "" {
+				pa.Error = "platform marked item failed"
+			}
 		}
 		if _, ierr := d.Store.InsertPriceAction(ctx, pa); ierr != nil {
 			d.Log.Error("price action insert failed", "err", ierr)
 			opErrs = append(opErrs, fmt.Errorf("price_action reprice %s/%d: %w", c.HashName, c.ListingID, ierr))
 		}
-		if err == nil && (len(res) == 0 || res[0].Success) {
+		if pa.Success {
 			newVals := struct {
 				Rent, Long, Deposit float64
 				Days                int
@@ -229,12 +251,8 @@ func (d *Deps) repriceChannel(ctx context.Context, ad platform.Adapter, now time
 			// Platform answered without transport error but marked the item
 			// failed: the listing keeps its stale price, so the cycle must
 			// report failure (panel LastError) instead of silent success.
-			msg := res[0].Error
-			if msg == "" {
-				msg = "platform marked item failed"
-			}
-			d.Log.Warn("reprice item failed", "goods", c.GoodsRef, "err", msg)
-			opErrs = append(opErrs, fmt.Errorf("reprice %s: %s", c.GoodsRef, msg))
+			d.Log.Warn("reprice item failed", "goods", c.GoodsRef, "err", pa.Error)
+			opErrs = append(opErrs, fmt.Errorf("reprice %s: %s", c.GoodsRef, pa.Error))
 		}
 	}
 	// Strategy/config errors were already aggregated; per-listing operation

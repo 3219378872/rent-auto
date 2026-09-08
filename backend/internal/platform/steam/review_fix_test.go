@@ -60,17 +60,17 @@ func TestRefreshAccessTokenChecksEresult(t *testing.T) {
 		_, _ = w.Write([]byte(`{"response":{"access_token":"` + makeJWT(exp) + `"}}`))
 	})
 
-	s.Tokens = SessionTokens{SteamID: "123", RefreshToken: "ok"}
+	s.tokens = SessionTokens{SteamID: "123", RefreshToken: "ok"}
 	if err := s.RefreshAccessToken(context.Background()); err != nil {
 		t.Fatalf("eresult=1 must succeed: %v", err)
 	}
 
-	s.Tokens = SessionTokens{SteamID: "123", RefreshToken: "dead"}
+	s.tokens = SessionTokens{SteamID: "123", RefreshToken: "dead"}
 	if err := s.RefreshAccessToken(context.Background()); !errors.Is(err, platform.ErrAuthExpired) {
 		t.Fatalf("dead refresh must map ErrAuthExpired, got %v", err)
 	}
 
-	s.Tokens = SessionTokens{SteamID: "123", RefreshToken: "hot"}
+	s.tokens = SessionTokens{SteamID: "123", RefreshToken: "hot"}
 	if err := s.RefreshAccessToken(context.Background()); !errors.Is(err, platform.ErrRateLimited) {
 		t.Fatalf("busy refresh must map ErrRateLimited, got %v", err)
 	}
@@ -90,7 +90,7 @@ func TestGetReceivedActiveOffersChecksEresult(t *testing.T) {
 		w.Header().Set("X-eresult", "1")
 		_, _ = w.Write([]byte(`{"response":{"trade_offers_received":[{"tradeofferid":"7","trade_offer_state":2}]}}`))
 	})
-	s.Tokens = SessionTokens{SteamID: "123", AccessToken: "live"}
+	s.tokens = SessionTokens{SteamID: "123", AccessToken: "live"}
 
 	offers, err := s.GetReceivedActiveOffers(context.Background())
 	if err != nil {
@@ -100,7 +100,7 @@ func TestGetReceivedActiveOffersChecksEresult(t *testing.T) {
 		t.Fatalf("offers=%+v", offers)
 	}
 
-	s.Tokens.AccessToken = "dead"
+	s.tokens.AccessToken = "dead"
 	if _, err := s.GetReceivedActiveOffers(context.Background()); !errors.Is(err, platform.ErrAuthExpired) {
 		t.Fatalf("dead token must map ErrAuthExpired, got %v", err)
 	}

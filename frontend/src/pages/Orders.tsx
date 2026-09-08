@@ -29,7 +29,7 @@ export default function Orders() {
         if (status) q.set('status', status)
         const d = await api.get<Paged<OrderRow>>(`/orders?${q}`)
         rows.push(...d.items)
-        if (d.items.length < PAGE_SIZE || (data !== null && rows.length >= data.total)) break
+        if (d.items.length < PAGE_SIZE || rows.length >= d.total) break
       }
       const head = ['渠道', '订单号', '名称', '类型', '状态', '租期(天)', '租金/天', '订单金额', '押金', '开始', '到期']
       const lines = rows.map((r) => [

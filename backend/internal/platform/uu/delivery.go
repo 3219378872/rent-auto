@@ -3,8 +3,11 @@ package uu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/3219378872/rent-auto/backend/internal/platform"
 )
 
 // ---- rental delivery: send trade offers via the platform ----
@@ -21,7 +24,7 @@ func (c *Client) GetWaitDeliverList(ctx context.Context) ([]TodoOrder, error) {
 	pageIndex := 1
 	for pageIndex <= maxListPages {
 		data, err := c.do(ctx, "POST", "/api/youpin/bff/trade/todo/v1/orderTodo/list", map[string]any{
-			"userId": c.userID, "pageIndex": pageIndex, "pageSize": 20,
+			"userId": c.UserID(), "pageIndex": pageIndex, "pageSize": 20,
 			"Sessionid": c.device,
 		})
 		if err != nil {
@@ -126,7 +129,15 @@ func (c *Client) DeliverPendingRentals(ctx context.Context, pollAttempts int, po
 			if pollInterval != nil {
 				pollInterval()
 			}
+			if err := ctx.Err(); err != nil {
+				return sent, gifts, err
+			}
 			st, err := c.GetDeliveryOfferStatus(ctx, t.OrderNo)
+			if errors.Is(err, platform.ErrAuthExpired) || errors.Is(err, platform.ErrRateLimited) ||
+				errors.Is(err, platform.ErrPlatformBlocked) || errors.Is(err, ErrUKExpired) ||
+				errors.Is(err, platform.ErrCaptchaRequired) || errors.Is(err, platform.ErrVersionBlocked) {
+				return sent, gifts, fmt.Errorf("uu: offer %s polling stopped: %w", t.OrderNo, err)
+			}
 			if err == nil && st == 3 {
 				sent = append(sent, t.OrderNo)
 				break

@@ -4,11 +4,11 @@ package store
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // A re-synced order must heal stale started_at/due_at (tz-skew regression
@@ -16,21 +16,20 @@ import (
 // forever) and a payload without timestamps must never NULL them out.
 func TestUpsertLeaseOrderHealsTimestamps(t *testing.T) {
 	ctx := context.Background()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := Open(ctx, url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
-	defer pool.Close()
 	st := New(pool)
 	if _, err := MigrateUp(ctx, pool); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `TRUNCATE lease_orders`)
+		if _, err := pool.Exec(ctx, `TRUNCATE lease_orders CASCADE`); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+		pool.Close()
 	})
 
 	skew := time.Date(2026, 8, 23, 12, 32, 29, 0, time.UTC) // UTC-parsed CST string (8h early)

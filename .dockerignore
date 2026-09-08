@@ -1,0 +1,17 @@
+.git
+Steamauto
+**/node_modules
+**/dist
+**/coverage
+**/coverage.out
+backend/bin
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+!**/testdata/*.pem
+!**/testdata/**/*.pem
+rsakey.txt
+config/*.json5
+tmp
+**/*.log

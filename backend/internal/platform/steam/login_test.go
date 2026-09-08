@@ -116,10 +116,10 @@ func TestLoginFullFlow(t *testing.T) {
 	if err := s.Login(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if s.Tokens.RefreshToken != "refresh-token-xyz" ||
-		s.Tokens.SteamID != "76561199000000000" ||
-		s.Tokens.AccessExp != exp {
-		t.Fatalf("tokens: %+v", s.Tokens)
+	if s.tokens.RefreshToken != "refresh-token-xyz" ||
+		s.tokens.SteamID != "76561199000000000" ||
+		s.tokens.AccessExp != exp {
+		t.Fatalf("tokens: %+v", s.tokens)
 	}
 	if !gotUpdateCode {
 		t.Fatal("guard update never called")
@@ -235,8 +235,8 @@ func TestGuardUpdateDuplicateRequest29Tolerated(t *testing.T) {
 	if err := s.Login(context.Background()); err != nil {
 		t.Fatalf("eresult=29 must be tolerated: %v", err)
 	}
-	if s.Tokens.RefreshToken != "refresh-token-xyz" {
-		t.Fatalf("tokens: %+v", s.Tokens)
+	if s.tokens.RefreshToken != "refresh-token-xyz" {
+		t.Fatalf("tokens: %+v", s.tokens)
 	}
 }
 
@@ -307,12 +307,12 @@ func TestRefreshAccessToken(t *testing.T) {
 		}
 		w.WriteHeader(404)
 	})
-	s.Tokens = SessionTokens{SteamID: "123", RefreshToken: "rt"}
+	s.tokens = SessionTokens{SteamID: "123", RefreshToken: "rt"}
 	if err := s.RefreshAccessToken(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if s.Tokens.AccessExp != exp {
-		t.Fatalf("exp=%d want %d", s.Tokens.AccessExp, exp)
+	if s.tokens.AccessExp != exp {
+		t.Fatalf("exp=%d want %d", s.tokens.AccessExp, exp)
 	}
 }
 

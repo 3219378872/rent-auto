@@ -123,6 +123,12 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 func (s *Scheduler) runDue(ctx context.Context, now time.Time) {
 	s.mu.Lock()
+	select {
+	case <-s.stop:
+		s.mu.Unlock()
+		return
+	default:
+	}
 	var due []*entry
 	for _, name := range s.order {
 		e := s.jobs[name]
@@ -199,6 +205,12 @@ func (s *Scheduler) Stop() {
 // Same 10-minute budget as scheduled runs; Stop() waits for it.
 func (s *Scheduler) Trigger(ctx context.Context, name string) error {
 	s.mu.Lock()
+	select {
+	case <-s.stop:
+		s.mu.Unlock()
+		return errors.New("scheduler: stopped")
+	default:
+	}
 	e, ok := s.jobs[name]
 	if !ok {
 		s.mu.Unlock()

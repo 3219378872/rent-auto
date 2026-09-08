@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/store"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // ---- shared helpers for DB-backed handler tests ----
@@ -52,13 +52,10 @@ func tokenFor(t *testing.T, routes http.Handler) string {
 
 func openAPIDB(t *testing.T) (*store.Store, func()) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := store.Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
 	st := store.New(pool)
 	if _, err := store.MigrateUp(context.Background(), pool); err != nil {

@@ -20,14 +20,88 @@ type rawOffer struct {
 	ItemsToReceive  []interface{} `json:"items_to_receive"`
 }
 
+const (
+	OfferStateActive            = 2
+	OfferStateAccepted          = 3
+	OfferStateNeedsConfirmation = 9
+)
+
+// AcceptTradeOffer handles both a new offer and a confirmation left pending
+// by an earlier attempt. ECO authorizes the offer id before calling this.
+func (s *Session) AcceptTradeOffer(ctx context.Context, offerID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptTradeOffer(ctx, offerID, false)
+}
+
+// AcceptZeroCostTradeOffer rechecks the offer immediately before accepting or
+// confirming it, including when resuming a pending confirmation.
+func (s *Session) AcceptZeroCostTradeOffer(ctx context.Context, offerID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptTradeOffer(ctx, offerID, true)
+}
+
+func (s *Session) acceptTradeOffer(ctx context.Context, offerID string, zeroCostOnly bool) (bool, error) {
+	q := url.Values{"access_token": {s.tokens.AccessToken}, "tradeofferid": {offerID}, "get_descriptions": {"0"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, storeURL+"/IEconService/GetTradeOffer/v1/?"+q.Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	body, status, er, err := s.doRawFull(req)
+	if err != nil {
+		return false, err
+	}
+	if status != http.StatusOK {
+		return false, fmt.Errorf("steam: trade offer: http %d", status)
+	}
+	if err := checkEresult("GetTradeOffer", er); err != nil {
+		return false, err
+	}
+	var parsed struct {
+		Response struct {
+			Offer *rawOffer `json:"offer"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false, fmt.Errorf("steam: trade offer decode: %w", err)
+	}
+	offer := parsed.Response.Offer
+	if offer == nil || offer.TradeOfferID != offerID || offerID == "" {
+		return false, errors.New("steam: missing or mismatched trade offer")
+	}
+	if zeroCostOnly && !offer.IsZeroCost() {
+		return false, errors.New("steam: offer requires outgoing assets")
+	}
+	switch offer.TradeOfferState {
+	case OfferStateAccepted:
+		return true, nil
+	case OfferStateNeedsConfirmation:
+		if err := s.confirmTradeOffer(ctx, offerID); err != nil {
+			return false, err
+		}
+		return true, nil
+	case OfferStateActive:
+		partner, err := s.resolvePartnerID(ctx, offerID)
+		if err != nil {
+			return false, err
+		}
+		return s.acceptOfferWithPartner(ctx, offerID, partner)
+	default:
+		return false, fmt.Errorf("steam: offer %s cannot be accepted (state=%d)", offerID, offer.TradeOfferState)
+	}
+}
+
 // GetReceivedActiveOffers returns received, active offers (raw counts only).
 // The WebAPI result rides the X-eresult header: a throttled or logged-out
 // token answers HTTP 200 with an application error, which must map to the
 // unified sentinels (auth → session rebuild, rate → cooldown) instead of
 // decoding into a silently empty offer list.
 func (s *Session) GetReceivedActiveOffers(ctx context.Context) ([]rawOffer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	q := url.Values{
-		"access_token":        {s.Tokens.AccessToken},
+		"access_token":        {s.tokens.AccessToken},
 		"get_sent_offers":     {"1"},
 		"get_received_offers": {"1"},
 		"get_descriptions":    {"0"},
@@ -89,6 +163,12 @@ func (s *Session) get(ctx context.Context, rawURL string) ([]byte, error) {
 
 // ResolvePartnerID extracts g_ulTradePartnerSteamID from an offer page.
 func (s *Session) ResolvePartnerID(ctx context.Context, offerID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolvePartnerID(ctx, offerID)
+}
+
+func (s *Session) resolvePartnerID(ctx context.Context, offerID string) (string, error) {
 	pageBytes, err := s.get(ctx, communityURL+"/tradeoffer/"+offerID+"/")
 	if err != nil {
 		return "", err
@@ -108,6 +188,12 @@ func (s *Session) ResolvePartnerID(ctx context.Context, offerID string) (string,
 // Ambiguous responses (non-2xx, non-JSON, unknown state) are reported as errors —
 // never silently treated as success — so callers can retry safely.
 func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptOfferWithPartner(ctx, offerID, partnerID)
+}
+
+func (s *Session) acceptOfferWithPartner(ctx context.Context, offerID, partnerID string) (bool, error) {
 	form := url.Values{
 		"sessionid":    {s.sessionid},
 		"tradeofferid": {offerID},
@@ -132,6 +218,8 @@ func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID
 	}
 	var resp struct {
 		NeedsMobileConfirmation bool   `json:"needs_mobile_confirmation"`
+		NeedsEmailConfirmation  bool   `json:"needs_email_confirmation"`
+		TradeID                 string `json:"tradeid"`
 		TradeOfferState         string `json:"trade_offer_state"`
 	}
 	if err := jsonUnmarshal(body, &resp); err != nil {
@@ -143,7 +231,10 @@ func (s *Session) AcceptOfferWithPartner(ctx context.Context, offerID, partnerID
 		}
 		return true, nil
 	}
-	if strings.EqualFold(resp.TradeOfferState, "accepted") {
+	if resp.NeedsEmailConfirmation {
+		return false, errors.New("steam: offer requires email confirmation")
+	}
+	if resp.TradeID != "" || strings.EqualFold(resp.TradeOfferState, "accepted") {
 		return true, nil
 	}
 	return false, fmt.Errorf("steam: accept %s not accepted (state=%q)", offerID, resp.TradeOfferState)
@@ -162,13 +253,13 @@ type confListResp struct {
 
 func (s *Session) confParams(tag string) (url.Values, error) {
 	ts := timeNow()
-	key, err := GenerateConfirmationKey(s.Creds.IdentitySecret, tag, ts)
+	key, err := GenerateConfirmationKey(s.creds.IdentitySecret, tag, ts)
 	if err != nil {
 		return nil, err
 	}
 	v := url.Values{
-		"p":   {GenerateDeviceID(s.Tokens.SteamID)},
-		"a":   {s.Tokens.SteamID},
+		"p":   {GenerateDeviceID(s.tokens.SteamID)},
+		"a":   {s.tokens.SteamID},
 		"k":   {key},
 		"t":   {strconv.FormatInt(ts, 10)},
 		"m":   {"android"},

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,7 +30,26 @@ func newTestServer(t *testing.T) *Server {
 	}
 	s := NewServer(nil, auth.NewJWT([]byte(testSecret)), "admin", "test", discardLogger())
 	s.PasswordHash = func(_ context.Context) (string, error) { return h, nil }
+	s.Epochs = &memoryEpochStore{}
 	return s
+}
+
+type memoryEpochStore struct {
+	mu    sync.Mutex
+	value int64
+}
+
+func (m *memoryEpochStore) SessionEpoch(context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.value, nil
+}
+
+func (m *memoryEpochStore) BumpSessionEpoch(context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.value++
+	return m.value, nil
 }
 
 func do(t *testing.T, h http.Handler, method, target, token, body string) *httptest.ResponseRecorder {

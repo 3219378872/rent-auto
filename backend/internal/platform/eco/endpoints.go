@@ -107,6 +107,23 @@ type page struct {
 // infinite rate-limited loop. 500 pages ≫ any realistic volume.
 const maxListPages = 500
 
+// completePage refuses truncated snapshots when the platform advertises more
+// rows; an omitted total is supported by reading until a short page.
+func completePage(total *int, count, seen int) (bool, error) {
+	if count > 100 || (total != nil && *total < seen) {
+		return false, fmt.Errorf("inconsistent page count")
+	}
+	if total != nil {
+		if seen == *total {
+			return true, nil
+		}
+		if count < 100 {
+			return false, fmt.Errorf("incomplete snapshot: received %d of %d rows", seen, *total)
+		}
+	}
+	return count < 100, nil
+}
+
 // QuerySelfRentGoods pages through our lease shelf. state: nil=all,1=listed,2=leased.
 func (c *Client) QuerySelfRentGoods(ctx context.Context, state *int) ([]RentGoods, error) {
 	var out []RentGoods

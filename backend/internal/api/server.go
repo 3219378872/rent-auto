@@ -3,7 +3,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,7 +30,9 @@ type Server struct {
 	Wallets   WalletProvider  // nil-safe
 	Steam     SteamService    // nil-safe
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
-	PasswordHash func(ctx context.Context) (string, error)
+	PasswordHash   func(ctx context.Context) (string, error)
+	PasswordChange func(ctx context.Context, expectedHash, newHash string) error
+	Epochs         EpochStore
 
 	logins       *loginLimiter
 	smsMu        sync.Mutex
@@ -41,7 +42,11 @@ type Server struct {
 	trustMu      sync.RWMutex
 	trustProxies []*net.IPNet // explicit TRUST_PROXY_CIDRS; empty = default private ranges
 	defaultTrust []*net.IPNet // lazily parsed defaultTrustCIDRs
-	epochMu      sync.Mutex   // serializes bumpSessionEpoch (see method comment)
+}
+
+type EpochStore interface {
+	SessionEpoch(context.Context) (int64, error)
+	BumpSessionEpoch(context.Context) (int64, error)
 }
 
 type SteamService interface {
@@ -68,10 +73,14 @@ func NewServerWithTTL(st *store.Store, jwt *auth.JWT, adminUser, version string,
 	if ttl <= 0 || ttl > 24*time.Hour {
 		ttl = 24 * time.Hour
 	}
-	return &Server{Store: st, JWT: jwt, TTL: ttl, AdminUser: adminUser, Version: version, Log: log,
+	s := &Server{Store: st, JWT: jwt, TTL: ttl, AdminUser: adminUser, Version: version, Log: log,
 		logins:       newLoginLimiter(),
 		smsFails:     map[string]*failSlot{},
 		defaultTrust: parseCIDRs(defaultTrustCIDRs)}
+	if st != nil {
+		s.Epochs = st
+	}
+	return s
 }
 
 // Routes builds the handler tree:
@@ -81,6 +90,7 @@ func (s *Server) Routes() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /api/v1/auth/me", s.handleMe)
 	protected.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	protected.HandleFunc("PUT /api/v1/auth/password", s.handlePasswordChange)
 	protected.HandleFunc("GET /api/v1/inventory", s.handleInventory)
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
@@ -226,7 +236,9 @@ func (s *Server) audit(r *http.Request, action string, detail map[string]any) {
 	if s.Store == nil {
 		return
 	}
-	if err := s.Store.InsertAudit(context.WithoutCancel(r.Context()), auditEntry(r, action, detail)); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	if err := s.Store.InsertAudit(ctx, auditEntry(r, action, detail)); err != nil {
 		s.Log.Warn("audit insert failed", "action", action, "err", err)
 	}
 }
@@ -252,7 +264,13 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		// Revocation (ADR-0006): tokens carry the session epoch they were
 		// issued in; a bumped epoch (logout) invalidates every earlier token.
-		if claims.Ver != s.sessionEpoch(r.Context()) {
+		epoch, err := s.sessionEpoch(r.Context())
+		if err != nil {
+			s.Log.Error("session epoch read failed", "err", err)
+			writeErr(w, http.StatusUnauthorized, "unauthorized", "session unavailable")
+			return
+		}
+		if claims.Ver != epoch {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "token revoked")
 			return
 		}
@@ -261,45 +279,24 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// keyJWTEpoch stores the current session epoch in app_settings.
-const keyJWTEpoch = "jwt_session_epoch"
-
-// sessionEpoch returns the active session epoch; 0 when unset or store-less
-// (tests). A per-request DB read is acceptable at single-admin scale.
-func (s *Server) sessionEpoch(ctx context.Context) int64 {
-	if s.Store == nil {
-		return 0
+func (s *Server) sessionEpoch(ctx context.Context) (int64, error) {
+	if s.Epochs == nil {
+		return 0, auth.ErrStoreUnavailable
 	}
-	setting, err := s.Store.GetSetting(ctx, keyJWTEpoch)
-	if err != nil || setting.ValuePlain == nil {
-		return 0
+	epoch, err := s.Epochs.SessionEpoch(ctx)
+	if err != nil {
+		return 0, auth.FailClosedError(err)
 	}
-	var v int64
-	if json.Unmarshal([]byte(*setting.ValuePlain), &v) != nil {
-		return 0
-	}
-	return v
+	return epoch, nil
 }
 
 // bumpSessionEpoch invalidates every outstanding token by advancing the epoch;
 // returns the new epoch.
-//
-// NOTE: read-then-write via GetSetting/UpsertSettingPlain, not a single
-// atomic UPDATE ... = epoch+1 RETURNING. The store has no atomic-increment
-// method, and at single-admin scale (one login/logout writer at a time) the
-// lost-update window is negligible; epochMu at least serializes in-process
-// writers so concurrent logouts cannot interleave.
-func (s *Server) bumpSessionEpoch(ctx context.Context) int64 {
-	s.epochMu.Lock()
-	defer s.epochMu.Unlock()
-	next := s.sessionEpoch(ctx) + 1
-	if s.Store != nil {
-		if err := s.Store.UpsertSettingPlain(ctx, keyJWTEpoch, next); err != nil {
-			s.Log.Error("session epoch bump failed", "err", err)
-			return s.sessionEpoch(ctx)
-		}
+func (s *Server) bumpSessionEpoch(ctx context.Context) (int64, error) {
+	if s.Epochs == nil {
+		return 0, auth.ErrStoreUnavailable
 	}
-	return next
+	return s.Epochs.BumpSessionEpoch(ctx)
 }
 
 func withRecover(log *slog.Logger) func(http.Handler) http.Handler {

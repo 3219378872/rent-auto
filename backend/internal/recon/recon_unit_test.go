@@ -170,12 +170,16 @@ func TestPlanFromOrphanGrace(t *testing.T) {
 
 	snap := base()
 	snap.Listings[0].SyncedAt = old
+	snap.Listings[0].MismatchSince = &old
+	snap.Listings[0].MismatchReason = "orphan_not_routable"
 	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 1 ||
 		plan[0].Reason != "orphan_not_routable" {
 		t.Fatalf("aged orphan must delist: %+v", plan)
 	}
 	snap = base()
 	snap.Listings[0].SyncedAt = fresh
+	snap.Listings[0].MismatchSince = &fresh
+	snap.Listings[0].MismatchReason = "orphan_not_routable"
 	if plan := PlanFrom(context.Background(), snap, time.Now(), DefaultOrphanGrace, decide); len(plan) != 0 {
 		t.Fatalf("fresh orphan must be spared within grace: %+v", plan)
 	}
@@ -193,7 +197,7 @@ func TestPlanFromSurplusCopies(t *testing.T) {
 		Items: []store.RoutableItem{{AssetID: "a1", HashName: "H", V: &v, Route: "uu_only"}},
 		Listings: []store.ActiveListing{
 			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "keep", AssetID: "a1", State: "active", SyncedAt: old},
-			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "extra", State: "active", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "extra", State: "active", SyncedAt: old, MismatchSince: &old, MismatchReason: "surplus_copies"},
 		},
 		Health: map[string]string{"uu": "ok", "eco": "ok"},
 	}
@@ -586,7 +590,7 @@ func TestPlanFromSurplusKeptIgnoresLeased(t *testing.T) {
 		Listings: []store.ActiveListing{
 			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G-leased", AssetID: "a9", State: "leased", SyncedAt: old},
 			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G1", AssetID: "a1", State: "active", SyncedAt: old},
-			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G2", AssetID: "a2", State: "active", SyncedAt: old},
+			{Channel: domain.ChannelUU, HashName: "H", GoodsRef: "G2", AssetID: "a2", State: "active", SyncedAt: old, MismatchSince: &old, MismatchReason: "surplus_copies"},
 		},
 		Health: map[string]string{"uu": "ok", "eco": "ok"},
 	}

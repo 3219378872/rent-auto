@@ -4,21 +4,27 @@ package scheduler_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
+	"github.com/3219378872/rent-auto/backend/internal/pricing"
 	"github.com/3219378872/rent-auto/backend/internal/scheduler"
 	"github.com/3219378872/rent-auto/backend/internal/store"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 type captureAdapter struct {
-	ch      domain.Channel
-	caps    platform.Capabilities
-	reprice []platform.RepriceLeaseRequest
+	ch            domain.Channel
+	caps          platform.Capabilities
+	reprice       []platform.RepriceLeaseRequest
+	repriceErr    error
+	repriceResult []platform.RepriceLeaseResult
 }
 
 func (c *captureAdapter) Channel() domain.Channel { return c.ch }
@@ -36,6 +42,12 @@ func (c *captureAdapter) PublishLease(context.Context, []platform.PublishLeaseRe
 }
 func (c *captureAdapter) RepriceLease(_ context.Context, items []platform.RepriceLeaseRequest) ([]platform.RepriceLeaseResult, error) {
 	c.reprice = append(c.reprice, items...)
+	if c.repriceResult != nil {
+		return c.repriceResult, c.repriceErr
+	}
+	if c.repriceErr != nil {
+		return nil, c.repriceErr
+	}
 	out := make([]platform.RepriceLeaseResult, len(items))
 	for i := range items {
 		out[i] = platform.RepriceLeaseResult{GoodsRef: items[i].GoodsRef, Success: true}
@@ -50,13 +62,10 @@ func (c *captureAdapter) Wallet(context.Context) (float64, error) { return 0, pl
 
 func openDB(t *testing.T) *store.Store {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := store.Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("db unavailable: %v", err)
+		t.Fatalf("db unavailable: %v", err)
 	}
 	st := store.New(pool)
 	if _, err := store.MigrateUp(context.Background(), pool); err != nil {
@@ -183,6 +192,84 @@ func TestRepricePipelineDryRun(t *testing.T) {
 	_ = listingID
 }
 
+func TestRepriceGlobalRealFlagIsMasterGate(t *testing.T) {
+	st := openDB(t)
+	seedRepriceFixture(t, st)
+	ctx := context.Background()
+	real := true
+	if _, err := st.UpsertTemplateStrategy(ctx, store.TemplateStrategy{HashName: "Test Item (Field-Tested)", Route: "both", Params: []byte(`{}`), RealEnabled: &real}); err != nil {
+		t.Fatal(err)
+	}
+	ad := &captureAdapter{ch: domain.ChannelUU}
+	d := scheduler.Deps{Store: st, Log: testLog()}
+	if err := d.RunReprice(ctx, []platform.Adapter{ad}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ad.reprice) != 0 {
+		t.Fatal("template real flag bypassed global master gate")
+	}
+	var dry bool
+	if err := st.Pool.QueryRow(ctx, `SELECT dry_run FROM price_actions ORDER BY id DESC LIMIT 1`).Scan(&dry); err != nil || !dry {
+		t.Fatalf("must record dry execution: %v %v", dry, err)
+	}
+}
+
+func TestRepriceRiskStopsCurrentChannelOnly(t *testing.T) {
+	st := openDB(t)
+	seedRepriceFixture(t, st)
+	ctx := context.Background()
+	if _, err := st.Pool.Exec(ctx, `UPDATE strategies SET real_execution_enabled=true`); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []domain.ShelfListing{
+		{Channel: domain.ChannelUU, GoodsRef: "778", AssetID: "other", HashName: "Test Item (Field-Tested)", RentPrice: 1.5, MaxDays: 60, ListedAt: time.Now().Add(-time.Hour)},
+		{Channel: domain.ChannelECO, GoodsRef: "eco", AssetID: "eco", HashName: "Test Item (Field-Tested)", RentPrice: 1.5, MaxDays: 30, ListedAt: time.Now().Add(-time.Hour)},
+	} {
+		if err := st.UpsertListingFromShelf(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uu := &captureAdapter{ch: domain.ChannelUU, repriceErr: platform.ErrRateLimited}
+	eco := &captureAdapter{ch: domain.ChannelECO}
+	d := scheduler.Deps{Store: st, Log: testLog()}
+	if err := d.RunReprice(ctx, []platform.Adapter{uu, eco}); !errors.Is(err, platform.ErrRateLimited) {
+		t.Fatalf("risk error lost: %v", err)
+	}
+	if len(uu.reprice) != 1 || len(eco.reprice) != 1 {
+		t.Fatalf("same-channel writes continued or healthy channel blocked: uu=%d eco=%d", len(uu.reprice), len(eco.reprice))
+	}
+}
+
+func TestMarketRiskStopsRemainingTemplates(t *testing.T) {
+	st := openDB(t)
+	ctx := context.Background()
+	for _, hash := range []string{"H1", "H2"} {
+		if err := st.UpsertTemplate(ctx, store.Template{HashName: hash, UUTemplateID: ptr(1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := scheduler.Deps{Store: st, Log: testLog()}
+	calls := 0
+	jobs := scheduler.Jobs(&d, func() []platform.Adapter { return nil }, func(context.Context, int64, float64, float64) ([]pricing.Quote, error) {
+		calls++
+		return nil, platform.ErrPlatformBlocked
+	}, nil, nil, nil, nil, nil, nil, testLog())
+	for _, job := range jobs {
+		if job.Name != "market_snapshot" {
+			continue
+		}
+		if err := job.Fn(ctx); !errors.Is(err, platform.ErrPlatformBlocked) {
+			t.Fatalf("risk signal: %v", err)
+		}
+		if calls != 1 || d.ChannelReady(domain.ChannelUU) || !d.ChannelReady(domain.ChannelECO) {
+			t.Fatalf("risk isolation failed after %d calls", calls)
+		}
+		if err := job.Fn(ctx); err != nil || calls != 1 {
+			t.Fatalf("cooldown still made requests: calls=%d err=%v", calls, err)
+		}
+	}
+}
+
 func TestRepricePipelineRealExecution(t *testing.T) {
 	st := openDB(t)
 	listingID := seedRepriceFixture(t, st)
@@ -218,6 +305,68 @@ func TestRepricePipelineRealExecution(t *testing.T) {
 	}
 	if listings[0].LastRepriceAt == nil {
 		t.Fatal("last_reprice_at not set")
+	}
+}
+
+func TestRepriceAuditUsesCompleteExecutionResult(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		results []platform.RepriceLeaseResult
+		err     error
+		wantErr string
+	}{
+		{
+			name:    "success with call error",
+			results: []platform.RepriceLeaseResult{{GoodsRef: "777", Success: true}},
+			err:     platform.ErrPartialFailure,
+			wantErr: platform.ErrPartialFailure.Error(),
+		},
+		{
+			name: "unexpected extra result",
+			results: []platform.RepriceLeaseResult{
+				{GoodsRef: "777", Success: true}, {GoodsRef: "extra", Success: true},
+			},
+			wantErr: "missing or unexpected item result",
+		},
+		{
+			name:    "missing result",
+			results: []platform.RepriceLeaseResult{},
+			wantErr: "missing or unexpected item result",
+		},
+		{
+			name:    "failed item without message",
+			results: []platform.RepriceLeaseResult{{GoodsRef: "777", Success: false}},
+			wantErr: "platform marked item failed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openDB(t)
+			listingID := seedRepriceFixture(t, st)
+			ctx := context.Background()
+			if _, err := st.Pool.Exec(ctx, `UPDATE strategies SET real_execution_enabled=true WHERE scope='global'`); err != nil {
+				t.Fatal(err)
+			}
+			ad := &captureAdapter{ch: domain.ChannelUU, repriceResult: tc.results, repriceErr: tc.err}
+			deps := scheduler.Deps{Store: st, Log: testLog()}
+			if err := deps.RunReprice(ctx, []platform.Adapter{ad}); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("execution error: %v", err)
+			}
+			var success bool
+			var actionError string
+			if err := st.Pool.QueryRow(ctx, `SELECT success, COALESCE(error,'') FROM price_actions WHERE listing_id=$1 ORDER BY id DESC LIMIT 1`, listingID).Scan(&success, &actionError); err != nil {
+				t.Fatal(err)
+			}
+			if success || !strings.Contains(actionError, tc.wantErr) {
+				t.Fatalf("audit disagrees with execution: success=%v error=%q", success, actionError)
+			}
+			listings, _, err := st.ListListings(ctx, store.ListingFilter{})
+			if err != nil || len(listings) != 1 {
+				t.Fatalf("listings=%+v err=%v", listings, err)
+			}
+			if listings[0].RentPrice != 1.5 || listings[0].LastRepriceAt != nil {
+				t.Fatalf("failed reprice wrote listing decision: %+v", listings[0])
+			}
+		})
 	}
 }
 

@@ -147,7 +147,7 @@ func classifyFactorEvent(status string, t orderTerm, fallbackMaxDays int) pricin
 			}
 			return ""
 		}
-		return pricing.EventRentSuccess
+		return ""
 	default:
 		return ""
 	}

@@ -49,6 +49,12 @@ QueryStock 响应字段真机校订（2026-08-27）：**无 MarkPrice 字段**�
 Price(平台市场价)+SteamPrice(Steam市场价)，另有 Tradable/CanPublish(bool)、
 PaintWear(string) 等；请求体用 `GameId`（非 SteamGameId），PageSize≤100。
 
+**完整库存快照（2026-09-08）**：QueryStock 从第 1 页完整分页，不再截断为前
+100 件；有 TotalRecord 时核对累计条数，若提前空页/短页则失败；缺省总数时
+继续读到短页。任一页失败、无结果结构或超过 500 页都返回错误，不把部分
+库存交给同步器进行“缺失资产”清理。此契约已由 101 件、多页错误和提前
+空页 mock 固化，未使用真实库存做破坏性验证。
+
 ## 转租（Sublet）策略（2026-08-28）
 
 PublishRentAndSaleItemModel（官方 OpenAPI schema-123578183）含转租组字段：
@@ -105,9 +111,14 @@ false 的挂单在 reprice 时豁免噪声下限（价格不变也提交，冷�
 6. 签名串规则已按官方"拼接示例"黄金测试锁定：首层键名不区分大小写升序；
    顶层字符串值**不带引号**参与签名，数组/对象为紧凑 JSON（键不重排、禁 HTML 转义）；
    空串与 nil 不参与签名
-7. ResultCode 存在字符串/整型两种形态，解码层归一
+7. ResultCode 存在字符串/整型两种形态，解码层归一；null、非法字符串、
+   布尔、对象、小数均视为协议错误，不允许转换失败后保留成功码零值
+   （2026-09-08，逐类 mock 回归）。
 8. 下架端点实际路径为 `/Api/Rent/OffshelfRentGoods`（文档目录名"下架出租商品"），
    载荷 `{goodsNumList:[{GoodsNum|AssetId,SteamGameId}]}` ≤100
+   （2026-09-08：以 GoodsNum 请求下架时，逐项结果必须完整、唯一且与每个
+   请求 GoodsNum 精确对应；null/空/缺项/错项/重复项均返回 ErrPartialFailure，
+   不能仅凭成功信封宣告下架完成。）
 9. 市场全量 dump 的 ResultData 存在 `{"List":[…]}` 与裸数组两种形态，解码层兼容
 10. 押金派生公式在服务端重算；客户端提交的 RentDeposits 仅为预估提示，
     护栏校验以 QuerySelfRentGoods 回读的 Deposits 为准（M3 落地）
@@ -127,6 +138,12 @@ round3 修复并固化反例）。凭据/环境级失败码 4004/5005/5003 映�
 ErrorCode 判定（显式非 OK 码权威；send  legacy 无码载荷回退 Error 文案），
 `SellerSendOffer` 单项失败直接返回 error（调用方忽略结果体也不再误记"已发送"），
 批量结果用 `FailedSends()/FailedAccepts()` 分支。
+
+2026-09-08 补全 Registry 落地调用：批量 send 审计调用 `SendOfferResult.Failed()`，
+显式错误码即使 Error 文案为空也记失败；成功但待 mobile/email 确认只记已发送
+及等待确认日志，不再记发送失败。此项由注入真实 Registry audit hook 的 mock 验证。
+accept 的等待确认标志也不能掩盖显式失败码；只有 code=0/1 且 Error 为空的
+待确认项走等待分支，保留已真机确认的 legacy code=0 语义。
 
 ## 待办（待真机校订）
 

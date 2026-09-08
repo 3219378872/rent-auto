@@ -21,22 +21,24 @@ type Config struct {
 	// enforced at the credential-write path (registry refuses to seal and
 	// the handlers answer 500“APP_MASTER_KEY未配置，三渠道不可用”). Making
 	// Load() itself fail would break dev bootstrap and existing callers.
-	AdminUser     string
-	AdminPassHash string // bcrypt hash from env; empty -> bootstrap flow
-	DryRunDefault bool   // mirrors env DRY_RUN_DEFAULT
-	LogLevel      string
-	TrustProxies  []string // CIDR list allowed to set X-Real-IP (empty = API default private ranges)
+	AdminUser          string
+	AdminPassHash      string // bcrypt hash from env; empty -> bootstrap flow
+	AdminBootstrapFile string
+	DryRunDefault      bool // mirrors env DRY_RUN_DEFAULT
+	LogLevel           string
+	TrustProxies       []string // CIDR list allowed to set X-Real-IP (empty = API default private ranges)
 }
 
 func Load() (*Config, error) {
 	c := &Config{
-		Addr:          envOr("ADDR", ":8080"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		JWTTTL:        parseTTL(envOr("JWT_TTL", "24h")),
-		AdminUser:     envOr("ADMIN_USER", "admin"),
-		AdminPassHash: os.Getenv("ADMIN_PASSWORD_HASH"),
-		DryRunDefault: os.Getenv("DRY_RUN_DEFAULT") != "false",
-		LogLevel:      strings.ToLower(envOr("LOG_LEVEL", "info")),
+		Addr:               envOr("ADDR", ":8080"),
+		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		JWTTTL:             parseTTL(envOr("JWT_TTL", "24h")),
+		AdminUser:          envOr("ADMIN_USER", "admin"),
+		AdminPassHash:      os.Getenv("ADMIN_PASSWORD_HASH"),
+		AdminBootstrapFile: envOr("ADMIN_BOOTSTRAP_FILE", defaultBootstrapFile()),
+		DryRunDefault:      os.Getenv("DRY_RUN_DEFAULT") != "false",
+		LogLevel:           strings.ToLower(envOr("LOG_LEVEL", "info")),
 	}
 	if v := os.Getenv("TRUST_PROXY_CIDRS"); v != "" {
 		for _, cidr := range strings.Split(v, ",") {

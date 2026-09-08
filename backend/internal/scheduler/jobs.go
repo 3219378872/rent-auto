@@ -15,6 +15,8 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
+var errChannelCooling = errors.New("channel in cooldown")
+
 // Jobs builds the standard job set bound to live dependencies.
 func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context.Context, tplID int64, minP, maxP float64) ([]pricing.Quote, error), ecoDump func(ctx context.Context) (map[string]float64, error), zeroCD func(ctx context.Context) error, reconcile, uuDelivery, steamOffers, ecoDelivery func(ctx context.Context) error, log *slog.Logger) []Job {
 	return []Job{
@@ -84,11 +86,25 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 				return errors.Join(errs...)
 			}},
 		{Name: "market_snapshot", Kind: KindInterval, Every: 20 * time.Minute, Jitter: 120 * time.Second,
-			Fn: func(ctx context.Context) error { return runMarketSnapshot(ctx, d.Store, uuQuotes, log) }},
+			Fn: func(ctx context.Context) error {
+				if !d.ChannelReady(domain.ChannelUU) {
+					return nil
+				}
+				return runMarketSnapshot(ctx, d.Store, func(ctx context.Context, id int64, minP, maxP float64) ([]pricing.Quote, error) {
+					if !d.ChannelReady(domain.ChannelUU) {
+						return nil, errChannelCooling
+					}
+					quotes, err := uuQuotes(ctx, id, minP, maxP)
+					if err != nil {
+						d.penalize(domain.ChannelUU, err)
+					}
+					return quotes, err
+				}, log)
+			}},
 		{Name: "value_anchor", Kind: KindInterval, Every: time.Hour, Jitter: 5 * time.Minute,
 			Fn: func(ctx context.Context) error {
 				var errs []error
-				if ecoDump != nil {
+				if ecoDump != nil && d.ChannelReady(domain.ChannelECO) {
 					if prices, err := ecoDump(ctx); err == nil && len(prices) > 0 {
 						n, uerr := d.Store.UpdateEcoRefPrices(ctx, prices)
 						if uerr != nil {
@@ -98,6 +114,7 @@ func Jobs(d *Deps, adapters func() []platform.Adapter, uuQuotes func(ctx context
 							log.Info("eco ref prices updated", "rows", n)
 						}
 					} else if err != nil {
+						d.penalize(domain.ChannelECO, err)
 						log.Warn("eco dump failed", "err", err)
 						errs = append(errs, fmt.Errorf("eco dump: %w", err))
 					}
@@ -152,6 +169,9 @@ func runMarketSnapshot(ctx context.Context, st *store.Store, fetch func(ctx cont
 		if err != nil {
 			log.Warn("quote fetch failed", "hash", tp.HashName, "err", err)
 			errs = append(errs, fmt.Errorf("quotes %s: %w", tp.HashName, err))
+			if riskCooldown(err) > 0 || errors.Is(err, errChannelCooling) {
+				break
+			}
 			continue
 		}
 		var snaps []store.Snapshot

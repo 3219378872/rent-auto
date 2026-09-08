@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/jackc/pgx/v5"
 )
 
 // TerminalUnrecordedOrder is one finished rental awaiting income rollup.
@@ -18,18 +21,25 @@ type TerminalUnrecordedOrder struct {
 	Finished time.Time
 }
 
-// UnrecordedTerminalOrders lists finished/bought-out orders not yet rolled up.
+// UnrecordedTerminalOrders includes corrections and reversals of earlier income.
 func (s *Store) UnrecordedTerminalOrders(ctx context.Context, limit int) ([]TerminalUnrecordedOrder, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT o.id, o.channel,
 		        COALESCE(NULLIF(t.category,''),'未分类'),
 		        o.order_amount,
 		        inv.cost_basis,
-		        COALESCE(o.finished_at, o.due_at, o.updated_at)
+		        COALESCE(o.finished_at, o.updated_at)
 		 FROM lease_orders o
 		 LEFT JOIN templates t ON t.hash_name = o.hash_name
-		 LEFT JOIN inventory_items inv ON inv.channel=o.channel AND inv.asset_id=o.asset_id
-		 WHERE o.status IN ('done','bought_out') AND o.income_recorded = false
+		 LEFT JOIN physical_inventory inv ON inv.asset_id<>'' AND inv.asset_id=o.asset_id
+		 LEFT JOIN order_income_ledger l ON l.order_id=o.id
+		 WHERE (o.status IN ('done','bought_out') AND (
+		   NOT o.income_recorded OR l.order_id IS NULL OR
+		   l.amount IS DISTINCT FROM o.order_amount OR
+		   l.stat_date IS DISTINCT FROM (COALESCE(o.finished_at,o.updated_at) AT TIME ZONE 'utc')::date OR
+		   l.category IS DISTINCT FROM COALESCE(NULLIF(t.category,''),'未分类') OR
+		   l.channel IS DISTINCT FROM o.channel))
+		 OR (o.status NOT IN ('done','bought_out') AND (l.order_id IS NOT NULL OR o.income_recorded))
 		 ORDER BY o.id LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("unrecorded orders: %w", err)
@@ -46,9 +56,8 @@ func (s *Store) UnrecordedTerminalOrders(ctx context.Context, limit int) ([]Term
 	return out, rows.Err()
 }
 
-// RecordIncomeBatch applies daily-stat deltas for finished orders and flips
-// their income_recorded flags in one transaction: either every order is
-// counted and marked, or neither — a crash can never double-count income.
+// RecordIncomeBatch rereads locked orders; a stale or duplicated input batch
+// cannot double count income or overwrite a correction made after its query.
 func (s *Store) RecordIncomeBatch(ctx context.Context, orders []TerminalUnrecordedOrder) error {
 	if len(orders) == 0 {
 		return nil
@@ -58,24 +67,80 @@ func (s *Store) RecordIncomeBatch(ctx context.Context, orders []TerminalUnrecord
 		return fmt.Errorf("begin income tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Serialize bucket updates as orders can move in opposite date/category
+	// directions. Keep row locks ordered for concurrent order synchronization.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('income_projection',0))`); err != nil {
+		return err
+	}
 	ids := make([]int64, 0, len(orders))
 	for _, o := range orders {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO daily_stats(stat_date, channel, category, income, order_count)
-			 VALUES($1,$2,$3,$4,$5)
-			 ON CONFLICT(stat_date, channel, category) DO UPDATE SET
-			   income = daily_stats.income + EXCLUDED.income,
-			   order_count = daily_stats.order_count + EXCLUDED.order_count`,
-			o.Finished.UTC().Format("2006-01-02"), o.Channel, o.Category, round2Money(o.Amount), 1); err != nil {
-			return fmt.Errorf("upsert daily stat: %w", err)
-		}
 		ids = append(ids, o.ID)
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE lease_orders SET income_recorded=true WHERE id = ANY($1)`, ids); err != nil {
-		return fmt.Errorf("mark income recorded: %w", err)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for i, id := range ids {
+		if i > 0 && ids[i-1] == id {
+			continue
+		}
+		if err := projectOrderIncome(ctx, tx, id); err != nil {
+			return fmt.Errorf("project income order %d: %w", id, err)
+		}
 	}
 	return tx.Commit(ctx)
+}
+
+type incomeProjection struct {
+	Date     string
+	Channel  domain.Channel
+	Category string
+	Amount   float64
+}
+
+func projectOrderIncome(ctx context.Context, tx pgx.Tx, id int64) error {
+	var next, old incomeProjection
+	var eligible bool
+	err := tx.QueryRow(ctx, `SELECT (COALESCE(o.finished_at,o.updated_at) AT TIME ZONE 'utc')::date::text,
+	 o.channel,COALESCE(NULLIF(t.category,''),'未分类'),o.order_amount,o.status IN ('done','bought_out')
+	 FROM lease_orders o LEFT JOIN templates t ON t.hash_name=o.hash_name
+	 WHERE o.id=$1 FOR UPDATE OF o`, id).Scan(&next.Date, &next.Channel, &next.Category, &next.Amount, &eligible)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT stat_date::text,channel,category,amount FROM order_income_ledger WHERE order_id=$1`, id).
+		Scan(&old.Date, &old.Channel, &old.Category, &old.Amount)
+	oldExists := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if oldExists && (!eligible || old != next) {
+		if err := applyIncomeDelta(ctx, tx, old, -1); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM order_income_ledger WHERE order_id=$1`, id); err != nil {
+			return err
+		}
+	}
+	if eligible && (!oldExists || old != next) {
+		if err := applyIncomeDelta(ctx, tx, next, 1); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO order_income_ledger(order_id,stat_date,channel,category,amount)
+		 VALUES($1,$2::date,$3,$4,$5)`, id, next.Date, next.Channel, next.Category, round2Money(next.Amount)); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE lease_orders SET income_recorded=$2 WHERE id=$1`, id, eligible)
+	return err
+}
+
+func applyIncomeDelta(ctx context.Context, tx pgx.Tx, p incomeProjection, direction int) error {
+	_, err := tx.Exec(ctx, `INSERT INTO daily_stats(stat_date,channel,category,income,order_count)
+	 VALUES($1::date,$2,$3,$4,$5) ON CONFLICT(stat_date,channel,category) DO UPDATE SET
+	 income=daily_stats.income+excluded.income,order_count=daily_stats.order_count+excluded.order_count`,
+		p.Date, p.Channel, p.Category, round2Money(float64(direction)*p.Amount), direction)
+	return err
 }
 
 type ChannelTotal struct {
@@ -132,22 +197,20 @@ type CategoryYield struct {
 // numerator = recorded income − sold-out inventory cost, denominator = all-time
 // category cost basis (every status, not just held stock).
 //
-// 已知偏差 (review): category 取自当前 templates 映射——daily_stats.category
-// 在 rollup 时按当时模板写入，而 costs/sold 按查询时模板分组——都不是订单发生
-// 时的品类快照。模板改品类会追溯性漂移历史收益归属。精确到订单时刻需要先给
-// lease_orders/daily_stats 加品类快照列；在那之前本口径保持现状，特此说明。
+// Categories use the current template mapping; the income projection catches
+// category corrections at the next rollup, not the category at rental time.
 func (s *Store) CategoryYields(ctx context.Context) ([]CategoryYield, error) {
 	rows, err := s.Pool.Query(ctx,
 		`WITH costs AS (
 		   SELECT COALESCE(NULLIF(t.category,''),'未分类') AS cat,
 		          SUM(COALESCE(i.cost_basis,0)) AS cost
-		   FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
+		   FROM physical_inventory i JOIN templates t ON t.hash_name=i.hash_name
 		   GROUP BY 1
 		 ),
 		 sold AS (
 		   SELECT COALESCE(NULLIF(t.category,''),'未分类') AS cat,
 		          SUM(COALESCE(i.cost_basis,0)) AS sold_cost
-		   FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
+		   FROM physical_inventory i JOIN templates t ON t.hash_name=i.hash_name
 		   WHERE i.status='sold'
 		   GROUP BY 1
 		 )
@@ -184,7 +247,7 @@ func (s *Store) AssetValuation(ctx context.Context) (float64, error) {
 	var v *float64
 	err := s.Pool.QueryRow(ctx,
 		`SELECT SUM(t.value_anchor)
-		 FROM inventory_items i JOIN templates t ON t.hash_name=i.hash_name
+		 FROM physical_inventory i JOIN templates t ON t.hash_name=i.hash_name
 		 WHERE i.status IN ('in_stock','listed','leased')`).Scan(&v)
 	if err != nil || v == nil {
 		return 0, err
@@ -225,7 +288,7 @@ func (s *Store) HeldDeposits(ctx context.Context) (map[domain.Channel]float64, e
 func (s *Store) TotalCostEverBasis(ctx context.Context) (float64, error) {
 	var v *float64
 	err := s.Pool.QueryRow(ctx,
-		`SELECT SUM(cost_basis) FROM inventory_items WHERE cost_basis IS NOT NULL`).Scan(&v)
+		`SELECT SUM(cost_basis) FROM physical_inventory WHERE cost_basis IS NOT NULL`).Scan(&v)
 	if err != nil || v == nil {
 		return 0, err
 	}
@@ -237,7 +300,7 @@ func (s *Store) TotalCostEverBasis(ctx context.Context) (float64, error) {
 func (s *Store) SoldCostBasis(ctx context.Context) (float64, error) {
 	var v *float64
 	err := s.Pool.QueryRow(ctx,
-		`SELECT SUM(cost_basis) FROM inventory_items
+		`SELECT SUM(cost_basis) FROM physical_inventory
 		 WHERE status='sold' AND cost_basis IS NOT NULL`).Scan(&v)
 	if err != nil || v == nil {
 		return 0, err
@@ -249,7 +312,7 @@ func (s *Store) SoldCostBasis(ctx context.Context) (float64, error) {
 func (s *Store) FirstCostDate(ctx context.Context) (*time.Time, error) {
 	var t *time.Time
 	err := s.Pool.QueryRow(ctx,
-		`SELECT MIN(cost_updated_at) FROM inventory_items WHERE cost_basis IS NOT NULL`).Scan(&t)
+		`SELECT MIN(cost_updated_at) FROM physical_inventory WHERE cost_basis IS NOT NULL`).Scan(&t)
 	return t, err
 }
 

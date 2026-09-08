@@ -6,9 +6,27 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestStopRejectsNewManualAndScheduledRuns(t *testing.T) {
+	s := New(testLog())
+	var calls atomic.Int32
+	if err := s.Register(Job{Name: "stopped", Kind: KindInterval, Every: time.Second, Fn: func(context.Context) error { calls.Add(1); return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	s.Stop()
+	if err := s.Trigger(context.Background(), "stopped"); err == nil {
+		t.Fatal("stopped scheduler accepted trigger")
+	}
+	s.runDue(context.Background(), time.Now().Add(time.Hour))
+	s.Stop()
+	if calls.Load() != 0 {
+		t.Fatal("stopped scheduler launched work")
+	}
+}
 
 func TestRegisterAndTrigger(t *testing.T) {
 	s := New(testLog())
@@ -169,6 +187,9 @@ func TestClassifyFactorEvent(t *testing.T) {
 		{"done_long_over_term", "done", orderTerm{orderType: "long", rentDays: 31, termDays: 30}, 30, ""},
 		{"done_long_unknown_term", "done", orderTerm{orderType: "long", rentDays: 10}, 30, ""},
 		{"done_long_unknown_rent", "done", orderTerm{orderType: "long", termDays: 30}, 30, ""},
+		{"done_short_unknown_rent", "done", orderTerm{orderType: "short", termDays: 30}, 30, ""},
+		{"done_short_unknown_term", "done", orderTerm{orderType: "short", rentDays: 5}, 0, ""},
+		{"done_empty_legacy", "done", orderTerm{}, 0, ""},
 		{"non_terminal", "leasing", orderTerm{orderType: "short", rentDays: 5, termDays: 30}, 30, ""},
 	}
 	for _, c := range cases {

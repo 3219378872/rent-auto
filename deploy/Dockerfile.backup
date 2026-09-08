@@ -1,0 +1,5 @@
+FROM postgres:16
+RUN install -d -m 0700 -o postgres -g postgres /backups/rent-auto
+COPY --chmod=0555 deploy/backup.sh /usr/local/bin/rent-auto-backup
+USER postgres
+ENTRYPOINT ["/usr/local/bin/rent-auto-backup"]

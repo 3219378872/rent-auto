@@ -9,15 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/secrets"
 	"github.com/3219378872/rent-auto/backend/internal/store"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // roundTripperTo redirects every request to the mock server base URL
@@ -32,13 +31,10 @@ func (rt redirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func openRegistryDB(t *testing.T) (*store.Store, func()) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := store.Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
 	st := store.New(pool)
 	if _, err := store.MigrateUp(context.Background(), pool); err != nil {
@@ -199,9 +195,8 @@ func TestRefreshPrefersEncryptedOverLegacy(t *testing.T) {
 	}
 }
 
-// A build failure must leave NO usable remnant: adapter gone AND bare-client
-// passthroughs (UUMarketQuotes/EcoOrderClient/…) returning ErrUnsupported —
-// the panel must not say "not configured" while stale credentials still fire.
+// Invalid credentials must not create an adapter. A transient first-build
+// failure remains configured-but-unavailable and can recover later.
 func TestRefreshBuildFailureLeavesNoHalfState(t *testing.T) {
 	st, cleanup := openRegistryDB(t)
 	defer cleanup()
@@ -217,8 +212,8 @@ func TestRefreshBuildFailureLeavesNoHalfState(t *testing.T) {
 	if err := st.UpsertSettingEnc(context.Background(), keyECOCreds, []byte(enc)); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := reg.Refresh(context.Background()); err == nil {
+		t.Fatal("invalid ECO credential must fail")
 	}
 	if _, ok := reg.Get(domain.ChannelECO); ok {
 		t.Fatal("eco adapter must be dropped after build failure")
@@ -233,9 +228,11 @@ func TestRefreshBuildFailureLeavesNoHalfState(t *testing.T) {
 	if err := st.UpsertSettingEnc(context.Background(), keyUUToken, []byte(enc2)); err != nil {
 		t.Fatal(err)
 	}
-	reg.SetUUHTTPClient(&http.Client{Timeout: 100 * time.Millisecond})
-	if err := reg.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	reg.SetUUHTTPClient(&http.Client{Transport: reliabilityTransport(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})})
+	if err := reg.Refresh(context.Background()); err == nil {
+		t.Fatal("unavailable UU validation must fail")
 	}
 	if _, ok := reg.Get(domain.ChannelUU); ok {
 		t.Fatal("uu adapter must be dropped after build failure")
@@ -243,7 +240,7 @@ func TestRefreshBuildFailureLeavesNoHalfState(t *testing.T) {
 	if _, err := reg.UUMarketQuotes(context.Background(), 1, 1, 2); err != platform.ErrUnsupported {
 		t.Fatalf("uu passthrough must be ErrUnsupported, got %v", err)
 	}
-	if health := reg.Health(context.Background()); health["uu"] != "not_configured" || health["eco"] != "not_configured" {
+	if health := reg.Health(context.Background()); !strings.HasPrefix(health["uu"], "error:") || health["eco"] != "not_configured" {
 		t.Fatalf("health: %v", health)
 	}
 }

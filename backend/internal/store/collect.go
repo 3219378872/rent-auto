@@ -37,6 +37,8 @@ func (s *Store) UpsertListingFromShelf(ctx context.Context, l domain.ShelfListin
 		   rent_price=EXCLUDED.rent_price, long_rent_price=EXCLUDED.long_rent_price,
 		   max_days=EXCLUDED.max_days, deposit=EXCLUDED.deposit,
 		   listed_at=COALESCE(listings.listed_at, EXCLUDED.listed_at),
+		   recon_mismatch_since=CASE WHEN listings.actual_state=EXCLUDED.actual_state THEN listings.recon_mismatch_since END,
+		   recon_mismatch_reason=CASE WHEN listings.actual_state=EXCLUDED.actual_state THEN listings.recon_mismatch_reason END,
 		   actual_synced_at=now()`,
 		l.Channel, l.AssetID, l.HashName, l.GoodsRef,
 		l.RentPrice, l.LongRentPrice, l.MaxDays, l.Deposit, l.Leased, nullTime(l.ListedAt))
@@ -58,7 +60,7 @@ func nilIfZero(v int64) *int64 {
 // flipping them would fabricate disappearances and trigger duplicate publishes.
 func (s *Store) MarkMissingListings(ctx context.Context, channel domain.Channel, seenRefs map[string]bool) (int64, error) {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE listings SET actual_state='none'
+		`UPDATE listings SET actual_state='none',recon_mismatch_since=NULL,recon_mismatch_reason=NULL
 		 WHERE channel=$1 AND actual_state IN ('active')
 		   AND NOT (goods_ref = ANY($2))`,
 		channel, refsToArray(seenRefs))

@@ -39,7 +39,10 @@ func TestDesiredChannelsMatrix(t *testing.T) {
 
 func TestPlanDecisionGatesPublish(t *testing.T) {
 	p := &Planner{Now: time.Now().UTC()}
-	d := p.decideFor(context.TODO(), domain.ChannelECO, routableNoAnchor())
+	d, err := p.decideFor(context.TODO(), domain.ChannelECO, routableNoAnchor())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d == nil || d.OK || d.SkipReason != "no_value_anchor" {
 		t.Fatalf("missing anchor must gate publish: %+v", d)
 	}

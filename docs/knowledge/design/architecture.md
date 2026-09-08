@@ -7,7 +7,7 @@
                 │ REST /api/v1 (JWT)                       │ 轮询: jobs/告警（面板短轮询；SSE 延后）
 ┌───────────────┴──────────────────────────────────────────▼──────────────────────┐
 │ backend (Go, 单二进制)                                                            │
-│  api/     chi 路由 · JWT中间件 · 登录防爆破 · handlers（审计写入助手在此）             │
+│  api/     net/http 路由 · JWT中间件 · 登录防爆破 · handlers（审计写入助手在此）        │
 │  scheduler/ 任务调度(daily HH:MM + interval) · 频控 · dry-run · 风控冷却 · 反馈控制器  │
 │  pricing/  基线行情聚合 → 反馈控制器 → 渠道分化决策(UU押金直控/ECO三元组) → 护栏       │
 │  bench/    价格基准中心: TemplateRegistry·价值锚点合成·行情快照查询                   │
@@ -36,7 +36,7 @@
 | pricing | 给定输入算出 Decision（纯函数域） | 网络、持久化 |
 | scheduler | 触发节奏、频控、dry-run 开关、并发隔离 | 决策逻辑 |
 | recon | 差异计算与动作队列生成；Executor 执行时尊重 dry-run（dry-run 下零平台调用） | 决策逻辑 |
-| analytics | 口径计算与 rollup（收入汇总单事务，防重复计账） | 数据采集 |
+| analytics | 实物资产归一口径与可修正的逐订单收益投影 | 数据采集 |
 | channels | 凭证校验/加密落库/adapter 重建；Steam 会话刷新与自愈 | 业务语义 |
 
 审计职责：无独立 audit 包——写入助手在 `api.Server.audit()`，自动链路经
@@ -55,6 +55,9 @@
 | 0004 | adr-0004-order-sync-dynamic-window.md | orders_sync 动态回看窗口 |
 | 0005 | adr-0005-recon-writeback-and-delisting.md | recon 写回闭环 + 下架安全 |
 | 0006 | adr-0006-jwt-session-epoch-revocation.md | JWT 会话纪元吊销 |
+| 0009 | adr-0009-recon-observation-state.md | 完整库存观测与持续不一致计时 |
+| 0010 | adr-0010-financial-projection.md | 实物归一与收益冲销账本 |
+| 0011 | adr-0011-instance-lock-loss-shutdown.md | 原持锁连接验证与失锁取消 |
 
 (*) 编号异常说明：adr-0001 初稿将三条决策并入一个文件，导致与后续独立文件撞号。
 2026-08-27 round10 审查轮拆分时，为不重写历史证据文档中的既有引用，拆出的两条
@@ -64,17 +67,22 @@
 
 1. **改价链**：market_snapshot → bench.V → pricing.Decision(+factor) → guardrails → price_actions(dry_run?) → adapter.Reprice → listings.actual 更新
 2. **对账链**：strategies.desired × adapters.actual → diff → actions[] → scheduler 执行 → 复核
-3. **收益链**：lease_orders 终态 → analytics 记账（单事务）→ daily_stats → dashboard API
+3. **收益链**：lease_orders 当前终态/修正 → 锁定订单并重读 → order_income_ledger 旧投影冲销/新投影应用 → daily_stats → dashboard API
 4. **因子链**（spec §3 已接线）：orders 终态(done/bought_out) + stale 扫描 → listings.factor 折算 → 次轮 reprice 生效；f_min 无转化回归 1.00 并审计告警
 5. **发货链**：UU orderTodo / ECO 待发货单 → 发报价 → Steam 会话接受(零成本全自动) → 审计
 
 ## 可靠性设计
 
-- 单实例运行（Postgres advisory lock 防双开）
+- 单实例运行：保留原 Postgres advisory-lock 连接，任务入口检查且每秒监控；
+  失锁取消根 context、停止调度和手动触发并退出。已经交付给上游的请求不具有跨系统 fencing 保证。
 - 任务 panic recover + 结构化日志(slog)；任务失败如实上报 LastError；风控哨兵(限频/封禁/UK过期)触发渠道级冷却退避
 - ECO 6001 在客户端内指数退避重试 ≤3 次
 - 渠道凭证失效：标记 channel unhealthy → 路由 fallback 生效 → 仪表盘告警条
+- UU 初始化瞬态失败通过独立 channel_recovery 任务退避重建，1 分钟起、上限 30 分钟；
+  凭证更新串行化且只重建目标渠道，未经验证的新 token 不进入可执行 registry。
 - 全局限频器：UU 默认 3 rps、ECO 默认 2 rps + 端点级最小间隔（市场 dump ≥60s）
+- 渠道风险哨兵立即阻断该批后续请求；计划、发货及改价入口均复用共享冷却。
+- 全局 real_execution_enabled 为总闸，模板只能进一步收紧；策略参数与继承组合在锁住全局行的同一事务内验证和保存。
 
 ## 演进方向（非本期）
 - ECO 回调/WebSocket 替代轮询；多 Steam 账号；出售域适配器

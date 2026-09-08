@@ -4,8 +4,8 @@ package bench_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"os"
 	"testing"
 	"time"
 
@@ -14,6 +14,7 @@ import (
 	"github.com/3219378872/rent-auto/backend/internal/logging"
 	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/store"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // fakeAdapter feeds deterministic data into the collector pipeline.
@@ -22,6 +23,7 @@ type fakeAdapter struct {
 	inven  []domain.InventoryItem
 	shelf  []domain.ShelfListing
 	orders []domain.LeaseOrder
+	invErr error
 }
 
 func (f *fakeAdapter) Channel() domain.Channel { return f.ch }
@@ -30,7 +32,7 @@ func (f *fakeAdapter) Caps() platform.Capabilities {
 }
 func (f *fakeAdapter) Healthy(context.Context) error { return nil }
 func (f *fakeAdapter) Inventory(context.Context) ([]domain.InventoryItem, error) {
-	return f.inven, nil
+	return f.inven, f.invErr
 }
 func (f *fakeAdapter) LeaseShelf(context.Context) ([]domain.ShelfListing, error) {
 	return f.shelf, nil
@@ -49,13 +51,10 @@ func (f *fakeAdapter) Wallet(context.Context) (float64, error) { return 0, platf
 
 func openBizDB(t *testing.T) (*store.Store, func()) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := store.Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("db unavailable: %v", err)
+		t.Fatalf("db unavailable: %v", err)
 	}
 	st := store.New(pool)
 	if _, err := store.MigrateUp(context.Background(), pool); err != nil {
@@ -186,3 +185,21 @@ func TestCollectorPipeline(t *testing.T) {
 }
 
 func discardLog() *slog.Logger { return logging.New("error") }
+
+func TestFailedInventoryFetchPreservesSnapshot(t *testing.T) {
+	st, done := openBizDB(t)
+	defer done()
+	ctx := context.Background()
+	ad := &fakeAdapter{ch: domain.ChannelUU, inven: []domain.InventoryItem{{Channel: domain.ChannelUU, AssetID: "a", HashName: "H", Status: "in_stock", Tradable: true}}}
+	if _, err := bench.SyncInventory(ctx, ad, st, discardLog()); err != nil {
+		t.Fatal(err)
+	}
+	ad.inven, ad.invErr = nil, errors.New("page two failed")
+	if _, err := bench.SyncInventory(ctx, ad, st, discardLog()); err == nil {
+		t.Fatal("expected failed snapshot")
+	}
+	items, _, err := st.ListInventory(ctx, store.InventoryFilter{})
+	if err != nil || len(items) != 1 || items[0].Status != "in_stock" {
+		t.Fatalf("failed fetch retired inventory: %+v %v", items, err)
+	}
+}

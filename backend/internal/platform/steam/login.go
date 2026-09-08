@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -44,44 +45,76 @@ type SessionTokens struct {
 
 // Session is an authenticated Steam web session.
 type Session struct {
+	mu        sync.Mutex
 	http      *http.Client
-	Creds     Credentials
-	Tokens    SessionTokens
+	creds     Credentials
+	tokens    SessionTokens
 	sessionid string
 }
 
+type Option func(*Session)
+
+// WithHTTPClient overrides the transport for an isolated client/session.
+func WithHTTPClient(h *http.Client) Option {
+	return func(s *Session) {
+		clone := *h
+		if clone.Jar == nil {
+			clone.Jar, _ = cookiejar.New(nil)
+		}
+		s.http = &clone
+	}
+}
+
 // NewSession builds a session client with a fresh cookie jar.
-func NewSession(creds Credentials) *Session {
+func NewSession(creds Credentials, opts ...Option) *Session {
 	jar, _ := cookiejar.New(nil)
-	return &Session{http: &http.Client{Timeout: 20 * time.Second, Jar: jar}, Creds: creds}
+	s := &Session{http: &http.Client{Timeout: 20 * time.Second, Jar: jar}, creds: creds}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// Tokens returns an immutable snapshot; session operations serialize cookie
+// and token rotation so concurrent callers cannot mix authentication state.
+func (s *Session) Tokens() SessionTokens {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tokens
 }
 
 // AttachTokens restores a persisted token state into a new session and
 // warms up cookies by visiting the community profile page.
-func (s *Session) AttachTokens(tokens SessionTokens) {
-	s.Tokens = tokens
+func (s *Session) AttachTokens(ctx context.Context, tokens SessionTokens) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokens = tokens
 	s.setLoginSecure()
-	s.warmup()
+	s.warmup(ctx)
 }
 
 func (s *Session) setLoginSecure() {
-	val := url.QueryEscape(s.Tokens.SteamID + "||" + s.Tokens.AccessToken)
+	val := url.QueryEscape(s.tokens.SteamID + "||" + s.tokens.AccessToken)
 	for _, domain := range []string{"steamcommunity.com", "store.steampowered.com"} {
 		s.http.Jar.SetCookies(mustURL("https://"+domain), []*http.Cookie{{ //nolint:gosec // G124：出站客户端会话构造（模拟浏览器 jar），非服务端 Set-Cookie
 			Name: "steamLoginSecure", Value: val, Domain: domain, Path: "/",
 		}})
 	}
-	if s.Tokens.RefreshToken != "" {
+	if s.tokens.RefreshToken != "" {
 		s.http.Jar.SetCookies(mustURL("https://steamcommunity.com"), []*http.Cookie{{ //nolint:gosec // G124：出站客户端会话构造，非服务端 Set-Cookie
 			Name:   "steamRefresh_steam",
-			Value:  url.QueryEscape(s.Tokens.SteamID + "||" + s.Tokens.RefreshToken),
+			Value:  url.QueryEscape(s.tokens.SteamID + "||" + s.tokens.RefreshToken),
 			Domain: "steamcommunity.com", Path: "/",
 		}})
 	}
 }
 
-func (s *Session) warmup() {
-	resp, err := s.http.Get(communityURL + "/my")
+func (s *Session) warmup(ctx context.Context) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, communityURL+"/my", nil)
+	if err != nil {
+		return
+	}
+	resp, err := s.http.Do(req)
 	if err == nil {
 		defer func() { _ = resp.Body.Close() }()
 		s.captureSessionID()
@@ -168,7 +201,7 @@ func (s *Session) doRawFullDepth(req *http.Request, depth int) ([]byte, int, int
 	//nolint:gosec // G704：URL 来自 Steam 登录响应的 transfer_info（上游固定域名），协议要求原样回放
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, 0, -1, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, err)
+		return nil, 0, -1, fmt.Errorf("steam: %s %s: %w", req.Method, req.URL.Host, transportError{cause: err})
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
@@ -196,6 +229,13 @@ func (s *Session) doRawFullDepth(req *http.Request, depth int) ([]byte, int, int
 	}
 	return body, resp.StatusCode, eresult, nil
 }
+
+// net/http errors include request URLs, which may contain bearer tokens.
+// Keep the original cause for errors.Is/As without formatting its URL.
+type transportError struct{ cause error }
+
+func (transportError) Error() string   { return "request failed" }
+func (e transportError) Unwrap() error { return e.cause }
 
 // ---- login state machine ----
 
@@ -276,10 +316,16 @@ func encodeUpdateGuard(clientID, steamID uint64, code string, codeType int32) []
 	return w.buf
 }
 
-// Login performs the full username/password flow and populates s.Tokens.
+// Login performs the full username/password flow and populates s.tokens.
 func (s *Session) Login(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// warm cookies first (upstream GETs community before RSA fetch)
-	if resp, err := s.http.Get(communityURL); err == nil {
+	warmReq, err := http.NewRequestWithContext(ctx, http.MethodGet, communityURL, nil)
+	if err != nil {
+		return err
+	}
+	if resp, err := s.http.Do(warmReq); err == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		s.captureSessionID()
@@ -288,7 +334,7 @@ func (s *Session) Login(ctx context.Context) error {
 	// 1. RSA public key
 	rsaMsg := func() []byte {
 		var w pbWriter
-		w.str(1, s.Creds.Username)
+		w.str(1, s.creds.Username)
 		return w.buf
 	}()
 	body, err := s.authAPIGET(ctx, "GetPasswordRSAPublicKey", rsaMsg)
@@ -301,14 +347,14 @@ func (s *Session) Login(ctx context.Context) error {
 	}
 
 	// 2. encrypt password
-	encPwd, err := encryptPassword(s.Creds.Password, pubMod, pubExp)
+	encPwd, err := encryptPassword(s.creds.Password, pubMod, pubExp)
 	if err != nil {
 		return err
 	}
 
 	// 3. begin auth session
 	beginBody, err := s.authAPIPOST(ctx, "BeginAuthSessionViaCredentials",
-		encodeBeginAuth(s.Creds.Username, encPwd, rsaTS))
+		encodeBeginAuth(s.creds.Username, encPwd, rsaTS))
 	if err != nil {
 		return err
 	}
@@ -324,7 +370,7 @@ func (s *Session) Login(ctx context.Context) error {
 	// 4. satisfy guard
 	switch guardType {
 	case 3: // DeviceCode → shared_secret TOTP
-		code, err := GenerateOneTimeCode(s.Creds.SharedSecret, time.Now().Unix())
+		code, err := GenerateOneTimeCode(s.creds.SharedSecret, time.Now().Unix())
 		if err != nil {
 			return err
 		}
@@ -356,7 +402,7 @@ func (s *Session) Login(ctx context.Context) error {
 	if refreshTok == "" {
 		return errors.New("steam: empty refresh token after poll")
 	}
-	s.Tokens = SessionTokens{
+	s.tokens = SessionTokens{
 		SteamID:      strconv.FormatUint(begin.SteamID, 10),
 		RefreshToken: refreshTok, AccessToken: accessTok,
 		AccessExp: jwtExp(accessTok),
@@ -433,7 +479,7 @@ func decodePoll(body []byte) (refresh, access string, err error) {
 // finalize exchanges the refresh token for community cookies.
 func (s *Session) finalize(ctx context.Context) error {
 	form := url.Values{
-		"nonce":     {s.Tokens.RefreshToken},
+		"nonce":     {s.tokens.RefreshToken},
 		"sessionid": {s.sessionid},
 		"redir":     {communityURL + "/login/home/?goto="},
 	}
@@ -463,7 +509,7 @@ func (s *Session) finalize(ctx context.Context) error {
 		return fmt.Errorf("steam: finalizelogin decode: %w", err)
 	}
 	for _, t := range fin.TransferInfo {
-		tform := url.Values{"steamID": {s.Tokens.SteamID}, "auth": {t.Params.Auth}, "nonce": {t.Params.Nonce}}
+		tform := url.Values{"steamID": {s.tokens.SteamID}, "auth": {t.Params.Auth}, "nonce": {t.Params.Nonce}}
 		tr, err := http.NewRequestWithContext(ctx, http.MethodPost, t.URL, strings.NewReader(tform.Encode()))
 		if err != nil {
 			return err
@@ -474,7 +520,7 @@ func (s *Session) finalize(ctx context.Context) error {
 		}
 	}
 	s.setLoginSecure()
-	s.warmup()
+	s.warmup(ctx)
 
 	// acknowledge new-device trade notice (upstream does this post-login)
 	ack := url.Values{"sessionid": {s.sessionid}, "message": {"1"}}
@@ -496,10 +542,12 @@ func (s *Session) finalize(ctx context.Context) error {
 // check it before trusting the body, or a dead refresh token surfaces as a
 // misleading "empty access token" downstream error.
 func (s *Session) RefreshAccessToken(ctx context.Context) error {
-	if s.Tokens.RefreshToken == "" || s.Tokens.SteamID == "" {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens.RefreshToken == "" || s.tokens.SteamID == "" {
 		return errors.New("steam: no refresh token")
 	}
-	form := url.Values{"steamid": {s.Tokens.SteamID}, "refresh_token": {s.Tokens.RefreshToken}}
+	form := url.Values{"steamid": {s.tokens.SteamID}, "refresh_token": {s.tokens.RefreshToken}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		storeURL+"/IAuthenticationService/GenerateAccessTokenForApp/v1/",
 		strings.NewReader(form.Encode()))
@@ -528,14 +576,16 @@ func (s *Session) RefreshAccessToken(ctx context.Context) error {
 	if parsed.Response.AccessToken == "" {
 		return errors.New("steam: refresh returned empty access token")
 	}
-	s.Tokens.AccessToken = parsed.Response.AccessToken
-	s.Tokens.AccessExp = jwtExp(parsed.Response.AccessToken)
+	s.tokens.AccessToken = parsed.Response.AccessToken
+	s.tokens.AccessExp = jwtExp(parsed.Response.AccessToken)
 	s.setLoginSecure()
 	return nil
 }
 
 // IsAlive checks whether steamLoginSecure still yields an authorized page.
 func (s *Session) IsAlive(ctx context.Context) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, communityURL+"/my", nil)
 	resp, err := s.http.Do(req)
 	if err != nil {
@@ -543,7 +593,11 @@ func (s *Session) IsAlive(ctx context.Context) bool {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	s.captureSessionID()
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK || resp.Request == nil {
+		return false
+	}
+	path := resp.Request.URL.Path
+	return path == "/my" || strings.HasPrefix(path, "/profiles/") || strings.HasPrefix(path, "/id/")
 }
 
 // jwtExp extracts the exp claim from a JWT without signature verification

@@ -4,24 +4,19 @@ package store
 
 import (
 	"context"
-	"os"
 	"testing"
+
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // TestMigrationsUpDown verifies the full migration chain applies and rolls back
 // cleanly. Requires TEST_DATABASE_URL (CI service container or local dev compose).
 func TestMigrationsUpDown(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		url = os.Getenv("DATABASE_URL")
-	}
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set; start dev postgres via `make dev-up` and export it")
-	}
+	url := testutil.DatabaseURL(t)
 	ctx := context.Background()
 	pool, err := Open(ctx, url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
 	defer pool.Close()
 

@@ -26,7 +26,7 @@ type InventoryItem struct {
 func (c *Client) GetInventory(ctx context.Context, refresh bool) ([]InventoryItem, error) {
 	const pageSize = 1000
 	var out []InventoryItem
-	for pageIndex := 1; ; pageIndex++ {
+	for pageIndex := 1; pageIndex <= maxListPages; pageIndex++ {
 		payload := map[string]any{
 			"pageIndex": pageIndex, "pageSize": pageSize, "AppType": 4,
 			"IsMerge": 0, "Sessionid": c.device,
@@ -52,11 +52,15 @@ func (c *Client) GetInventory(ctx context.Context, refresh bool) ([]InventoryIte
 		if err := json.Unmarshal(env.Data, &d); err != nil {
 			return nil, fmt.Errorf("uu: inventory payload: %w", err)
 		}
+		if d.ItemsInfos == nil {
+			return nil, fmt.Errorf("uu: inventory missing ItemsInfos")
+		}
 		out = append(out, d.ItemsInfos...)
 		if len(d.ItemsInfos) < pageSize {
 			return out, nil
 		}
 	}
+	return nil, fmt.Errorf("uu: inventory exceeds page limit %d", maxListPages)
 }
 
 // ---- lease shelf ----
@@ -315,7 +319,7 @@ func (c *Client) GetMarketLeasePrice(ctx context.Context, templateID int64, minP
 		"sortType": "1", "sortTypeKey": "LEASE_DEFAULT", "status": "20",
 		"stickerAbrade": 0, "stickersIsSort": false,
 		"templateId":              strconv.FormatInt(templateID, 10),
-		"ultraLongLeaseMoreZones": 0, "userId": c.userID,
+		"ultraLongLeaseMoreZones": 0, "userId": c.UserID(),
 		"Sessionid": c.device,
 	}
 	data, err := c.do(ctx, "POST", "/api/homepage/v3/detail/commodity/list/lease", payload)

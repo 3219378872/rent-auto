@@ -9,9 +9,11 @@ import Orders from './pages/Orders'
 import Strategies from './pages/Strategies'
 import Channels from './pages/Channels'
 import Audit from './pages/Audit'
+import PasswordDialog from './components/PasswordDialog'
 
 function Shell({ children }: { children: React.ReactNode }) {
   const nav = useNavigate()
+  const [changingPassword, setChangingPassword] = useState(false)
   const logout = () => {
     // Revoke server-side first (epoch bump kills every token), then discard
     // the local copy; navigation happens either way.
@@ -36,9 +38,15 @@ function Shell({ children }: { children: React.ReactNode }) {
           <NavLink to="/channels">渠道账号</NavLink>
           <NavLink to="/audit">审计日志</NavLink>
         </nav>
+        <button className="ghost" onClick={() => setChangingPassword(true)}>修改密码</button>
         <button className="ghost" onClick={logout}>退出登录</button>
       </aside>
       <main>{children}</main>
+      {changingPassword && <PasswordDialog onClose={() => setChangingPassword(false)} onChanged={() => {
+        setChangingPassword(false)
+        clearToken()
+        nav('/login')
+      }} />}
     </div>
   )
 }
@@ -57,7 +65,7 @@ export default function App() {
     }
   }, [])
   return (
-    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <HashRouter>
       <Routes>
         <Route path="/login" element={<Login onLogin={() => setAuthed(true)} />} />
         <Route

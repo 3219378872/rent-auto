@@ -4,10 +4,10 @@ package store
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/testutil"
 )
 
 // ListListings must surface the feedback-controller factor and the latest
@@ -87,21 +87,20 @@ func TestListListingsDecisionContext(t *testing.T) {
 
 func openStoreDB(t *testing.T) (*Store, func()) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := testutil.DatabaseURL(t)
 	pool, err := Open(context.Background(), url)
 	if err != nil {
-		t.Skipf("database unavailable: %v", err)
+		t.Fatalf("database unavailable: %v", err)
 	}
 	stt := New(pool)
 	if _, err := MigrateUp(context.Background(), pool); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 	cleanup := func() {
-		_, _ = pool.Exec(context.Background(),
-			`TRUNCATE listings, price_actions, templates, audit_log`)
+		if _, err := pool.Exec(context.Background(),
+			`TRUNCATE listings, price_actions, templates, audit_log CASCADE`); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
 		pool.Close()
 	}
 	return stt, cleanup

@@ -10,18 +10,23 @@ import (
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
+	"github.com/3219378872/rent-auto/backend/internal/platform"
 	"github.com/3219378872/rent-auto/backend/internal/platform/eco"
 )
 
 // ---- fakes ----
 
 type fakeEco struct {
-	orders     []eco.SellerOrder
-	sent       []string
-	details    map[string]eco.SellerOrderDetail
-	sendErr    map[string]error
-	rentOrders []eco.SellerRentOrder
-	rentDetail map[string]eco.SellerRentOrderDetailResult
+	orders        []eco.SellerOrder
+	sent          []string
+	details       map[string]eco.SellerOrderDetail
+	sendErr       map[string]error
+	rentOrders    []eco.SellerRentOrder
+	rentDetail    map[string]eco.SellerRentOrderDetailResult
+	detailErr     map[string]error
+	rentDetailErr map[string]error
+	sendAttempts  []string
+	rentCalls     int
 }
 
 func (f *fakeEco) SellerOrderList(context.Context, time.Time, time.Time, *int, string) ([]eco.SellerOrder, error) {
@@ -29,6 +34,7 @@ func (f *fakeEco) SellerOrderList(context.Context, time.Time, time.Time, *int, s
 }
 
 func (f *fakeEco) SendOffer(_ context.Context, orderNum string) (*eco.SendOfferResult, error) {
+	f.sendAttempts = append(f.sendAttempts, orderNum)
 	if e, ok := f.sendErr[orderNum]; ok {
 		return nil, e
 	}
@@ -37,6 +43,9 @@ func (f *fakeEco) SendOffer(_ context.Context, orderNum string) (*eco.SendOfferR
 }
 
 func (f *fakeEco) Detail(_ context.Context, orderNum string) (*eco.SellerOrderDetail, error) {
+	if err := f.detailErr[orderNum]; err != nil {
+		return nil, err
+	}
 	if d, ok := f.details[orderNum]; ok {
 		return &d, nil
 	}
@@ -44,14 +53,70 @@ func (f *fakeEco) Detail(_ context.Context, orderNum string) (*eco.SellerOrderDe
 }
 
 func (f *fakeEco) SellerRentOrderList(context.Context, time.Time, time.Time, []int) ([]eco.SellerRentOrder, error) {
+	f.rentCalls++
 	return f.rentOrders, nil
 }
 
 func (f *fakeEco) SellerRentOrderDetail(_ context.Context, orderNum string) (*eco.SellerRentOrderDetailResult, error) {
+	if err := f.rentDetailErr[orderNum]; err != nil {
+		return nil, err
+	}
 	if d, ok := f.rentDetail[orderNum]; ok {
 		return &d, nil
 	}
 	return &eco.SellerRentOrderDetailResult{OrderNum: orderNum}, nil
+}
+
+func TestECODeliveryRiskStopsBeforeRemainingOrders(t *testing.T) {
+	for _, phase := range []string{"sale_send", "sale_detail", "rent_detail", "rent_send"} {
+		t.Run(phase, func(t *testing.T) {
+			ef := &fakeEco{sendErr: map[string]error{}, detailErr: map[string]error{}, rentDetailErr: map[string]error{}}
+			sf := &fakeSteamAccept{}
+			switch phase {
+			case "sale_send", "sale_detail":
+				ef.orders = []eco.SellerOrder{{OrderNum: "first", OrderStateCode: 1}, {OrderNum: "second", OrderStateCode: 1}}
+				if phase == "sale_send" {
+					ef.sendErr["first"] = platform.ErrRateLimited
+				} else {
+					ef.detailErr["first"] = platform.ErrPlatformBlocked
+				}
+			case "rent_detail", "rent_send":
+				ef.rentOrders = []eco.SellerRentOrder{{OrderNum: "first"}, {OrderNum: "second"}}
+				ef.rentDetail = map[string]eco.SellerRentOrderDetailResult{"first": {SendOfferRole: 2}, "second": {SendOfferRole: 2}}
+				if phase == "rent_detail" {
+					ef.rentDetailErr["first"] = platform.ErrAuthExpired
+				} else {
+					ef.sendErr["first"] = platform.ErrRateLimited
+				}
+			}
+			err := newTestDeps(ef, sf, &auditSpy{}).RunECODelivery(context.Background())
+			if err == nil || riskCooldown(err) == 0 {
+				t.Fatalf("risk not returned: %v", err)
+			}
+			for _, ref := range ef.sendAttempts {
+				if ref == "second" {
+					t.Fatal("continued writing after risk response")
+				}
+			}
+			if strings.HasPrefix(phase, "sale") && ef.rentCalls != 0 {
+				t.Fatal("risk response did not stop before rent pass")
+			}
+		})
+	}
+}
+
+func TestECODeliveryAggregatesFailureAndKeepsOtherOrders(t *testing.T) {
+	ef := &fakeEco{orders: []eco.SellerOrder{{OrderNum: "first"}, {OrderNum: "second"}}, details: map[string]eco.SellerOrderDetail{"first": {TradeOfferID: "one"}, "second": {TradeOfferID: "two"}}}
+	sf := &fakeSteamAccept{failOn: map[string]error{"one": platform.ErrAuthExpired}}
+	err := newTestDeps(ef, sf, &auditSpy{}).RunECODelivery(context.Background())
+	if !errors.Is(err, platform.ErrAuthExpired) || len(sf.accepted) != 1 || sf.accepted[0] != "two" || ef.rentCalls != 1 {
+		t.Fatalf("Steam error wrongly stopped ECO batch: err=%v accepted=%v", err, sf.accepted)
+	}
+	ef.sendErr = map[string]error{"first": errors.New("bad order")}
+	ef.orders[0].OrderStateCode = 1
+	if err := newTestDeps(ef, &fakeSteamAccept{}, &auditSpy{}).RunECODelivery(context.Background()); err == nil {
+		t.Fatal("per-order failure swallowed")
+	}
 }
 
 type fakeSteamAccept struct {

@@ -73,7 +73,11 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
-	limit, offset := pageParams(r)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	offset := 0
+	if limit > 0 {
+		limit, offset = pageParams(r)
+	}
 	items, err := s.Store.ListTemplates(r.Context(), limit, offset)
 	if err != nil {
 		s.internalError(w, err)

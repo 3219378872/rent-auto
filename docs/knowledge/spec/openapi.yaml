@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.8.0"
+  version: "0.9.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -79,12 +79,59 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
+  /auth/password:
+    put:
+      summary: 修改管理员密码并吊销全部既有会话
+      description: >-
+        校验当前密码后，单事务更新 bcrypt 密码与会话纪元；成功后当前 JWT 也失效，
+        客户端清除本地 token 并重新登录。ADMIN_PASSWORD_HASH 外部托管时不允许通过此接口改密。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password, writeOnly: true }
+                new_password:
+                  type: string
+                  format: password
+                  writeOnly: true
+                  description: UTF-8 编码后长度必须为 12–72 字节，不按字符数计
+      responses:
+        "200":
+          description: 密码已更新，全部旧 JWT 已吊销
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "400":
+          description: bad_request（密码长度/JSON 非法）或 bad_credentials（当前密码错误）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Err401" }
+        "409":
+          description: password_managed_externally（外部托管）或 password_changed（并发改密冲突）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/Err429" }
+        "500":
+          description: 内部错误，错误信息脱敏；不承诺密码变更成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /inventory:
     get:
       summary: 库存列表（分页）
       parameters:
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
-        - { name: status, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [in_stock, listed, leased, locked, sold, missing] } }
         - { name: search, in: query, schema: { type: string }, description: 关键字（市场名模糊匹配） }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -147,8 +194,8 @@ paths:
     get:
       summary: 模板清单（含锚点/黑名单标记）
       description: >-
-        分页可选：不带 page/page_size 时返回全量目录（面板黑名单表与模板选择器
-        依赖完整清单）；带 page_size 时按 1-based page 切页（上限 200）。
+        分页可选：page_size 缺省或 ≤0 时返回全量目录并忽略 page（面板黑名单表与模板选择器
+        依赖完整清单）；page_size>0 时按 1-based page 切页，先将每页数量钳至 200 再计算偏移。
       parameters:
         - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
         - { name: page_size, in: query, schema: { type: integer, default: 0, maximum: 200 },
@@ -223,6 +270,10 @@ paths:
   /strategies/template:
     post:
       summary: 创建/替换模板级覆盖策略（每模板一行；新建行默认 dry-run）
+      description: >-
+        params 是稀疏覆盖对象；保存会替换模板的原覆盖对象，未出现的参数继续继承当前全局值，
+        空对象清除全部参数覆盖。模板与全局写入共享事务锁，先校验当前全局与本次覆盖的有效组合，
+        非法时 400 且整次修改不生效。面板编辑仅提交明确覆盖的参数，并保留执行开关与优先级。
       requestBody:
         required: true
         content:
@@ -236,8 +287,10 @@ paths:
                 params:
                   type: object
                   description: 分组结构（baseline/factor/guardrails/uu_max_days/eco_max_days），深覆盖全局
-                real_execution_enabled: { type: boolean, description: 更新时缺省=保留原值 }
-                priority: { type: integer }
+                real_execution_enabled:
+                  type: boolean
+                  description: 新建时缺省=false；更新时缺省=保留原值。模板 true 不能绕过全局真实执行总闸或 DRY_RUN_DEFAULT
+                priority: { type: integer, format: int32, default: 0, description: 本次写入的优先级；更新时应显式传回原值以保留 }
       responses:
         "200":
           description: 行 id
@@ -266,6 +319,10 @@ paths:
   /strategies/global:
     put:
       summary: 更新全局策略（参数/路由/真实执行开关，单事务生效）
+      description: >-
+        修改 params 或开启真实执行时，在与模板写入共享的事务锁内校验全局参数及所有已启用模板的
+        有效继承组合。任一组合非法则返回 400，参数/路由/执行标志全部不变。
+        仅关闭全局真实执行不依赖参数合法性，保证存量错误配置仍可停机。
       requestBody:
         required: true
         content:
@@ -278,7 +335,7 @@ paths:
                   description: 路由（别名；与 channel_route 二选一，channel_route 优先） }
                 channel_route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback],
                   description: 路由（面板 canonical 字段；与 route 双收） }
-                real_execution_enabled: { type: boolean, description: false=策略级 dry-run }
+                real_execution_enabled: { type: boolean, description: 全局真实执行总闸；false 强制全部模板 dry-run，true 仍受模板开关与 DRY_RUN_DEFAULT 约束 }
       responses:
         "200":
           description: ok
@@ -292,13 +349,14 @@ paths:
   /audit:
     get:
       summary: 审计日志（最近 N 条）
+      description: page_size 缺省或 ≤0 使用 50，超过 200 钳至 200；page 偏移按规范化后的每页数量计算
       parameters:
-        - { name: action, in: query, schema: { type: string }, description: 动作关键字过滤 }
+        - { name: action, in: query, schema: { type: string }, description: 动作名称精确匹配 }
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
         - { name: since, in: query, schema: { type: string, format: date-time } }
         - { name: until, in: query, schema: { type: string, format: date-time } }
         - $ref: "#/components/parameters/Page"
-        - { name: page_size, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - $ref: "#/components/parameters/PageSize"
       responses:
         "200":
           description: 分页审计
@@ -514,6 +572,7 @@ components:
       name: page_size
       in: query
       schema: { type: integer, default: 50, maximum: 200 }
+      description: 缺省或 ≤0 使用 50，超过 200 钳至 200；偏移按规范化后的数量计算
   responses:
     Err400:
       description: 参数错误
@@ -551,16 +610,19 @@ components:
     InventoryItem:
       type: object
       properties:
+        id: { type: integer, format: int64 }
         channel: { $ref: "#/components/schemas/Channel" }
         asset_id: { type: string }
         hash_name: { type: string }
-        display_name: { type: string }
-        template_id: { type: integer, format: int64 }
+        market_hash_name: { type: string }
+        template_id: { type: integer, format: int64, nullable: true }
         mark_price: { type: number, format: double }
         tradable: { type: boolean }
-        status: { type: string, enum: [in_stock, listed, leased, locked, sold] }
-        abrade: { type: number, format: double }
-        cost_basis: { type: number, format: double, description: 成本价（PUT /inventory/{channel}/{asset_id}/cost 录入） }
+        status:
+          type: string
+          enum: [in_stock, listed, leased, locked, sold, missing]
+          description: missing 表示完整库存快照中未再出现，不等于已售出
+        cost_basis: { type: number, format: double, description: "成本价（PUT /inventory/{channel}/{asset_id}/cost 录入）" }
     ListingRow:
       type: object
       properties:
@@ -622,8 +684,8 @@ components:
         name: { type: string }
         scope: { type: string, enum: [global, template] }
         channel_route: { type: string, enum: [uu_only, eco_only, both, uu_primary_eco_fallback] }
-        params: { type: object }
-        real_execution_enabled: { type: boolean }
+        params: { type: object, description: 该策略行实际保存的参数；template 行保持稀疏覆盖，不返回实化后的全局参数 }
+        real_execution_enabled: { type: boolean, description: 该策略行的执行标志；模板实际执行还受全局总闸与 DRY_RUN_DEFAULT 约束 }
         priority: { type: integer }
         updated_at: { type: string, format: date-time }
     AuditEntry:

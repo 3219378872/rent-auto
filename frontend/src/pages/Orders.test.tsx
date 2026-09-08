@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Orders from './Orders'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
@@ -21,6 +21,11 @@ const oneOrder = {
 
 beforeEach(() => {
   getMock.mockReset()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('Orders page', () => {
@@ -53,5 +58,43 @@ describe('Orders page', () => {
     render(<Orders />)
     await screen.findByText('UU-1')
     expect((screen.getByRole('button', { name: '下一页' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('exports every matching order while a changed filter is still loading', async () => {
+    let filteredCalls = 0
+    const rows = (start: number, count: number) => Array.from({ length: count }, (_, i) => ({
+      ...oneOrder, channel: 'eco', order_ref: `ECO-${start + i}`,
+    }))
+    getMock.mockImplementation((path: string) => {
+      if (!path.includes('channel=eco')) return Promise.resolve(orderPage([oneOrder], 1))
+      const page = Number(new URLSearchParams(path.split('?')[1]).get('page'))
+      filteredCalls++
+      if (filteredCalls === 1) return new Promise(() => undefined)
+      return Promise.resolve(orderPage(rows((page - 1) * 50, page < 3 ? 50 : 20), 120))
+    })
+    const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:orders')
+    class ExportURL extends URL {
+      static createObjectURL = createObjectURL
+      static revokeObjectURL = vi.fn()
+    }
+    vi.stubGlobal('URL', ExportURL)
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+
+    render(<Orders />)
+    await screen.findByText('共 1 单')
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'eco' } })
+    await waitFor(() => expect(filteredCalls).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: '导出 CSV' }))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    expect(getMock.mock.calls.some(([path]) => path.includes('page=3'))).toBe(true)
+
+    const csv = await new Promise<string>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(createObjectURL.mock.calls[0][0])
+    })
+    expect(csv.split('\n')).toHaveLength(121)
+    expect(csv).toContain('"ECO-119"')
+    expect(csv).not.toContain('"UU-1"')
   })
 })

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/platform"
@@ -35,6 +36,7 @@ func (noopLimiter) Wait(context.Context) error { return nil }
 
 // Client talks to youpin898. Create with NewClient; safe for concurrent use.
 type Client struct {
+	userMu  sync.RWMutex
 	http    *http.Client
 	token   string
 	device  string
@@ -68,8 +70,16 @@ func NewClient(ctx context.Context, token string, opts ...Option) (*Client, erro
 }
 
 // UserID / Nickname are populated after construction.
-func (c *Client) UserID() int64       { return c.userID }
-func (c *Client) Nickname() string    { return c.nick }
+func (c *Client) UserID() int64 {
+	c.userMu.RLock()
+	defer c.userMu.RUnlock()
+	return c.userID
+}
+func (c *Client) Nickname() string {
+	c.userMu.RLock()
+	defer c.userMu.RUnlock()
+	return c.nick
+}
 func (c *Client) DeviceToken() string { return c.device }
 
 // Token reports the credential this client authenticates with.
@@ -184,6 +194,9 @@ func decodeEnvelope(data []byte) (*envelope, error) {
 func rawInt(m map[string]json.RawMessage, keys ...string) (int, bool) {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
+			if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+				return 0, false
+			}
 			var i int
 			if json.Unmarshal(v, &i) == nil {
 				return i, true

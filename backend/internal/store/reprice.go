@@ -21,6 +21,7 @@ type RepriceCandidate struct {
 	RentPrice     float64        `json:"rent_price"`
 	LongPrice     float64        `json:"long_rent_price"`
 	Deposit       float64        `json:"deposit"`
+	MaxDays       int            `json:"max_days"`
 	Factor        float64        `json:"factor"`
 	V             *float64       `json:"value_anchor"`
 	UUTemplateID  *int64         `json:"uu_template_id"`
@@ -29,7 +30,7 @@ type RepriceCandidate struct {
 }
 
 const repriceCols = `l.id, l.channel, l.hash_name, l.goods_ref, l.asset_id,
-	l.rent_price, coalesce(l.long_rent_price,0), coalesce(l.deposit,0), coalesce(l.factor,1.0),
+	l.rent_price, coalesce(l.long_rent_price,0), coalesce(l.deposit,0), coalesce(l.max_days,0), coalesce(l.factor,1.0),
 	t.value_anchor, t.uu_template_id,
 	COALESCE(l.last_reprice_at, l.listed_at), l.sublet_applied`
 
@@ -50,7 +51,7 @@ func (s *Store) ListRepriceCandidates(ctx context.Context, channel domain.Channe
 	for rows.Next() {
 		var c RepriceCandidate
 		if err := rows.Scan(&c.ListingID, &c.Channel, &c.HashName, &c.GoodsRef, &c.AssetID,
-			&c.RentPrice, &c.LongPrice, &c.Deposit, &c.Factor, &c.V, &c.UUTemplateID,
+			&c.RentPrice, &c.LongPrice, &c.Deposit, &c.MaxDays, &c.Factor, &c.V, &c.UUTemplateID,
 			&c.LastActionAt, &c.SubletApplied); err != nil {
 			return nil, err
 		}
@@ -177,41 +178,16 @@ type StrategyGlobalPatch struct {
 // Strategies drive live repricing directly — a half-applied patch (new params
 // with a stale real_execution_enabled) must be impossible.
 func (s *Store) UpdateGlobalStrategy(ctx context.Context, id int64, p StrategyGlobalPatch) error {
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin strategy tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if p.Params != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE strategies SET params=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, p.Params); err != nil {
-			return err
-		}
-	}
-	if p.Route != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE strategies SET channel_route=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, *p.Route); err != nil {
-			return err
-		}
-	}
-	if p.RealEnabled != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE strategies SET real_execution_enabled=$2, updated_by='user', updated_at=now() WHERE id=$1`,
-			id, *p.RealEnabled); err != nil {
-			return err
-		}
-	}
-	return tx.Commit(ctx)
+	return s.UpdateGlobalStrategyChecked(ctx, id, p, nil)
 }
 
 type EffectiveStrategy struct {
-	ID           int64
-	Params       json.RawMessage
-	GlobalParams json.RawMessage
-	RealEnabled  bool
-	Route        string
+	ID                int64
+	Params            json.RawMessage
+	GlobalParams      json.RawMessage
+	RealEnabled       bool
+	GlobalRealEnabled bool
+	Route             string
 }
 
 // TemplateStrategy is one template-scope strategy override payload.
@@ -228,30 +204,21 @@ type TemplateStrategy struct {
 // A brand-new override starts dry-run (real_execution_enabled=false) unless
 // explicitly requested — AC-T1 applies per strategy row.
 func (s *Store) UpsertTemplateStrategy(ctx context.Context, ts TemplateStrategy) (int64, error) {
-	var id int64
-	err := s.Pool.QueryRow(ctx,
-		`INSERT INTO strategies(name, scope, hash_name, channel_route, params, priority,
-		                        real_execution_enabled, updated_by)
-		 VALUES($1,'template',$2,$3,$4,$5,COALESCE($6,false),'user')
-		 ON CONFLICT (scope, hash_name) WHERE scope='template' DO UPDATE SET
-		   channel_route=EXCLUDED.channel_route,
-		   params=EXCLUDED.params,
-		   priority=EXCLUDED.priority,
-		   real_execution_enabled=COALESCE($6, strategies.real_execution_enabled),
-		   enabled=true,
-		   updated_by='user', updated_at=now()
-		 RETURNING id`,
-		"tpl:"+ts.HashName, ts.HashName, ts.Route, []byte(ts.Params), ts.Priority, ts.RealEnabled).Scan(&id)
-	if err != nil {
-		return 0, fmt.Errorf("upsert template strategy %s: %w", ts.HashName, err)
-	}
-	return id, nil
+	return s.UpsertTemplateStrategyChecked(ctx, ts, nil)
 }
 
 // DeleteTemplateStrategy removes a template-scope override; the hash falls
 // back to the global strategy immediately.
 func (s *Store) DeleteTemplateStrategy(ctx context.Context, id int64) error {
-	tag, err := s.Pool.Exec(ctx,
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, _, err := lockGlobalStrategy(ctx, tx); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM strategies WHERE id=$1 AND scope='template'`, id)
 	if err != nil {
 		return fmt.Errorf("delete template strategy %d: %w", id, err)
@@ -259,13 +226,14 @@ func (s *Store) DeleteTemplateStrategy(ctx context.Context, id int64) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) GetEffectiveStrategy(ctx context.Context, hash string) (*EffectiveStrategy, error) {
 	row := s.Pool.QueryRow(ctx,
 		`SELECT g.id,
 		        g.params::text,
+		        g.real_execution_enabled,
 		        COALESCE(t.real_execution_enabled, g.real_execution_enabled),
 		        COALESCE(t.channel_route, g.channel_route),
 		        COALESCE(t.params::text,'')
@@ -277,7 +245,7 @@ func (s *Store) GetEffectiveStrategy(ctx context.Context, hash string) (*Effecti
 		 WHERE g.scope='global' AND g.enabled`, hash)
 	var es EffectiveStrategy
 	var tplParams string
-	if err := row.Scan(&es.ID, &es.GlobalParams, &es.RealEnabled, &es.Route, &tplParams); err != nil {
+	if err := row.Scan(&es.ID, &es.GlobalParams, &es.GlobalRealEnabled, &es.RealEnabled, &es.Route, &tplParams); err != nil {
 		return nil, fmt.Errorf("effective strategy: %w", err)
 	}
 	if tplParams != "" {

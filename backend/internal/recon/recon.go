@@ -9,6 +9,7 @@ package recon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -74,6 +75,10 @@ type decideFn func(ctx context.Context, ch domain.Channel, it store.RoutableItem
 
 // Plan computes the difference between desired and actual shelf state.
 func (p *Planner) Plan(ctx context.Context) ([]Action, error) {
+	cycle := *p
+	if cycle.Now.IsZero() {
+		cycle.Now = time.Now().UTC()
+	}
 	items, err := p.Store.RoutableInventory(ctx)
 	if err != nil {
 		return nil, err
@@ -90,7 +95,23 @@ func (p *Planner) Plan(ctx context.Context) ([]Action, error) {
 	if grace <= 0 {
 		grace = DefaultOrphanGrace
 	}
-	return PlanFrom(ctx, Snapshot{Items: items, Listings: listings, Health: health}, p.Now, grace, p.decideFor), nil
+	observations := make(map[int64]string, len(listings))
+	var decisionErrs []error
+	decide := func(ctx context.Context, ch domain.Channel, it store.RoutableItem) *pricing.Decision {
+		d, err := cycle.decideFor(ctx, ch, it)
+		if err != nil {
+			decisionErrs = append(decisionErrs, fmt.Errorf("decide %s/%s: %w", ch, it.HashName, err))
+		}
+		return d
+	}
+	plan := planFrom(ctx, Snapshot{Items: items, Listings: listings, Health: health}, cycle.Now, grace, decide, observations)
+	if err := errors.Join(decisionErrs...); err != nil {
+		return nil, err
+	}
+	if err := p.Store.ObserveReconMismatches(ctx, observations, cycle.Now); err != nil {
+		return nil, fmt.Errorf("persist recon observations: %w", err)
+	}
+	return plan, nil
 }
 
 // PlanFrom is the pure reconciliation core (unit-testable).
@@ -105,9 +126,19 @@ func (p *Planner) Plan(ctx context.Context) ([]Action, error) {
 //     beyond the wanted count. Leased listings are NEVER delisted — their
 //     re-evaluation happens after the lease ends. Not-routed delists stay
 //     immediate (previous behavior); orphan/surplus delists wait out the
-//     grace period keyed on the listing's last actual-sync timestamp.
+//     grace period keyed on the first continuous mismatch observation.
 func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace time.Duration, decide decideFn) []Action {
+	return planFrom(ctx, snap, now, orphanGrace, decide, nil)
+}
+
+func planFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace time.Duration, decide decideFn, observations map[int64]string) []Action {
 	uuHealthy := snap.Health["uu"] == "ok"
+	leasedAssets := map[string]bool{}
+	for _, l := range snap.Listings {
+		if l.State == "leased" && l.AssetID != "" {
+			leasedAssets[l.AssetID] = true
+		}
+	}
 
 	// wantCopies counts DISTINCT asset ids per (hash, channel): the same Steam
 	// asset is synced once per channel that stocks it, so raw row counts would
@@ -118,6 +149,9 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	desiredByHash := map[string][]domain.Channel{}
 	routeByHash := map[string]string{}
 	for _, it := range snap.Items {
+		if leasedAssets[it.AssetID] {
+			continue
+		}
 		chs := desiredChannels(it.Route, uuHealthy)
 		desiredByHash[it.HashName] = chs
 		routeByHash[it.HashName] = it.Route
@@ -151,7 +185,7 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	// ---- publish pass ----
 	planned := map[key]map[string]bool{} // hash+ch → assets already in this plan
 	for _, it := range snap.Items {
-		if it.AssetID == "" {
+		if it.AssetID == "" || leasedAssets[it.AssetID] {
 			continue
 		}
 		for _, ch := range desiredByHash[it.HashName] {
@@ -174,7 +208,7 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 					live++
 				}
 			}
-			if assetListed || live >= wantCopies[it.HashName][ch] {
+			if assetListed || live+len(planned[k]) >= wantCopies[it.HashName][ch] {
 				continue
 			}
 			d := decide(ctx, ch, it)
@@ -197,6 +231,9 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	kept := map[key]int{}
 	cutoff := now.Add(-orphanGrace)
 	for _, l := range snap.Listings {
+		if observations != nil {
+			observations[l.ID] = ""
+		}
 		// Leased listings are NEVER touched — and they occupy no kept
 		// budget either: counting them would let a rented copy crowd out an
 		// active surplus copy that should be delisted.
@@ -223,9 +260,10 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 			continue
 		}
 		if reason != "not_routed" && reason != "uu_unhealthy_failover" {
-			// orphan/surplus: only act once the state persisted past the grace
-			// window; unknown sync age fails safe (skip).
-			if l.SyncedAt.IsZero() || l.SyncedAt.After(cutoff) {
+			if observations != nil {
+				observations[l.ID] = reason
+			}
+			if l.MismatchReason != reason || l.MismatchSince == nil || l.MismatchSince.After(cutoff) {
 				continue
 			}
 		}
@@ -237,21 +275,21 @@ func PlanFrom(ctx context.Context, snap Snapshot, now time.Time, orphanGrace tim
 	return plan
 }
 
-func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.RoutableItem) *pricing.Decision {
+func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.RoutableItem) (*pricing.Decision, error) {
 	if it.V == nil || *it.V <= 0 {
-		return &pricing.Decision{SkipReason: "no_value_anchor"}
+		return &pricing.Decision{SkipReason: "no_value_anchor"}, nil
 	}
 	es, err := p.Store.GetEffectiveStrategy(ctx, it.HashName)
 	if err != nil {
-		return &pricing.Decision{SkipReason: "no_strategy"}
+		return nil, err
 	}
 	params, err := pricing.ParseParams(es.GlobalParams, es.Params)
 	if err != nil {
-		return &pricing.Decision{SkipReason: "bad_strategy_params"}
+		return nil, err
 	}
 	mq, err := p.Store.RecentMergedQuotes(ctx, it.HashName, p.Now.Add(-30*time.Minute), params.Baseline.TopN*3)
 	if err != nil {
-		return &pricing.Decision{SkipReason: "no_baseline"}
+		return nil, err
 	}
 	quotes := make([]pricing.Quote, 0, len(mq))
 	for _, m := range mq {
@@ -273,7 +311,7 @@ func (p *Planner) decideFor(ctx context.Context, ch domain.Channel, it store.Rou
 		RentMaxDayMin: dayMin, RentMaxDayMax: dayMax,
 	}
 	d := pricing.Decide(in)
-	return &d
+	return &d, nil
 }
 
 func rentDayMin(ch domain.Channel) int {
@@ -327,7 +365,8 @@ type Executor struct {
 	// Store receives success write-backs; nil skips persistence (tests only).
 	Store WriteBack
 	// Penalize feeds platform transport errors into risk-control backoff; nil ignores.
-	Penalize func(ctx context.Context, ch domain.Channel, err error)
+	Penalize     func(ctx context.Context, ch domain.Channel, err error)
+	ChannelReady func(domain.Channel) bool
 }
 
 // Execute runs publish/delist actions; returns failures.
@@ -336,11 +375,21 @@ type Executor struct {
 // On real success the outcome is written back through Store so subsequent
 // cycles do not replay the same action.
 func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed int) {
+	applied, failed, _ = e.ExecuteWithError(ctx, plan)
+	return applied, failed
+}
+
+// ExecuteWithError preserves platform and write-back failures for job status.
+// Applied counts confirmed platform effects, including failed persistence.
+func (e *Executor) ExecuteWithError(ctx context.Context, plan []Action) (applied, failed int, err error) {
+	var errs []error
+	blocked := map[domain.Channel]bool{}
 	for _, a := range plan {
 		ad, ok := e.Adapters[a.Channel]
 		if !ok {
 			e.record(ctx, a, false, "no_adapter_configured")
 			failed++
+			errs = append(errs, fmt.Errorf("%s %s: no adapter configured", a.Kind, a.Channel))
 			continue
 		}
 		if e.DryRun {
@@ -348,8 +397,23 @@ func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed 
 			applied++
 			continue
 		}
+		if blocked[a.Channel] || (e.ChannelReady != nil && !e.ChannelReady(a.Channel)) {
+			e.record(ctx, a, false, "channel_in_cooldown")
+			failed++
+			errs = append(errs, fmt.Errorf("%s %s: channel in cooldown", a.Kind, a.Channel))
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return applied, failed, errors.Join(append(errs, err)...)
+		}
 		switch a.Kind {
 		case "publish":
+			if a.Decision == nil || !a.Decision.OK {
+				e.record(ctx, a, false, "invalid_decision")
+				failed++
+				errs = append(errs, fmt.Errorf("publish %s: invalid decision", a.AssetID))
+				continue
+			}
 			req := platform.PublishLeaseRequest{
 				AssetRef:      a.AssetID,
 				RentPrice:     a.Decision.Rent,
@@ -361,35 +425,50 @@ func (e *Executor) Execute(ctx context.Context, plan []Action) (applied, failed 
 			// round7 contract: per-item failures surface as ErrPartialFailure
 			// with results still authoritative — judge by the item verdict.
 			partial := errors.Is(err, platform.ErrPartialFailure)
-			ok2 := len(res) > 0 && res[0].Success && (err == nil || partial)
+			ok2 := len(res) == 1 && res[0].Success && (err == nil || partial)
 			e.record(ctx, a, ok2, errString(err, res))
 			if err != nil && !partial && isRiskSentinel(err) {
+				blocked[a.Channel] = true
 				e.penalize(ctx, a.Channel, err)
 			}
 			if ok2 {
 				applied++
-				e.writeBackPublish(ctx, a, res[0])
+				if werr := e.writeBackPublish(ctx, a, res[0]); werr != nil {
+					failed++
+					errs = append(errs, werr)
+				}
 			} else {
 				failed++
+				if err != nil {
+					errs = append(errs, fmt.Errorf("publish %s: %w", a.AssetID, err))
+				} else {
+					errs = append(errs, fmt.Errorf("publish %s: missing or rejected item result: %s", a.AssetID, errString(nil, res)))
+				}
 			}
 		case "delist":
 			err := ad.Delist(ctx, []string{a.GoodsRef})
 			e.record(ctx, a, err == nil, errText(err))
 			if err != nil {
 				if isRiskSentinel(err) {
+					blocked[a.Channel] = true
 					e.penalize(ctx, a.Channel, err)
 				}
 				failed++
+				errs = append(errs, fmt.Errorf("delist %s: %w", a.GoodsRef, err))
 			} else {
 				applied++
-				e.writeBackDelist(ctx, a)
+				if werr := e.writeBackDelist(ctx, a); werr != nil {
+					failed++
+					errs = append(errs, werr)
+				}
 			}
 		default:
 			e.record(ctx, a, false, "unknown_kind")
 			failed++
+			errs = append(errs, fmt.Errorf("unknown action kind %q", a.Kind))
 		}
 	}
-	return applied, failed
+	return applied, failed, errors.Join(errs...)
 }
 
 func (e *Executor) penalize(ctx context.Context, ch domain.Channel, err error) {
@@ -398,9 +477,9 @@ func (e *Executor) penalize(ctx context.Context, ch domain.Channel, err error) {
 	}
 }
 
-func (e *Executor) writeBackPublish(ctx context.Context, a Action, res platform.PublishLeaseResult) {
+func (e *Executor) writeBackPublish(ctx context.Context, a Action, res platform.PublishLeaseResult) error {
 	if e.Store == nil || a.Decision == nil {
-		return
+		return nil
 	}
 	goodsRef := res.GoodsRef
 	if goodsRef == "" {
@@ -408,29 +487,34 @@ func (e *Executor) writeBackPublish(ctx context.Context, a Action, res platform.
 		// Shelf sync remains the fallback recorder for this case.
 		e.Log.Warn("publish write-back skipped: no goods_ref echoed",
 			"channel", string(a.Channel), "asset", a.AssetID)
-		return
+		return fmt.Errorf("publish %s: no goods_ref for write-back", a.AssetID)
 	}
 	if err := e.Store.RecordPublishedListing(ctx, string(a.Channel), a.AssetID, a.HashName,
 		goodsRef, a.Decision.Rent, a.Decision.Long, a.Decision.Deposit, a.Decision.MaxDays); err != nil {
 		// A lost write-back risks a duplicate publish next cycle — surface loudly.
 		e.Log.Error("publish write-back failed", "channel", string(a.Channel),
 			"goods_ref", goodsRef, "err", err)
+		return fmt.Errorf("publish write-back %s: %w", goodsRef, err)
 	}
+	return nil
 }
 
-func (e *Executor) writeBackDelist(ctx context.Context, a Action) {
+func (e *Executor) writeBackDelist(ctx context.Context, a Action) error {
 	if e.Store == nil {
-		return
+		return nil
 	}
 	if err := e.Store.MarkListingDelisted(ctx, string(a.Channel), a.GoodsRef); err != nil {
 		e.Log.Error("delist write-back failed", "channel", string(a.Channel),
 			"goods_ref", a.GoodsRef, "err", err)
+		return fmt.Errorf("delist write-back %s: %w", a.GoodsRef, err)
 	}
+	return nil
 }
 
 func (e *Executor) record(ctx context.Context, a Action, success bool, errMsg string) {
 	detail := map[string]any{
 		"kind": a.Kind, "channel": string(a.Channel), "reason": a.Reason,
+		"success": success,
 	}
 	if a.AssetID != "" {
 		detail["asset_id"] = a.AssetID

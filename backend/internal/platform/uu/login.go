@@ -70,7 +70,9 @@ func (c *Client) fetchUserInfo(ctx context.Context) error {
 	if d.UserID == 0 {
 		return platform.ErrAuthExpired
 	}
+	c.userMu.Lock()
 	c.userID, c.nick = d.UserID, d.NickName
+	c.userMu.Unlock()
 	return nil
 }
 

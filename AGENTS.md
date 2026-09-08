@@ -99,6 +99,16 @@ git checkout main && git merge --ff-only feat/<task> && git push origin main
 
 ## 当前状态
 
+**2026-09-08 全面审查 R01-R36 修复完成，本地两轮完整 gate 通过**：
+会话 fail-closed 与原子改密/吊销、Steam/UU 并发与错误脱敏、最终定价护栏、
+全局 real 总闸与逐调用冷却、完整库存快照/missing/持续不一致计时（迁移0009）、
+实物资产去重与可冲销收益账本（迁移0010）、模板稀疏继承/事务校验、分页与CSV、
+原持锁连接丢失退出、初始口令0600文件、Caddy环境传递与备份服务均已验证。
+OpenAPI v0.9.0；前端48测试与桌面/手机浏览器验收、隔离HTTP dry-run、备份恢复通过。
+生产部署、真实平台写入、公网TLS签发和7天稳定性尚未执行，不能据本地 gate 宣称通过。
+详见 [本轮证据](docs/knowledge/evidence/2026-09-08-comprehensive-audit-remediation.md)。
+以下为历史交付记录，历史“全清”不替代本轮针对遗漏调用链的回归证据。
+
 **M0–M11 全部交付；迭代打磨轮 round4–9 完成
 （JWT 纪元吊销 ADR-0006 / 哨兵统一 / openapi 全量回写 / Refresh 锁外构建 / 分页上限 /
 可信代理判定+per-IP 限流 / 空货架熔断 / 迁移 0006 状态 CHECK / CI 加固 /
@@ -133,16 +143,18 @@ EnsureGlobalStrategy 冲突目标修复（迁移 0007）；全局策略落地 ec
 SellerRentOrderList 31 天窗上限销项 #E1（30 天分段）、Steam confirmlist
 creator_id 字符串、orders_sync 租出挂单锚点补冷启动缺口；卡 4 天的 M9 租单
 卖方确认完成（delivered），出租域发货四步流闭环，同上证据文档**。
-纯逻辑域逐包覆盖率（make gate 数值卡点 ≥70%）：pricing 92% / platform 100% /
-uu 77% / eco 78% / steam 76% / recon 79% / analytics 81% / auth 90% / secrets 79% / config 80%
+纯逻辑域逐包覆盖率（2026-09-08 make gate，卡点 ≥70%）：pricing 93% / platform 100% /
+uu 81% / eco 83% / steam 83% / recon 91% / analytics 81% / auth 93% / secrets 79% / config 87%
 
-- 系统可运行：`make dev-up && make server && make web`；首次启动日志打印一次性管理员密码
+- 系统可运行：`make dev-up && make server && make web`；首次口令独占写入0600文件，日志只给路径；
+  DB hash 缺失时可从安全的既有文件恢复初始化，已有hash时以DB为准；面板改密后吊销全部会话
 - 生产部署：deploy/.env 设 `SITE_ADDRESS=<域名>` 启用 Caddy 自动 HTTPS + 安全响应头
 - 反馈控制器已接线（factor_events 任务）：订单/stale 事件折算 listings.factor，
   f_min 回归 1.00 并审计告警——见 pricing-spec §3「已接线」；
   UU 渠道折算依赖 lease/out/list 资产字段真机确认（api-notes 待办#14）
 - 本地门控纪律：`make test`/`migrate-check` 默认连 **rentauto_test** 测试库，
-  永不触碰开发库 rentauto（迁移检查会 DROP 全表）
+  永不触碰开发库 rentauto（迁移检查会 DROP 全表）；直接集成测试必须明确提供 TEST_DATABASE_URL，
+  名称以test_开头或_test结尾，不回退DATABASE_URL，已给定但不可达时失败，不假绿跳过
 - 待真机校订项（见各 api-notes「待办」）：UU 订单状态码映射与资产字段、
   QuerySteamStock 字段、ECO 订单时间窗上限、ECO 改价边界、CSP 下 TCaptcha 域白名单核对
 - 后续迭代入口：ECO 回调/WebSocket、出售域适配器、因子参数面板化——

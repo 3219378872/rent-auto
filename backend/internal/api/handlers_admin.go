@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -92,6 +93,27 @@ type strategyUpdate struct {
 
 var validRoutes = map[string]bool{"uu_only": true, "eco_only": true, "both": true, "uu_primary_eco_fallback": true}
 
+var errInvalidStrategyParams = errors.New("invalid strategy params")
+
+func validateStrategyParams(global, template json.RawMessage) error {
+	if _, err := pricing.ParseParams(global, template); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidStrategyParams, err)
+	}
+	return nil
+}
+
+func validateGlobalStrategyParams(global json.RawMessage, templates []json.RawMessage) error {
+	if err := validateStrategyParams(global, nil); err != nil {
+		return err
+	}
+	for _, template := range templates {
+		if err := validateStrategyParams(global, template); err != nil {
+			return fmt.Errorf("template override: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Request) {
 	var req strategyUpdate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -105,14 +127,16 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid channel_route")
 		return
 	}
+	if req.Params != nil {
+		if err := validateStrategyParams(*req.Params, nil); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
 	ctx := r.Context()
 	id, _, err := s.Store.EnsureGlobalStrategy(ctx, "{}")
 	if err != nil {
 		s.internalError(w, err)
-		return
-	}
-	if req.Params != nil && !json.Valid(*req.Params) {
-		writeErr(w, http.StatusBadRequest, "bad_request", "params must be valid json")
 		return
 	}
 	patch := store.StrategyGlobalPatch{}
@@ -131,7 +155,18 @@ func (s *Server) handleStrategyUpdateGlobal(w http.ResponseWriter, r *http.Reque
 	// one transaction: params/route/real_execution_enabled drive live repricing
 	// together — a partial update (e.g. new params but old real flag) is worse
 	// than a rejected one.
-	if err := s.Store.UpdateGlobalStrategy(ctx, id, patch); err != nil {
+	// Turning off the global execution gate must remain possible even when
+	// legacy pricing parameters are invalid. Mutations/enabling validate all
+	// effective template combinations under the same lock as the write.
+	var validate func(json.RawMessage, []json.RawMessage) error
+	if req.Params != nil || (req.RealEnabled != nil && *req.RealEnabled) {
+		validate = validateGlobalStrategyParams
+	}
+	if err := s.Store.UpdateGlobalStrategyChecked(ctx, id, patch, validate); err != nil {
+		if errors.Is(err, errInvalidStrategyParams) {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		s.internalError(w, err)
 		return
 	}
@@ -167,24 +202,26 @@ func (s *Server) handleTemplateStrategyUpsert(w http.ResponseWriter, r *http.Req
 		}
 		params = *req.Params
 	}
-	// Deep-parse validation: type errors (e.g. k1 as string) must be rejected
-	// here instead of silently degrading to skip reasons at reprice time.
-	if _, err := pricing.ParseParams([]byte("{}"), params); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", "invalid strategy params: "+err.Error())
+	if _, _, err := s.Store.EnsureGlobalStrategy(r.Context(), "{}"); err != nil {
+		s.internalError(w, err)
 		return
 	}
 	priority := 0
 	if req.Priority != nil {
 		priority = *req.Priority
 	}
-	id, err := s.Store.UpsertTemplateStrategy(r.Context(), store.TemplateStrategy{
+	id, err := s.Store.UpsertTemplateStrategyChecked(r.Context(), store.TemplateStrategy{
 		HashName:    req.HashName,
 		Route:       req.Route,
 		Params:      params,
 		RealEnabled: req.RealEnabled,
 		Priority:    priority,
-	})
+	}, validateStrategyParams)
 	if err != nil {
+		if errors.Is(err, errInvalidStrategyParams) {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		s.audit(r, "strategy.template_upsert_failed", map[string]any{"hash": req.HashName, "error": err.Error()})
 		writeErr(w, http.StatusBadRequest, "upsert_failed", "unknown template or invalid payload")
 		return
@@ -218,11 +255,7 @@ func (s *Server) handleTemplateStrategyDelete(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("page_size"))
-	page, _ := strconv.Atoi(q.Get("page"))
-	if page < 1 {
-		page = 1
-	}
+	limit, offset := pageParams(r)
 	parseTS := func(k string) time.Time {
 		if v := q.Get(k); v != "" {
 			if t, err := time.Parse(time.RFC3339, v); err == nil {
@@ -237,7 +270,7 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		Since:   parseTS("since"),
 		Before:  parseTS("until"),
 		Limit:   limit,
-		Offset:  (page - 1) * limit,
+		Offset:  offset,
 	})
 	if err != nil {
 		s.internalError(w, err)

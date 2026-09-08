@@ -89,10 +89,15 @@ func decodeEnvelope(body []byte) (*envelope, error) {
 	{
 		var s string
 		if json.Unmarshal(v, &s) == nil {
-			n, _ := strconv.Atoi(s)
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				return nil, fmt.Errorf("eco: decode envelope: invalid ResultCode")
+			}
 			e.Code = n
 		} else {
-			_ = json.Unmarshal(v, &e.Code)
+			if err := json.Unmarshal(v, &e.Code); err != nil {
+				return nil, fmt.Errorf("eco: decode envelope: invalid ResultCode")
+			}
 		}
 	}
 	if v, ok := m["ResultMsg"]; ok {

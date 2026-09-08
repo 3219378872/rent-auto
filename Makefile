@@ -53,7 +53,8 @@ test:
 	cd $(BACKEND) && go tool cover -func=coverage.out | tail -1
 
 test-integration:
-	cd $(BACKEND) && go test -tags=integration ./... -count=1
+	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL must name an explicit disposable test database"; exit 1; }
+	cd $(BACKEND) && go test -tags=integration -p 1 ./... -race -count=1
 
 cover:
 	cd $(BACKEND) && go tool cover -html=coverage.out -o coverage.html

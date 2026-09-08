@@ -4,6 +4,7 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ const (
 
 // Registry builds and refreshes channel adapters from stored credentials.
 type Registry struct {
+	updateMu   sync.Mutex
 	mu         sync.RWMutex
 	st         *store.Store
 	box        *secrets.Box
@@ -38,6 +40,10 @@ type Registry struct {
 	ecoClient  *eco.Client
 	ecoSteamID string
 	uuHTTP     *http.Client // test seam: overrides UU API transport
+	now        func() time.Time
+	uuRetryAt  time.Time
+	uuRetryGap time.Duration
+	uuRecovery bool
 }
 
 // AuditHook receives write-operation audit entries (wired to the store by
@@ -64,7 +70,10 @@ func (r *Registry) audit(ctx context.Context, e domain.AuditEntry) {
 }
 
 func NewRegistry(st *store.Store, box *secrets.Box, log *slog.Logger) *Registry {
-	return &Registry{st: st, box: box, log: log,
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Registry{st: st, box: box, log: log, now: time.Now,
 		ad:  map[domain.Channel]platform.Adapter{},
 		lim: map[domain.Channel]platform.Limiter{}}
 }
@@ -75,115 +84,136 @@ func (r *Registry) SetLimiter(ch domain.Channel, l platform.Limiter) {
 	r.lim[ch] = l
 }
 
-// Refresh (re)builds adapters from whatever credentials are stored.
-// Network validation runs OUTSIDE the registry lock: a slow platform round
-// trip must not stall every Get/All reader (panel, scheduler) for seconds.
+// Refresh serializes credential installation, but leaves Get/All available
+// during validation. Independent channels do not block each other's recovery.
 func (r *Registry) Refresh(ctx context.Context) error {
-	// Phase 1 — read + decrypt stored credentials (short lock hold).
-	uuToken := ""
-	if setting, err := r.st.GetSetting(ctx, keyUUToken); err != nil && err != store.ErrNotFound {
-		r.log.Error("uu credential lookup failed", "err", err)
-		return err
-	} else if err == nil {
-		switch {
-		case setting.ValueEnc != nil && r.box != nil:
-			plain, derr := r.box.Open(string(setting.ValueEnc))
-			if derr != nil {
-				r.log.Warn("uu token decrypt failed", "err", derr)
-				r.dropUU() // unreadable stored state ⇒ channel not configured
-			} else {
-				var payload struct {
-					Token string `json:"token"`
-				}
-				if json.Unmarshal(plain, &payload) == nil && payload.Token != "" {
-					uuToken = payload.Token
-				}
-			}
-		case setting.ValuePlain != nil:
-			var payload struct {
-				Token string `json:"token"`
-			}
-			if json.Unmarshal([]byte(*setting.ValuePlain), &payload) == nil && payload.Token != "" {
-				uuToken = payload.Token
-				r.sealLegacyUUToken(ctx, payload.Token)
-			}
-		}
-	}
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
+	uuErr := r.refreshUU(ctx)
+	ecoErr := r.refreshECO(ctx)
+	return errors.Join(uuErr, ecoErr)
+}
 
-	ecoCredsOK := false
-	var ecoPartner, ecoKeyPEM, ecoSteamID string
-	if ecoSetting, err := r.st.GetSetting(ctx, keyECOCreds); err != nil && err != store.ErrNotFound {
-		r.log.Error("eco credential lookup failed", "err", err)
-		return err
-	} else if err == nil && ecoSetting.ValueEnc != nil && r.box != nil {
-		plain, derr := r.box.Open(string(ecoSetting.ValueEnc))
-		if derr != nil {
-			r.log.Warn("eco creds decrypt failed", "err", derr)
-			r.dropECO()
-		} else {
-			var creds struct {
-				PartnerID     string `json:"partner_id"`
-				PrivateKeyPEM string `json:"private_key_pem"`
-			}
-			if json.Unmarshal(plain, &creds) == nil && creds.PartnerID != "" {
-				ecoPartner, ecoKeyPEM, ecoCredsOK = creds.PartnerID, creds.PrivateKeyPEM, true
-				ecoSteamID = r.loadECOSteamID(ctx)
-			}
-		}
+// Recover retries only unavailable UU validation after a bounded backoff.
+// It never installs an unvalidated client or performs a platform write.
+func (r *Registry) Recover(ctx context.Context) error {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
+	if r.uuRetryAt.IsZero() || r.now().Before(r.uuRetryAt) {
+		return nil
 	}
+	return r.refreshUU(ctx)
+}
 
-	// Phase 2 — construct clients (platform validation round trips, NO lock).
-	type builtUU struct {
-		ad platform.Adapter
-		c  *uu.Client
+func (r *Registry) scheduleUURetry() {
+	if r.uuRetryGap == 0 {
+		r.uuRetryGap = time.Minute
+	} else {
+		r.uuRetryGap = min(r.uuRetryGap*2, 30*time.Minute)
 	}
-	var newUU *builtUU
-	if uuToken != "" {
-		c, err := uu.NewClient(ctx, uuToken, r.uuOptions()...)
-		if err != nil {
-			r.log.Warn("uu adapter build failed", "err", err)
-		} else {
-			newUU = &builtUU{ad: uu.NewAdapter(c), c: c}
-		}
-	}
-	var newEcoAd platform.Adapter
-	var newEcoC *eco.Client
-	if ecoCredsOK {
-		opts := []eco.Option{}
-		r.mu.RLock()
-		l, hasLim := r.lim[domain.ChannelECO]
-		r.mu.RUnlock()
-		if hasLim {
-			opts = append(opts, eco.WithLimiter(l))
-		}
-		c, err := eco.NewClient(ecoPartner, []byte(ecoKeyPEM), opts...)
-		if err != nil {
-			r.log.Warn("eco adapter build failed", "err", err)
-		} else {
-			newEcoAd, newEcoC = eco.NewAdapter(c, ecoSteamID), c
-		}
-	}
-
-	// Phase 3 — install or drop atomically.
+	r.uuRetryAt = r.now().Add(r.uuRetryGap)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if uuToken != "" {
-		if newUU != nil {
-			r.ad[domain.ChannelUU] = newUU.ad
-			r.uuClient = newUU.c
-		} else {
+	r.uuRecovery = true
+	r.mu.Unlock()
+}
+
+func (r *Registry) clearUURetry() {
+	r.uuRetryAt, r.uuRetryGap = time.Time{}, 0
+	r.mu.Lock()
+	r.uuRecovery = false
+	r.mu.Unlock()
+}
+
+func (r *Registry) refreshUU(ctx context.Context) error {
+	setting, err := r.st.GetSetting(ctx, keyUUToken)
+	if errors.Is(err, store.ErrNotFound) {
+		r.dropUU()
+		r.clearUURetry()
+		return nil
+	}
+	if err != nil {
+		r.scheduleUURetry()
+		return fmt.Errorf("uu credential lookup: %w", err)
+	}
+	var plain []byte
+	if r.box == nil {
+		err = fmt.Errorf("APP_MASTER_KEY not configured")
+	} else if setting.ValueEnc != nil {
+		plain, err = r.box.Open(string(setting.ValueEnc))
+	} else if setting.ValuePlain != nil {
+		plain = []byte(*setting.ValuePlain)
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if err == nil {
+		err = json.Unmarshal(plain, &payload)
+	}
+	if err != nil || payload.Token == "" {
+		r.dropUU()
+		r.scheduleUURetry()
+		return fmt.Errorf("uu stored credential is unreadable")
+	}
+	if setting.ValueEnc == nil {
+		r.sealLegacyUUToken(ctx, payload.Token)
+	}
+	c, err := uu.NewClient(ctx, payload.Token, r.uuOptions()...)
+	if err != nil {
+		r.mu.Lock()
+		if r.uuClient == nil || r.uuClient.Token() != payload.Token ||
+			errors.Is(err, platform.ErrAuthExpired) || errors.Is(err, platform.ErrVersionBlocked) {
 			r.dropUULocked()
 		}
+		r.mu.Unlock()
+		r.scheduleUURetry()
+		return fmt.Errorf("uu adapter validation: %w", err)
 	}
-	if ecoCredsOK {
-		if newEcoC != nil {
-			r.ad[domain.ChannelECO] = newEcoAd
-			r.ecoClient = newEcoC
-			r.ecoSteamID = ecoSteamID
-		} else {
-			r.dropECOLocked()
-		}
+	r.mu.Lock()
+	r.ad[domain.ChannelUU], r.uuClient = uu.NewAdapter(c), c
+	r.mu.Unlock()
+	r.clearUURetry()
+	return nil
+}
+
+func (r *Registry) refreshECO(ctx context.Context) error {
+	setting, err := r.st.GetSetting(ctx, keyECOCreds)
+	if errors.Is(err, store.ErrNotFound) {
+		r.dropECO()
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("eco credential lookup: %w", err)
+	}
+	if setting.ValueEnc == nil || r.box == nil {
+		r.dropECO()
+		return fmt.Errorf("eco stored credential is unreadable")
+	}
+	plain, err := r.box.Open(string(setting.ValueEnc))
+	var creds struct {
+		PartnerID     string `json:"partner_id"`
+		PrivateKeyPEM string `json:"private_key_pem"`
+	}
+	if err != nil || json.Unmarshal(plain, &creds) != nil {
+		r.dropECO()
+		return fmt.Errorf("eco stored credential is unreadable")
+	}
+	r.mu.RLock()
+	l := r.lim[domain.ChannelECO]
+	r.mu.RUnlock()
+	var opts []eco.Option
+	if l != nil {
+		opts = append(opts, eco.WithLimiter(l))
+	}
+	c, err := eco.NewClient(creds.PartnerID, []byte(creds.PrivateKeyPEM), opts...)
+	if err != nil {
+		r.dropECO()
+		return fmt.Errorf("eco adapter build: %w", err)
+	}
+	steamID := r.loadECOSteamID(ctx)
+	r.mu.Lock()
+	r.ad[domain.ChannelECO], r.ecoClient = eco.NewAdapter(c, steamID), c
+	r.ecoSteamID = steamID
+	r.mu.Unlock()
 	return nil
 }
 
@@ -233,6 +263,12 @@ func (r *Registry) All() []platform.Adapter {
 // Health probes each configured adapter; missing channels report ErrNotFound-like state.
 func (r *Registry) Health(ctx context.Context) map[string]string {
 	out := map[string]string{"uu": "not_configured", "eco": "not_configured"}
+	r.mu.RLock()
+	recovering := r.uuRecovery
+	r.mu.RUnlock()
+	if recovering {
+		out["uu"] = "error: awaiting credential recovery"
+	}
 	for _, a := range r.All() {
 		if err := a.Healthy(ctx); err != nil {
 			out[string(a.Channel())] = fmt.Sprintf("error: %v", err)
@@ -245,6 +281,8 @@ func (r *Registry) Health(ctx context.Context) map[string]string {
 
 // SetUUToken validates then persists the token (encrypted at rest) and rebuilds the adapter.
 func (r *Registry) SetUUToken(ctx context.Context, token string) error {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
 	if r.box == nil {
 		return fmt.Errorf("APP_MASTER_KEY not configured: cannot store credentials safely")
 	}
@@ -264,6 +302,7 @@ func (r *Registry) SetUUToken(ctx context.Context, token string) error {
 	r.ad[domain.ChannelUU] = uu.NewAdapter(c)
 	r.uuClient = c
 	r.mu.Unlock()
+	r.clearUURetry()
 	r.log.Info("uu credential updated", "nickname", c.Nickname())
 	return nil
 }
@@ -324,6 +363,8 @@ func (r *Registry) dropECOLocked() {
 
 // SetECOCreds validates then persists ECO credentials (encrypted at rest).
 func (r *Registry) SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, steamID string) error {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
 	// Fail-closed checks BEFORE any side effect: without a box nothing may be
 	// persisted, and no real Steam/platform login may run.
 	if r.box == nil {
@@ -348,7 +389,7 @@ func (r *Registry) SetECOCreds(ctx context.Context, partnerID, privateKeyPEM, st
 	if err := r.st.UpsertSettingEnc(ctx, keyECOCreds, []byte(enc)); err != nil {
 		return err
 	}
-	return r.Refresh(ctx)
+	return r.refreshECO(ctx)
 }
 
 // ---- convenience passthroughs used by scheduler jobs ----
@@ -483,12 +524,15 @@ func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
 		return err
 	}
 	for _, so := range out.SendOffers {
-		if so.Error != "" || so.NeedsMobileConfirmation || so.NeedsEmailConfirmation {
+		if so.Failed() {
 			logWarnDelivery(r.log, "eco send offer failed", so.OrderNum, so.Error)
 			r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 				Action: "order.send_offer_failed", Channel: "eco", Target: so.OrderNum,
-				Detail: map[string]any{"error": so.Error}})
+				Detail: map[string]any{"error": so.Error, "code": so.ErrorCode}})
 			continue
+		}
+		if so.NeedsMobileConfirmation || so.NeedsEmailConfirmation {
+			r.log.Info("eco sent offer pending confirmation", "order", so.OrderNum, "offer", so.OfferID)
 		}
 		r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 			Action: "order.offer_sent", Channel: "eco", Target: so.OrderNum})
@@ -497,11 +541,12 @@ func (r *Registry) EcoOneClickResolve(ctx context.Context) error {
 		// The platform reports an offer as "not accepted" (ErrorCode 0, empty
 		// Error) when a mobile/email confirmation is pending — our Steam
 		// confirmlist flow handles those; only a real Error is a failure.
-		if ao.NeedMobileConfirmation || ao.NeedEmailConfirmation {
+		if (ao.NeedMobileConfirmation || ao.NeedEmailConfirmation) && ao.Error == "" &&
+			(ao.ErrorCode == 0 || !ao.Failed()) {
 			r.log.Info("eco offer pending confirmation", "order", ao.OrderNum, "offer", ao.OfferID)
 			continue
 		}
-		if ao.ErrorCode != 1 || ao.Error != "" { // ErrorCode OK=1
+		if ao.Failed() {
 			logWarnDelivery(r.log, "eco accept offer failed", ao.OrderNum, ao.Error)
 			r.audit(ctx, domain.AuditEntry{Time: time.Now().UTC(), Actor: "system",
 				Action: "order.accept_offer_failed", Channel: "eco", Target: ao.OrderNum,

@@ -3,11 +3,13 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/3219378872/rent-auto/backend/internal/auth"
+	"github.com/3219378872/rent-auto/backend/internal/store"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -112,17 +114,8 @@ func (l *loginLimiter) reset(key, ip string) {
 
 // clientIP (trusted-proxy aware) lives on Server; see server.go.
 
-// NOTE (fail-closed revocation, parallel lane owns server.go): the
-// requireAuth epoch comparison must NOT fall back to ver=0 when the session
-// store is nil/unreadable — that would skip revocation forever. The auth
-// package exposes auth.ErrStoreUnavailable / auth.FailClosedError for exactly
-// this: wrap the store read error and answer 401. This file intentionally
-// does not touch server.go to avoid clashing with that lane.
-
 // writeBucket is a process-wide per-IP fixed-window throttle for expensive
-// mutating endpoints (POST /jobs/*/run, PUT /channels/*). It lives here —
-// not on Server in server.go — so handlers gain rate limiting without
-// touching server.go (parallel lane owns the lock logic there).
+// mutating endpoints (POST /jobs/*/run, PUT /channels/*).
 type writeBucket struct {
 	mu     sync.Mutex
 	slots  map[string]*failSlot
@@ -225,6 +218,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
 		return
 	}
+	// Capture revocation before the password snapshot. A password change
+	// concurrent with bcrypt validation can only produce an already revoked JWT.
+	epoch, err := s.sessionEpoch(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
 	hash, err := s.PasswordHash(r.Context())
 	if err != nil {
 		s.Log.Error("login credential load failed", "err", err)
@@ -249,7 +249,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logins.reset(key, ip)
-	tok, exp, err := s.JWT.Sign(req.Username, s.sessionEpoch(r.Context()), s.TTL)
+	tok, exp, err := s.JWT.Sign(req.Username, epoch, s.TTL)
 	if err != nil {
 		s.internalError(w, err)
 		return
@@ -266,7 +266,59 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // (ADR-0006). The client discards its local copy regardless; the audit trail
 // records who logged out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	ver := s.bumpSessionEpoch(r.Context())
+	ver, err := s.bumpSessionEpoch(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
 	s.audit(r, "auth.logout", map[string]any{"epoch": ver})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	if s.PasswordChange == nil {
+		writeErr(w, http.StatusConflict, "password_managed_externally", "password is managed by deployment configuration")
+		return
+	}
+	var req struct {
+		Current string `json:"current_password"`
+		New     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.New) < 12 || len(req.New) > 72 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "new password must contain 12 to 72 bytes")
+		return
+	}
+	ip := s.clientIP(r)
+	key := ip + "|password:" + userFrom(r.Context())
+	if !s.logins.allow(key, ip) {
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, retry later")
+		return
+	}
+	oldHash, err := s.PasswordHash(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if !auth.CheckPassword(oldHash, req.Current) {
+		s.logins.fail(key, ip)
+		s.audit(r, "auth.password_failed", nil)
+		writeErr(w, http.StatusBadRequest, "bad_credentials", "current password is incorrect")
+		return
+	}
+	newHash, err := auth.HashPassword(req.New)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := s.PasswordChange(r.Context(), oldHash, newHash); err != nil {
+		if errors.Is(err, store.ErrPasswordChanged) {
+			writeErr(w, http.StatusConflict, "password_changed", "password changed concurrently")
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	s.logins.reset(key, ip)
+	s.audit(r, "auth.password_changed", nil)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

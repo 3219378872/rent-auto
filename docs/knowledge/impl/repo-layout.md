@@ -28,6 +28,7 @@ rent-auto/
 │       ├── scheduler/         # 任务定义/调度循环/限频器/dry-run/反馈控制器接线
 │       ├── recon/             # Reconciler 差异计算 + Executor（dry-run 门禁在此）
 │       ├── analytics/         # 收益记账与 rollup
+│       ├── testutil/          # 显式可丢弃数据库连接校验（仅测试消费）
 │       └── store/             # pgx 查询层 + migrate 嵌入；接口在 store/store.go
 │   └── migrations/NNNN_*.up.sql / .down.sql   # make migrate-new 自动递增序号
 ├── frontend/                  # React+Vite+TS（src/pages 与 API 一一对应）

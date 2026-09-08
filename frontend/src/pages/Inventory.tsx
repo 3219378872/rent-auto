@@ -4,7 +4,7 @@ import { Pager, usePagedList } from '../lib/paged'
 import { useDebounced } from '../lib/ui'
 
 const statusBadge: Record<string, string> = {
-  in_stock: 'ok', listed: '', leased: 'warn', locked: 'bad', sold: 'bad',
+  in_stock: 'ok', listed: '', leased: 'warn', locked: 'bad', sold: 'bad', missing: 'warn',
 }
 
 export default function Inventory() {
@@ -37,6 +37,7 @@ export default function Inventory() {
           <option value="">全部状态</option>
           <option value="in_stock">在库</option><option value="listed">已上架</option>
           <option value="leased">已租出</option><option value="locked">锁定</option>
+          <option value="missing">同步未见</option>
         </select>
         <input placeholder="搜索名称…" value={search} onChange={(e) => { setPage(1); setSearch(e.target.value) }} />
         <span className="muted">共 {data?.total ?? 0} 件</span>
@@ -53,7 +54,7 @@ export default function Inventory() {
               <tr key={`${r.channel}-${r.asset_id}`}>
                 <td>{r.channel.toUpperCase()}</td>
                 <td title={r.hash_name}>{r.market_hash_name || r.hash_name}</td>
-                <td><span className={`badge ${statusBadge[r.status] ?? ''}`}>{r.status}</span></td>
+                <td><span className={`badge ${statusBadge[r.status] ?? ''}`}>{r.status === 'missing' ? '同步未见' : r.status}</span></td>
                 <td>¥{r.mark_price.toFixed(2)}</td>
                 <td>{r.cost_basis > 0 ? `¥${r.cost_basis.toFixed(2)}` : '—'}</td>
                 <td>{y === null ? '—' : `${(y * 100).toFixed(2)}%`}</td>

@@ -56,20 +56,21 @@ type ShelfListing struct {
 
 // LeaseOrder is a rental order in unified state-machine terms (data-model.md).
 type LeaseOrder struct {
-	Channel   Channel   `json:"channel"`
-	OrderRef  string    `json:"order_ref"`
-	AssetID   string    `json:"asset_id,omitempty"`
-	HashName  string    `json:"hash_name"`
-	OrderType string    `json:"order_type"` // short|long|buyout
-	Status    string    `json:"status"`
-	RentDays  int       `json:"rent_days"`
-	RentPrice float64   `json:"rent_price"`
-	Amount    float64   `json:"order_amount"`
-	Deposits  float64   `json:"deposits"`
-	StartedAt time.Time `json:"started_at,omitempty"`
-	DueAt     time.Time `json:"due_at,omitempty"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
-	Raw       JSONB     `json:"-"`
+	Channel    Channel    `json:"channel"`
+	OrderRef   string     `json:"order_ref"`
+	AssetID    string     `json:"asset_id,omitempty"`
+	HashName   string     `json:"hash_name"`
+	OrderType  string     `json:"order_type"` // short|long|buyout
+	Status     string     `json:"status"`
+	RentDays   int        `json:"rent_days"`
+	RentPrice  float64    `json:"rent_price"`
+	Amount     float64    `json:"order_amount"`
+	Deposits   float64    `json:"deposits"`
+	StartedAt  time.Time  `json:"started_at,omitempty"`
+	DueAt      time.Time  `json:"due_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"` // Only an explicitly confirmed completion time.
+	UpdatedAt  time.Time  `json:"updated_at,omitempty"`
+	Raw        JSONB      `json:"-"`
 }
 
 // Money amounts are float64 in business logic and rounded to 2 decimals via Round2

@@ -77,7 +77,7 @@ func (s *SteamSession) Restore(ctx context.Context) error {
 		return err // creds missing → cannot build session
 	}
 	sess := steam.NewSession(*creds)
-	sess.AttachTokens(tokens)
+	sess.AttachTokens(ctx, tokens)
 	s.session = sess
 	return nil
 }
@@ -107,6 +107,11 @@ func (s *SteamSession) loadCreds(ctx context.Context) (*steam.Credentials, error
 // SetCredentials validates and persists Steam credentials (encrypted), then logs in.
 func (s *SteamSession) SetCredentials(ctx context.Context,
 	username, password, sharedSecret, identitySecret string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.box == nil {
+		return fmt.Errorf("APP_MASTER_KEY not configured")
+	}
 	creds := steam.Credentials{
 		Username: username, Password: password,
 		SharedSecret: sharedSecret, IdentitySecret: identitySecret,
@@ -116,14 +121,11 @@ func (s *SteamSession) SetCredentials(ctx context.Context,
 		return fmt.Errorf("steam login failed: %w", err)
 	}
 	b, _ := json.Marshal(creds) //nolint:gosec // G117：序列化仅为 AES-GCM 密封做准备，密文落库明文不出进程
-	if s.box == nil {
-		return fmt.Errorf("APP_MASTER_KEY not configured")
-	}
 	enc, err := s.box.Seal(b)
 	if err != nil {
 		return err
 	}
-	tok, _ := json.Marshal(sess.Tokens) //nolint:gosec // G117：同上，Seal 后才持久化
+	tok, _ := json.Marshal(sess.Tokens()) //nolint:gosec // G117：同上，Seal 后才持久化
 	tokEnc, err := s.box.Seal(tok)
 	if err != nil {
 		return err
@@ -134,10 +136,8 @@ func (s *SteamSession) SetCredentials(ctx context.Context,
 	if err := s.st.UpsertSettingEnc(ctx, "steam_tokens", []byte(tokEnc)); err != nil {
 		return err
 	}
-	s.mu.Lock()
 	s.session = sess
-	s.mu.Unlock()
-	s.log.Info("steam credential updated", "steamid", sess.Tokens.SteamID)
+	s.log.Info("steam credential updated", "steamid", sess.Tokens().SteamID)
 	return nil
 }
 
@@ -149,16 +149,17 @@ func (s *SteamSession) EnsureSession(ctx context.Context) (*steam.Session, error
 		return nil, fmt.Errorf("steam not configured")
 	}
 	sess := s.session
+	tokens := sess.Tokens()
 	now := time.Now().Unix()
 	// AccessExp == 0 means the exp claim was unreadable at store time (legacy
 	// persisted tokens). Treating it as "fresh" short-circuits refresh forever
 	// — the api-notes §1.2 blind spot. Unknown expiry is treated as stale
 	// instead: refresh (cheap, rotates the access token) and relogin on
 	// failure, so a corrupt exp can never wedge the session.
-	if sess.Tokens.AccessExp == 0 {
+	if tokens.AccessExp == 0 {
 		s.log.Warn("steam access token exp unknown; forcing refresh")
 	}
-	if sess.Tokens.AccessExp == 0 || sess.Tokens.AccessExp-now < 3600 {
+	if tokens.AccessExp == 0 || tokens.AccessExp-now < 3600 {
 		if err := sess.RefreshAccessToken(ctx); err != nil {
 			s.log.Info("access token refresh failed, relogin", "err", err)
 			if err := sess.Login(ctx); err != nil {
@@ -176,7 +177,7 @@ func (s *SteamSession) persistTokensLocked(ctx context.Context, sess *steam.Sess
 	if s.box == nil {
 		return
 	}
-	tok, _ := json.Marshal(sess.Tokens) //nolint:gosec // G117：Seal 后才持久化，明文不出进程
+	tok, _ := json.Marshal(sess.Tokens()) //nolint:gosec // G117：Seal 后才持久化，明文不出进程
 	enc, err := s.box.Seal(tok)
 	if err != nil {
 		return
@@ -196,7 +197,7 @@ func (s *SteamSession) Health(ctx context.Context) string {
 	if err != nil || !sess.IsAlive(ctx) {
 		return "error: session dead"
 	}
-	return "ok:" + sess.Tokens.SteamID
+	return "ok:" + sess.Tokens().SteamID
 }
 
 // AcceptZeroCostOffers polls incoming offers and accepts those costing us nothing.
@@ -210,18 +211,14 @@ func (s *SteamSession) AcceptZeroCostOffers(ctx context.Context, log interface{ 
 		return 0, 0, err
 	}
 	for _, o := range offers {
-		if o.TradeOfferState != 2 && o.TradeOfferState != 3 { // not Active/ConfirmationNeed
+		if o.TradeOfferState != steam.OfferStateActive && o.TradeOfferState != steam.OfferStateNeedsConfirmation {
 			continue
 		}
 		if !o.IsZeroCost() {
 			skipped++
 			continue
 		}
-		partner, err := sess.ResolvePartnerID(ctx, o.TradeOfferID)
-		if err != nil {
-			return accepted, skipped, err
-		}
-		ok, err := sess.AcceptOfferWithPartner(ctx, o.TradeOfferID, partner)
+		ok, err := sess.AcceptZeroCostTradeOffer(ctx, o.TradeOfferID)
 		if err != nil {
 			return accepted, skipped, err
 		}
@@ -245,9 +242,5 @@ func (s *SteamSession) AcceptTradeOffer(ctx context.Context, offerID string) (bo
 	if err != nil {
 		return false, err
 	}
-	partner, err := sess.ResolvePartnerID(ctx, offerID)
-	if err != nil {
-		return false, err
-	}
-	return sess.AcceptOfferWithPartner(ctx, offerID, partner)
+	return sess.AcceptTradeOffer(ctx, offerID)
 }

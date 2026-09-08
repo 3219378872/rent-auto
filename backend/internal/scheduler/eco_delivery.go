@@ -72,10 +72,15 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 		}
 		return fmt.Errorf("eco: order list: %w", err)
 	}
+	var errs []error
 	for _, o := range orders {
 		if o.OrderStateCode == orderStateOfferNotSent {
 			if _, serr := d.Eco.SendOffer(ctx, o.OrderNum); serr != nil {
 				d.warn(ctx, "order.send_offer_failed", o.OrderNum, serr.Error())
+				errs = append(errs, fmt.Errorf("eco send offer %s: %w", o.OrderNum, serr))
+				if riskCooldown(serr) > 0 {
+					return errors.Join(errs...)
+				}
 				continue
 			}
 			d.info(ctx, "offer sent", o.OrderNum)
@@ -83,6 +88,10 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 		detail, derr := d.Eco.Detail(ctx, o.OrderNum)
 		if derr != nil {
 			d.warn(ctx, "order.detail_failed", o.OrderNum, derr.Error())
+			errs = append(errs, fmt.Errorf("eco order detail %s: %w", o.OrderNum, derr))
+			if riskCooldown(derr) > 0 {
+				return errors.Join(errs...)
+			}
 			continue
 		}
 		if detail.TradeOfferID == "" {
@@ -99,13 +108,17 @@ func (d *EcoDeliveryDeps) RunECODelivery(ctx context.Context) error {
 		if aerr != nil {
 			// not marked as handled: retried on the next cycle
 			d.warn(ctx, "order.accept_offer_failed", detail.TradeOfferID, aerr.Error())
+			errs = append(errs, fmt.Errorf("steam accept %s: %w", detail.TradeOfferID, aerr))
 			continue
 		}
 		if ok {
 			d.markAccepted(ctx, detail.TradeOfferID, o.GoodsName, o.OrderNum)
 		}
 	}
-	return d.runRentDelivery(ctx, start, end)
+	if err := d.runRentDelivery(ctx, start, end); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // runRentDelivery is the rent-order fulfilment pass. The platform creates the
@@ -120,16 +133,25 @@ func (d *EcoDeliveryDeps) runRentDelivery(ctx context.Context, start, end time.T
 		}
 		return fmt.Errorf("eco: rent order list: %w", err)
 	}
+	var errs []error
 	for _, o := range rentOrders {
 		detail, derr := d.Eco.SellerRentOrderDetail(ctx, o.OrderNum)
 		if derr != nil {
 			d.warn(ctx, "rent.detail_failed", o.OrderNum, derr.Error())
+			errs = append(errs, fmt.Errorf("eco rent detail %s: %w", o.OrderNum, derr))
+			if riskCooldown(derr) > 0 {
+				return errors.Join(errs...)
+			}
 			continue
 		}
 		if detail.OfferID == "" {
 			if detail.SendOfferRole == rentSendRoleSeller {
 				if _, serr := d.Eco.SendOffer(ctx, o.OrderNum); serr != nil {
 					d.warn(ctx, "rent.send_offer_failed", o.OrderNum, serr.Error())
+					errs = append(errs, fmt.Errorf("eco rent send offer %s: %w", o.OrderNum, serr))
+					if riskCooldown(serr) > 0 {
+						return errors.Join(errs...)
+					}
 				} else {
 					d.info(ctx, "rent offer sent", o.OrderNum)
 				}
@@ -147,13 +169,14 @@ func (d *EcoDeliveryDeps) runRentDelivery(ctx context.Context, start, end time.T
 		ok, aerr := d.Steam.AcceptTradeOffer(ctx, detail.OfferID)
 		if aerr != nil {
 			d.warn(ctx, "rent.accept_offer_failed", detail.OfferID, aerr.Error())
+			errs = append(errs, fmt.Errorf("steam accept rent %s: %w", detail.OfferID, aerr))
 			continue
 		}
 		if ok {
 			d.markAccepted(ctx, detail.OfferID, detail.HashName, o.OrderNum)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *EcoDeliveryDeps) markAccepted(ctx context.Context, offerID, goodsName, orderNum string) {

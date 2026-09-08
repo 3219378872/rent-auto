@@ -42,18 +42,6 @@ func TestRound2(t *testing.T) {
 	}
 }
 
-// pricePtr feeds raw upstream prices into anchors; NaN/Inf must read as absent.
-func TestPricePtrNonFinite(t *testing.T) {
-	for _, v := range []float64{math.NaN(), math.Inf(1), 0, -3} {
-		if pricePtr(v) != nil {
-			t.Fatalf("pricePtr(%v) should be nil", v)
-		}
-	}
-	if p := pricePtr(12.345); p == nil || *p != 12.35 {
-		t.Fatalf("pricePtr(12.345)=%v", p)
-	}
-}
-
 // anchor math contract: V = median of the non-null pair (pricing-spec §1)
 func TestAnchorContract(t *testing.T) {
 	var uu, eco *float64

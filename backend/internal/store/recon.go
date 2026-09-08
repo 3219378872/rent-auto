@@ -29,7 +29,11 @@ func (s *Store) RoutableInventory(ctx context.Context) ([]RoutableItem, error) {
 		   SELECT channel_route FROM strategies
 		   WHERE scope='global' AND enabled ORDER BY priority DESC, id LIMIT 1
 		 ) gs ON true
-		 WHERE i.status IN ('in_stock') AND i.tradable`)
+		 WHERE i.status IN ('in_stock','listed') AND i.tradable
+		   AND NOT EXISTS (SELECT 1 FROM inventory_items blocked WHERE blocked.asset_id=i.asset_id
+		                   AND blocked.status IN ('leased','locked','sold'))
+		   AND NOT EXISTS (SELECT 1 FROM listings leased WHERE leased.asset_id=i.asset_id
+		                   AND leased.actual_state='leased')`)
 	if err != nil {
 		return nil, fmt.Errorf("routable inventory: %w", err)
 	}
@@ -48,24 +52,23 @@ func (s *Store) RoutableInventory(ctx context.Context) ([]RoutableItem, error) {
 }
 
 type ActiveListing struct {
-	ID       int64          `json:"id"`
-	Channel  domain.Channel `json:"channel"`
-	HashName string         `json:"hash_name"`
-	GoodsRef string         `json:"goods_ref"`
-	AssetID  string         `json:"asset_id"`
-	State    string         `json:"state"`     // actual_state: active | leased
-	SyncedAt time.Time      `json:"synced_at"` // last actual-state sync (grace anchor); zero = unknown
+	ID             int64          `json:"id"`
+	Channel        domain.Channel `json:"channel"`
+	HashName       string         `json:"hash_name"`
+	GoodsRef       string         `json:"goods_ref"`
+	AssetID        string         `json:"asset_id"`
+	State          string         `json:"state"`     // actual_state: active | leased
+	SyncedAt       time.Time      `json:"synced_at"` // last actual-state sync; not a grace anchor
+	MismatchSince  *time.Time
+	MismatchReason string
 }
 
-// AllActiveListings lists rows whose actual state is active/leased.
-// actual_synced_at 按 nullable 直读：NULL（从未同步）映射为零值 SyncedAt，
-// 调用方 PlanFrom 的 IsZero 分支（grace 未知 fail safe 跳过）保持有效——
-// 此前 COALESCE(actual_synced_at, listed_at) 把"未知"伪装成"listed_at 已同步"，
-// 让孤儿宽限对从未同步的行错误放行。
+// AllActiveListings keeps last-seen freshness separate from the persistent
+// mismatch observation used for orphan/surplus grace.
 func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT id, channel, hash_name, goods_ref, asset_id, actual_state,
-		        actual_synced_at
+		        actual_synced_at, recon_mismatch_since, COALESCE(recon_mismatch_reason,'')
 		 FROM listings
 		 WHERE actual_state IN ('active','leased')`)
 	if err != nil {
@@ -76,7 +79,7 @@ func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) 
 	for rows.Next() {
 		var l ActiveListing
 		var syncedAt *time.Time
-		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef, &l.AssetID, &l.State, &syncedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.Channel, &l.HashName, &l.GoodsRef, &l.AssetID, &l.State, &syncedAt, &l.MismatchSince, &l.MismatchReason); err != nil {
 			return nil, err
 		}
 		if syncedAt != nil {
@@ -85,6 +88,24 @@ func (s *Store) AllActiveListings(ctx context.Context) ([]ActiveListing, error) 
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// ObserveReconMismatches advances only continuous mismatches, independently
+// of normal shelf heartbeats. An empty reason clears an old observation.
+func (s *Store) ObserveReconMismatches(ctx context.Context, observations map[int64]string, now time.Time) error {
+	ids := make([]int64, 0, len(observations))
+	reasons := make([]string, 0, len(observations))
+	for id, reason := range observations {
+		ids = append(ids, id)
+		reasons = append(reasons, reason)
+	}
+	_, err := s.Pool.Exec(ctx, `UPDATE listings l SET
+	 recon_mismatch_since=CASE WHEN o.reason='' OR l.actual_state<>'active' THEN NULL
+	   WHEN l.recon_mismatch_reason=o.reason THEN COALESCE(l.recon_mismatch_since,$3)
+	   ELSE $3 END,
+	 recon_mismatch_reason=CASE WHEN o.reason='' OR l.actual_state<>'active' THEN NULL ELSE o.reason END
+	 FROM unnest($1::bigint[],$2::text[]) AS o(id,reason) WHERE l.id=o.id`, ids, reasons, now)
+	return err
 }
 
 // CountActiveListings returns how many rows are currently active/leased for
@@ -112,6 +133,7 @@ func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, 
 		   desired_state='active', actual_state='active',
 		   rent_price=EXCLUDED.rent_price, long_rent_price=EXCLUDED.long_rent_price,
 		   max_days=EXCLUDED.max_days, deposit=EXCLUDED.deposit, actual_synced_at=now(),
+		   recon_mismatch_since=NULL,recon_mismatch_reason=NULL,
 		   sublet_applied=$1='eco'`,
 		channel, channelID, hashName, goodsRef, rent, long, days, deposit)
 	return err
@@ -120,7 +142,8 @@ func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, 
 // MarkListingDelisted flips a row to delisted after successful removal.
 func (s *Store) MarkListingDelisted(ctx context.Context, channel, goodsRef string) error {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE listings SET desired_state='delisted', actual_state='none', actual_synced_at=now()
+		`UPDATE listings SET desired_state='delisted', actual_state='none', actual_synced_at=now(),
+		 recon_mismatch_since=NULL,recon_mismatch_reason=NULL
 		 WHERE channel=$1 AND goods_ref=$2`, channel, goodsRef)
 	if err != nil {
 		return err

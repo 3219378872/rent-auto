@@ -20,13 +20,28 @@ export default function Strategies() {
     hashName: string
     route: string
     real: boolean
+    priority: number
+    params: Record<string, unknown>
     form: StrategyParams
   } | null>(null)
 
   const tplPatchGroup = (group: GroupKey, key: string, value: number) =>
-    setTplEditing((t) => (t ? { ...t, form: { ...t.form, [group]: { ...t.form[group], [key]: value } } as StrategyParams } : t))
+    setTplEditing((t) => {
+      if (!t) return t
+      const current = t.params[group]
+      const overrides = current && typeof current === 'object' ? current : {}
+      return {
+        ...t,
+        params: { ...t.params, [group]: { ...overrides, [key]: value } },
+        form: { ...t.form, [group]: { ...t.form[group], [key]: value } } as StrategyParams,
+      }
+    })
   const tplPatchInt = (key: 'uu_max_days' | 'eco_max_days', value: number) =>
-    setTplEditing((t) => (t ? { ...t, form: { ...t.form, [key]: Math.round(value) } } : t))
+    setTplEditing((t) => (t ? {
+      ...t,
+      params: { ...t.params, [key]: Math.round(value) },
+      form: { ...t.form, [key]: Math.round(value) },
+    } : t))
 
   const openNewTpl = () => {
     setErr(''); setMsg('')
@@ -35,7 +50,10 @@ export default function Strategies() {
       setErr('暂无可用模板（待库存同步产出后再创建模板级策略）')
       return
     }
-    setTplEditing({ hashName: usable[0].hash_name, route: 'both', real: false, form: cloneDefaults() })
+    setTplEditing({
+      hashName: usable[0].hash_name, route: globalRow?.channel_route ?? 'both', real: false,
+      priority: 0, params: {}, form: normalizeParams(globalRow?.params ?? {}),
+    })
   }
 
   const saveTpl = async () => {
@@ -47,8 +65,9 @@ export default function Strategies() {
       await api.post('/strategies/template', {
         hash_name: tplEditing.hashName,
         channel_route: tplEditing.route,
-        params: tplEditing.form,
-        ...(tplEditing.id ? {} : { real_execution_enabled: tplEditing.real }),
+        params: tplEditing.params,
+        real_execution_enabled: tplEditing.real,
+        priority: tplEditing.priority,
       })
       setMsg(`模板策略已保存：${tplEditing.hashName}`)
       setTplEditing(null)
@@ -71,7 +90,7 @@ export default function Strategies() {
   }
 
   const loadTemplates = useCallback(() => {
-    api.get<TemplateRow[]>('/templates').then(setTemplates).catch(() => undefined)
+    api.get<TemplateRow[]>('/templates').then(setTemplates).catch((e) => setErr(e.message))
   }, [])
 
   const toggleBlacklist = async (t: TemplateRow) => {
@@ -149,7 +168,7 @@ export default function Strategies() {
           <label className="switch">
             <input type="checkbox" checked={real} onChange={(e) => setReal(e.target.checked)} />
             <span className="track" />
-            允许真实执行（关闭 = 永远 dry-run）
+            全局真实执行
           </label>
         </div>
         <div className="hint" style={{ marginTop: 8 }}>
@@ -209,7 +228,7 @@ export default function Strategies() {
         <div className="toolbar" style={{ marginBottom: 8 }}>
           <h3 style={{ margin: 0 }}>模板级覆盖策略（US-STRAT-02）</h3>
           <div className="grow" />
-          <button onClick={openNewTpl} disabled={tplEditing !== null}>新建模板策略</button>
+          <button onClick={openNewTpl} disabled={tplEditing !== null || !globalRow}>新建模板策略</button>
         </div>
         {tplEditing && (
           <div className="section" style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: 12, marginTop: 0 }}>
@@ -240,21 +259,30 @@ export default function Strategies() {
                   </button>
                 ))}
               </div>
-              {!tplEditing.id && (
-                <label className="switch">
-                  <input type="checkbox" checked={tplEditing.real}
-                    onChange={(e) => setTplEditing({ ...tplEditing, real: e.target.checked })} />
-                  <span className="track" />
-                  允许真实执行（关闭 = 永远 dry-run）
-                </label>
-              )}
+              <label className="switch">
+                <input type="checkbox" checked={tplEditing.real}
+                  onChange={(e) => setTplEditing({ ...tplEditing, real: e.target.checked })} />
+                <span className="track" />
+                模板真实执行
+              </label>
+              <label className="field-label">
+                优先级{' '}
+                <input type="number" className="num-box" value={tplEditing.priority}
+                  min={-2147483648} max={2147483647} step={1}
+                  onChange={(e) => {
+                    const value = Number(e.target.value)
+                    if (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647) {
+                      setTplEditing({ ...tplEditing, priority: value })
+                    }
+                  }} />
+              </label>
             </div>
-            {!tplEditing.id && (
-              <div className="hint">已有覆盖的模板再次保存会整行替换；更新时留空真实执行开关则保留原值。</div>
-            )}
             <ParamGroupsEditor form={tplEditing.form} patchGroup={tplPatchGroup} patchInt={tplPatchInt} />
             <div className="toolbar">
               <button onClick={saveTpl}>保存模板策略</button>
+              <button className="ghost" onClick={() => setTplEditing({
+                ...tplEditing, params: {}, form: normalizeParams(globalRow?.params ?? {}),
+              })}>清除参数覆盖</button>
               <button className="ghost" onClick={() => setTplEditing(null)}>取消</button>
             </div>
           </div>
@@ -278,7 +306,9 @@ export default function Strategies() {
                         hashName: tpl?.hash_name ?? s.name.replace(/^tpl:/, ''),
                         route: s.channel_route,
                         real: s.real_execution_enabled,
-                        form: normalizeParams(s.params ?? {}),
+                        priority: s.priority,
+                        params: s.params ?? {},
+                        form: normalizeParams(s.params ?? {}, normalizeParams(globalRow?.params ?? {})),
                       })
                     }}
                     disabled={tplEditing !== null}>

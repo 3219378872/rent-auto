@@ -43,9 +43,9 @@ func (a *Adapter) Healthy(ctx context.Context) error {
 // 3 出售交易中, 4 出租上架, 5 出租交易中, 6 租售上架, 7 租售交易中,
 // 8 预售上架, 9 预售交易中, 10 打包上架, 11 打包交易中.
 // Mark price uses Price (平台市场价), falling back to SteamPrice (Steam市场价).
-// Single page of ≤100 — mirrors the UU adapter; page through if ever needed.
+// A successful response is a complete snapshot, never a partial first page.
 func (a *Adapter) Inventory(ctx context.Context) ([]domain.InventoryItem, error) {
-	var raw struct {
+	type inventoryPage struct {
 		PageResult []struct {
 			StockID    string  `json:"StockId"`
 			AssetID    string  `json:"AssetId"`
@@ -56,37 +56,50 @@ func (a *Adapter) Inventory(ctx context.Context) ([]domain.InventoryItem, error)
 			Tradable   bool    `json:"Tradable"`
 			Status     int     `json:"Status"`
 		} `json:"PageResult"`
-		TotalRecord int `json:"TotalRecord"`
+		TotalRecord *int `json:"TotalRecord"`
 	}
-	biz := map[string]any{"GameId": "730", "PageIndex": 1, "PageSize": 100}
-	if err := a.c.post(ctx, "/Api/Selling/QueryStock", biz, &raw); err != nil {
-		return nil, err
+	var out []domain.InventoryItem
+	for pageIndex := 1; pageIndex <= maxListPages; pageIndex++ {
+		var raw inventoryPage
+		biz := map[string]any{"GameId": "730", "PageIndex": pageIndex, "PageSize": 100}
+		if err := a.c.post(ctx, "/Api/Selling/QueryStock", biz, &raw); err != nil {
+			return nil, err
+		}
+		if raw.PageResult == nil && raw.TotalRecord == nil {
+			return nil, fmt.Errorf("eco: inventory missing page result")
+		}
+		for _, it := range raw.PageResult {
+			ref := it.AssetID
+			if ref == "" {
+				ref = it.StockID
+			}
+			mark := it.Price
+			if mark <= 0 {
+				mark = it.SteamPrice
+			}
+			status := "locked"
+			switch {
+			case !it.Tradable:
+			case it.Status == 1: // 待上架
+				status = "in_stock"
+			case it.Status == 4 || it.Status == 6 || it.Status == 8 || it.Status == 10: // 出租/租售/预售/打包上架
+				status = "listed"
+			}
+			out = append(out, domain.InventoryItem{
+				Channel: domain.ChannelECO, AssetID: ref,
+				HashName: it.HashName, DisplayName: it.GoodsName,
+				MarkPrice: mark, Tradable: it.Tradable, Status: status,
+			})
+		}
+		done, err := completePage(raw.TotalRecord, len(raw.PageResult), len(out))
+		if err != nil {
+			return nil, fmt.Errorf("eco: inventory: %w", err)
+		}
+		if done {
+			return out, nil
+		}
 	}
-	out := make([]domain.InventoryItem, 0, len(raw.PageResult))
-	for _, it := range raw.PageResult {
-		ref := it.AssetID
-		if ref == "" {
-			ref = it.StockID
-		}
-		mark := it.Price
-		if mark <= 0 {
-			mark = it.SteamPrice
-		}
-		status := "locked"
-		switch {
-		case !it.Tradable:
-		case it.Status == 1: // 待上架
-			status = "in_stock"
-		case it.Status == 4 || it.Status == 6 || it.Status == 8 || it.Status == 10: // 出租/租售/预售/打包上架
-			status = "listed"
-		}
-		out = append(out, domain.InventoryItem{
-			Channel: domain.ChannelECO, AssetID: ref,
-			HashName: it.HashName, DisplayName: it.GoodsName,
-			MarkPrice: mark, Tradable: it.Tradable, Status: status,
-		})
-	}
-	return out, nil
+	return nil, fmt.Errorf("eco: inventory exceeds page limit %d", maxListPages)
 }
 
 func (a *Adapter) LeaseShelf(ctx context.Context) ([]domain.ShelfListing, error) {
@@ -210,14 +223,29 @@ func (a *Adapter) RepriceLease(ctx context.Context, items []platform.RepriceLeas
 }
 
 func (a *Adapter) Delist(ctx context.Context, goodsRefs []string) error {
+	if len(goodsRefs) == 0 {
+		return nil
+	}
 	results, err := a.c.OffshelfRentGoods(ctx, goodsRefs)
 	if err != nil {
 		return err
 	}
+	expected := make(map[string]bool, len(goodsRefs))
+	for _, ref := range goodsRefs {
+		expected[ref] = false
+	}
+	if len(results) != len(expected) {
+		return fmt.Errorf("%w: incomplete delist results", platform.ErrPartialFailure)
+	}
 	for _, r := range results {
+		seen, ok := expected[r.GoodsNum]
+		if !ok || seen {
+			return fmt.Errorf("%w: unexpected or duplicate delist result", platform.ErrPartialFailure)
+		}
 		if !r.IsSuccess {
 			return &platform.PartialError{Ref: firstNonEmpty(r.GoodsNum, r.AssetID), Msg: r.ErrorMsg}
 		}
+		expected[r.GoodsNum] = true
 	}
 	return nil
 }

@@ -156,7 +156,7 @@ export function ParamGroupsEditor(props: {
           />
           <SliderField
             label="max_change_ratio 单次改价上限" hint="单次改价相对当前价的最大变动幅度"
-            value={g.max_change_ratio} min={0.01} max={1} step={0.01} display="percent"
+            value={g.max_change_ratio} min={0} max={1} step={0.01} display="percent"
             onChange={(v) => patchGroup('guardrails', 'max_change_ratio', v)}
           />
           <SliderField

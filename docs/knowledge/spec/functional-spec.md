@@ -55,6 +55,10 @@
 - 面板策略页可切换 enable_real_execution
 - （2026-08-24 起）reconcile 与 reprice 同受 `DRY_RUN_DEFAULT || !real_execution_enabled` 双层门禁；门禁查询失败强制 dry-run
 - （2026-09-03 起）reconcile 按模板逐 Action 门禁：全局 dry-run 兜底，模板非 real 进 dry 分批；发货/0CD（uu_delivery/steam_offers/eco_delivery/zero_cd）同门 skipped 审计
+- （2026-09-08）全局 `real_execution_enabled` 是总闸，模板许可不能越过它；
+  reprice/reconcile 的有效 dry-run 为 `DRY_RUN_DEFAULT || !global_real || !effective_real`。
+- 模板编辑保留未覆盖字段的继承关系、优先级和执行开关；全局/模板写入在同一锁边界内
+  校验最终合并参数，非法组合不得部分持久化。
 
 ### AC-T2 护栏（全部任务强制）
 - 价格边界 [min_rent, max_rent]；单次改价幅度 ≤ max_change_ratio(默认15%)

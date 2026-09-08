@@ -6,6 +6,6 @@ export const scaleY = (v: number, min: number, max: number, h: number): number =
 // rendered as the dashboard alert bar (US-DASH-03).
 export function channelIssues(health: Record<string, string>): string[] {
   return Object.entries(health)
-    .filter(([, v]) => v !== 'ok')
+    .filter(([, v]) => v !== 'ok' && !v.startsWith('ok:'))
     .map(([ch, v]) => `${ch.toUpperCase()}：${v}`)
 }

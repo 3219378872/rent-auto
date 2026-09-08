@@ -93,6 +93,18 @@ POST steamcommunity.com/trade/new/acknowledge {sessionid, message=1}   ← 新�
   10/95/96/97/108/110/116 → `ErrRateLimited`（调度冷却），其余 generic。
   `doRawFull` 手动重定向链加 8 跳上限（防 Location 环路无限递归）。
 
+### 1.3 并发、健康与错误安全（2026-09-08）
+
+- Session 的 tokens/credentials 为私有状态，`Tokens()` 只返回快照；登录、
+  刷新、查询、接受/确认、健康探针在会话内串行执行，保证 cookie 与 token
+  配套。Registry 返回共享指针不意味着调用方可以无锁读写会话字段。
+- Health 不能以跟随重定向后的 HTTP 200 独立判活：`/my` 跳到登录页面不算
+  已登录，最终路径必须仍为 `/my` 或 profile 路径（`/id/`、`/profiles/`）。
+- WebAPI query 包含 access_token；`net/http` 的 URL error 禁止原样格式化入日志。
+  包装错误只输出 method/host/通用失败文案，保留 cause 供 `errors.Is/As` 分类。
+- 上述行为由并发 `-race`、登录重定向及假 token 错误注入测试验证；不代表
+  当前真实账号已登录或可交易。
+
 ## 2. Steam Guard 双算法（guard.py，已做 Python 向量交叉验证）
 
 ```python
@@ -122,7 +134,8 @@ GET api.steampowered.com/IEconService/GetTradeOffers/v1
 仅处理 `trade_offers_received` 且 **`items_to_give` 为空数组** 的报价：
 - 覆盖两类业务动作：纯礼物报价；租赁归还报价（对方把饰品还给我们，我们零支出）
 - `items_to_give` 非空 → 跳过并记日志（绝不自动付出资产）
-- 已被处理(state≠Active=2/ConfirmationNeed=3) → 加入忽略名单防抖
+- 已被处理(state≠Active=2/ConfirmationNeed=9) → 跳过；**Accepted=3**，不是待确认
+  （2026-09-08 按参考件 `steampy/models.py` 标准枚举修正）。
 
 ### 3.3 接受 + 二次确认时序
 ```
@@ -143,6 +156,13 @@ GET  .../mobileconf/ajaxop?op=allow&cid=<conf.id>&ck=<nonce>&<同款签名参数
 2026-08-24 起移除无条件后缀匹配（曾可能误确认 creator_id 恰为报价号数字后缀的无关交易）。
 **creator_id 是 JSON 字符串**（2026-08-27 真机校订）：getlist 返回
 `creator_id:"<digits>"` 而非数字——按 int64 解码会让整个 confirmlist 解码失败。
+
+**恢复分支（2026-09-08）**：接受前以 GetTradeOffer 校验目标 ID 与当前状态；
+Active=2 才发送 accept，ConfirmationNeed=9 直接恢复精确 ID 的移动确认，
+Accepted=3 作为幂等完成。零成本自动接受在单报价回读时再次校验无 outgoing
+items，不能借恢复分支绕过。accept 返回明确 tradeid 也代表已完成；未知响应
+仍报错。state9 恢复和无移动确认的 tradeid 回包已由 mock 固化，当前平台实机
+报价方向、待确认状态转换仍需用户授权后另行验收。
 
 ## 4. UU 发货链路（uu/delivery.go）
 
