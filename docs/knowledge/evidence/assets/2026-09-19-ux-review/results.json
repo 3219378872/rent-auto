@@ -1,0 +1,1137 @@
+{
+  "sourceCommit": "5a9b303d3003eed0f3b9d43402b5947d5be328c5",
+  "evidence": "Chromium with synthetic, intercepted API fixtures; not a live backend or real device",
+  "viewports": [
+    {
+      "width": 1440,
+      "route": "/login",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 900,
+      "main": null,
+      "aside": null,
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 963,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 963,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 963
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 105,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 71,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 1440,
+      "route": "/inventory",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 2724,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 2724,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2724
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1188,
+          "height": 2537,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "搜索名称…"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/listings",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 2050,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 2050,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2050
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1188,
+          "height": 1861,
+          "rows": 48
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/orders",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 2128,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 2128,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2128
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1188,
+          "height": 1937,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/strategies",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 2084,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 2084,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2084
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 683,
+          "rows": 17
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 113,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 83,
+          "rows": 1
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 221,
+          "rows": 4
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 1440,
+      "route": "/channels",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 1241,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 1241,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 1241
+      },
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "+86 手机号"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "PartnerId"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "SteamID（可空）"
+        },
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "Steam 用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "shared_secret (base64)"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "identity_secret (base64)"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/audit",
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 900,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 900,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 900
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1188,
+          "height": 75,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "动作过滤，如 reprice"
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/login",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 900,
+      "main": null,
+      "aside": null,
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 963,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 963,
+        "scrollWidth": 1080
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 963
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 990,
+          "height": 105,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 990,
+          "height": 71,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 1280,
+      "route": "/inventory",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 2724,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 2724,
+        "scrollWidth": 1080
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2724
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1028,
+          "height": 2537,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "搜索名称…"
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/listings",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 2050,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 2050,
+        "scrollWidth": 1119
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2050
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1093,
+          "height": 1861,
+          "rows": 48
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/orders",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 2128,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 2128,
+        "scrollWidth": 1154
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2128
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1128,
+          "height": 1937,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/strategies",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 2123,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 2123,
+        "scrollWidth": 1080
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2123
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 990,
+          "height": 759,
+          "rows": 17
+        },
+        {
+          "x": 245,
+          "width": 990,
+          "height": 113,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 990,
+          "height": 83,
+          "rows": 1
+        },
+        {
+          "x": 245,
+          "width": 990,
+          "height": 221,
+          "rows": 4
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 1280,
+      "route": "/channels",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 1241,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 1241,
+        "scrollWidth": 1080
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 1241
+      },
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "+86 手机号"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "PartnerId"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "SteamID（可空）"
+        },
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "Steam 用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "shared_secret (base64)"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "identity_secret (base64)"
+        }
+      ]
+    },
+    {
+      "width": 1280,
+      "route": "/audit",
+      "documentWidth": 1280,
+      "viewport": 1280,
+      "pageHeight": 900,
+      "main": {
+        "x": 200,
+        "width": 1080,
+        "height": 900,
+        "scrollWidth": 1080
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 900
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1028,
+          "height": 75,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "动作过滤，如 reprice"
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/login",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 844,
+      "main": null,
+      "aside": null,
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 1716,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 1716,
+        "scrollWidth": 341
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 1716
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 190,
+          "height": 105,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 296,
+          "height": 71,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 390,
+      "route": "/inventory",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 2866,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 2866,
+        "scrollWidth": 955
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2866
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 929,
+          "height": 2537,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "搜索名称…"
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/listings",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 2221,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 2221,
+        "scrollWidth": 1119
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2221
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1093,
+          "height": 1861,
+          "rows": 48
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/orders",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 2272,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 2272,
+        "scrollWidth": 1154
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2272
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 1128,
+          "height": 1937,
+          "rows": 50
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/strategies",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 3708,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 3708,
+        "scrollWidth": 724
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 3708
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 547,
+          "height": 2594,
+          "rows": 17
+        },
+        {
+          "x": 245,
+          "width": 556,
+          "height": 113,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 679,
+          "height": 83,
+          "rows": 1
+        },
+        {
+          "x": 245,
+          "width": 599,
+          "height": 221,
+          "rows": 4
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    {
+      "width": 390,
+      "route": "/channels",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 2389,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 2389,
+        "scrollWidth": 305
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2389
+      },
+      "tables": [],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "+86 手机号"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "PartnerId"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "SteamID（可空）"
+        },
+        {
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "placeholder": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+        },
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "Steam 用户名"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "密码"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "shared_secret (base64)"
+        },
+        {
+          "tag": "INPUT",
+          "type": "password",
+          "placeholder": "identity_secret (base64)"
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "route": "/audit",
+      "documentWidth": 390,
+      "viewport": 390,
+      "pageHeight": 844,
+      "main": {
+        "x": 200,
+        "width": 190,
+        "height": 844,
+        "scrollWidth": 813
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 844
+      },
+      "tables": [
+        {
+          "x": 226,
+          "width": 787,
+          "height": 75,
+          "rows": 1
+        }
+      ],
+      "controlsWithoutExplicitLabel": [
+        {
+          "tag": "INPUT",
+          "type": "text",
+          "placeholder": "动作过滤，如 reprice"
+        },
+        {
+          "tag": "SELECT",
+          "type": "select-one",
+          "placeholder": null
+        }
+      ]
+    }
+  ],
+  "observations": {
+    "loadingLooksEmpty": {
+      "text": "库存状态\n全部渠道\nUU\nECO\n全部状态\n在库\n已上架\n已租出\n锁定\n同步未见\n共 0 件\n渠道\t名称\t状态\t参考价\t成本价\t账面收益率\t录入成本\n上一页\n第 1 页\n下一页",
+      "rows": 0,
+      "busyIndicators": 0
+    },
+    "staleFilter": {
+      "selected": "uu",
+      "firstRowChannel": "ECO",
+      "busyIndicators": 0
+    },
+    "errorRecovery": {
+      "text": "库存状态\ninternal error\n全部渠道\nUU\nECO\n全部状态\n在库\n已上架\n已租出\n锁定\n同步未见\n共 0 件\n渠道\t名称\t状态\t参考价\t成本价\t账面收益率\t录入成本\n上一页\n第 1 页\n下一页",
+      "buttons": [
+        "上一页",
+        "下一页"
+      ]
+    },
+    "emptyOrders": "租赁订单\n全部渠道\nUU\nECO\n全部状态\n租赁中\n已完成\n已买断\n已取消\n共 0 单\n导出 CSV\n渠道\t订单号\t名称\t类型\t状态\t租期\t租金/天\t订单金额\t押金\t到期\n上一页\n第 1 页\n下一页",
+    "healthFailure": {
+      "alerts": 0,
+      "text": "仪表盘\n总资产\n¥158600.00\n库存 ¥110000.00\n总收入\n¥3150.00\n今日 ¥68.50\n年化收益率\n18.45%\n在租件数\n14\n在外押金 · UU\n¥10000.00\n在外押金 · ECO\n¥20000.00\n钱包余额 · UU\n¥7200.00\n钱包余额 · ECO\n¥11400.00\n近 30 天收益\n2026-08-21 → 2026-09-19\n分渠道收入\n渠道\t收入\t订单数\nuu\t¥1550.00\t44\neco\t¥1800.00\t59\n分类成本与收益\n品类\t成本\t收入\t收益率\nknife\t¥78000.00\t¥2240.00\t2.87%"
+    },
+    "repriceScope": {
+      "requests": [
+        {
+          "path": "/jobs/reprice/run",
+          "query": "",
+          "method": "POST",
+          "body": null
+        }
+      ],
+      "dialogs": [],
+      "message": "已触发立即重定价",
+      "availableButtons": [
+        "立即重定价",
+        "上一页",
+        "下一页"
+      ]
+    },
+    "unloadedStrategy": {
+      "saveEnabled": true,
+      "renderedTopn": "15",
+      "persistedTopn": 20
+    },
+    "strategyHeight": {
+      "documentWidth": 1440,
+      "viewport": 1440,
+      "pageHeight": 2084,
+      "main": {
+        "x": 200,
+        "width": 1240,
+        "height": 2084,
+        "scrollWidth": 1240
+      },
+      "aside": {
+        "x": 0,
+        "width": 200,
+        "height": 2084
+      },
+      "tables": [
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 683,
+          "rows": 17
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 113,
+          "rows": 2
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 83,
+          "rows": 1
+        },
+        {
+          "x": 245,
+          "width": 1150,
+          "height": 221,
+          "rows": 4
+        }
+      ],
+      "controlsWithoutExplicitLabel": []
+    },
+    "strategySaveButtonY": 1212,
+    "unsavedStrategy": {
+      "valueAfterReturn": "20",
+      "dialogs": []
+    },
+    "numericTyping": {
+      "intended": "0.95",
+      "actual": "0.81"
+    },
+    "duplicateStrategySave": {
+      "requests": [
+        {
+          "path": "/strategies/global",
+          "query": "",
+          "method": "PUT",
+          "body": "{\"params\":{\"baseline\":{\"topn\":20,\"k1\":0.81,\"k2\":0.95,\"k3\":0.98,\"min_lease_ratio\":0},\"factor\":{\"min\":0.85,\"max\":1.25,\"step_up\":0.03,\"step_down\":0.05,\"stale_days\":7},\"guardrails\":{\"min_rent\":0.5,\"max_rent\":20000,\"max_change_ratio\":0.15,\"noise_ratio\":0.02,\"cooldown_minutes\":30,\"deposit_floor_ratio\":0.3,\"deposit_cap_ratio\":2},\"uu_max_days\":60,\"eco_max_days\":30},\"channel_route\":\"eco_only\",\"real_execution_enabled\":false}"
+        },
+        {
+          "path": "/strategies/global",
+          "query": "",
+          "method": "PUT",
+          "body": "{\"params\":{\"baseline\":{\"topn\":20,\"k1\":0.81,\"k2\":0.95,\"k3\":0.98,\"min_lease_ratio\":0},\"factor\":{\"min\":0.85,\"max\":1.25,\"step_up\":0.03,\"step_down\":0.05,\"stale_days\":7},\"guardrails\":{\"min_rent\":0.5,\"max_rent\":20000,\"max_change_ratio\":0.15,\"noise_ratio\":0.02,\"cooldown_minutes\":30,\"deposit_floor_ratio\":0.3,\"deposit_cap_ratio\":2},\"uu_max_days\":60,\"eco_max_days\":30},\"channel_route\":\"eco_only\",\"real_execution_enabled\":false}"
+        }
+      ],
+      "disabled": false
+    },
+    "saveFeedback": {
+      "y": -714,
+      "scrollY": 779,
+      "visibleInViewport": false,
+      "text": "策略已保存"
+    },
+    "duplicateCredentialSave": {
+      "requests": [
+        {
+          "path": "/channels/eco",
+          "query": "",
+          "method": "PUT",
+          "body": "{\"partner_id\":\"synthetic-partner\",\"private_key_pem\":\"SYNTHETIC INVALID KEY FOR MOCK UI ONLY\",\"steam_id\":\"\"}"
+        },
+        {
+          "path": "/channels/eco",
+          "query": "",
+          "method": "PUT",
+          "body": "{\"partner_id\":\"synthetic-partner\",\"private_key_pem\":\"SYNTHETIC INVALID KEY FOR MOCK UI ONLY\",\"steam_id\":\"\"}"
+        }
+      ],
+      "disabled": false
+    },
+    "credentialFieldAfterSuccess": "SYNTHETIC INVALID KEY FOR MOCK UI ONLY",
+    "auditDetail": {
+      "clientWidth": 573,
+      "scrollWidth": 3474,
+      "title": "",
+      "expandControls": 0
+    },
+    "orderStatusOptions": [
+      "全部状态",
+      "租赁中",
+      "已完成",
+      "已买断",
+      "已取消"
+    ],
+    "buyoutType": "短租",
+    "filterPersistence": {
+      "channelAfterReload": "",
+      "searchAfterReload": ""
+    },
+    "loginReturn": "http://127.0.0.1:4179/#/",
+    "primaryButtonContrast": 3.22
+  },
+  "consoleErrors": [],
+  "unexpectedRequests": [],
+  "browser": "151.0.7922.34"
+}

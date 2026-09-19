@@ -1,0 +1,10 @@
+{
+  "numericTyping": "0.95 -> 0.95",
+  "draftSave": "passed",
+  "filter": "passed",
+  "globalScopeDialog": "passed",
+  "escapeClose": "passed",
+  "unknownHistoricalFields": "explicit",
+  "mobileDocumentOverflow": false,
+  "pageErrors": []
+}
