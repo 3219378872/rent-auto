@@ -1,0 +1,411 @@
+{
+  "evidence": "Chromium with intercepted synthetic APIs; no live platform writes or physical-device claims",
+  "sourceHead": "2d50192938337ecde4b8c6cc9dfdacaa86970306",
+  "checks": {
+    "no-document-overflow-1440-/login": true,
+    "labels-1440-/login": true,
+    "no-document-overflow-1440-/": true,
+    "labels-1440-/": true,
+    "no-document-overflow-1440-/inventory": true,
+    "labels-1440-/inventory": true,
+    "no-document-overflow-1440-/listings": true,
+    "labels-1440-/listings": true,
+    "no-document-overflow-1440-/orders": true,
+    "labels-1440-/orders": true,
+    "no-document-overflow-1440-/strategies": true,
+    "labels-1440-/strategies": true,
+    "no-document-overflow-1440-/channels": true,
+    "labels-1440-/channels": true,
+    "no-document-overflow-1440-/audit": true,
+    "labels-1440-/audit": true,
+    "no-document-overflow-1280-/login": true,
+    "labels-1280-/login": true,
+    "no-document-overflow-1280-/": true,
+    "labels-1280-/": true,
+    "no-document-overflow-1280-/inventory": true,
+    "labels-1280-/inventory": true,
+    "no-document-overflow-1280-/listings": true,
+    "labels-1280-/listings": true,
+    "no-document-overflow-1280-/orders": true,
+    "labels-1280-/orders": true,
+    "no-document-overflow-1280-/strategies": true,
+    "labels-1280-/strategies": true,
+    "no-document-overflow-1280-/channels": true,
+    "labels-1280-/channels": true,
+    "no-document-overflow-1280-/audit": true,
+    "labels-1280-/audit": true,
+    "no-document-overflow-390-/login": true,
+    "labels-390-/login": true,
+    "no-document-overflow-390-/": true,
+    "labels-390-/": true,
+    "no-document-overflow-390-/inventory": true,
+    "labels-390-/inventory": true,
+    "no-document-overflow-390-/listings": true,
+    "labels-390-/listings": true,
+    "no-document-overflow-390-/orders": true,
+    "labels-390-/orders": true,
+    "no-document-overflow-390-/strategies": true,
+    "labels-390-/strategies": true,
+    "no-document-overflow-390-/channels": true,
+    "labels-390-/channels": true,
+    "no-document-overflow-390-/audit": true,
+    "labels-390-/audit": true,
+    "loading-/inventory": true,
+    "loading-/listings": true,
+    "loading-/orders": true,
+    "loading-/audit": true,
+    "loading-/strategies": true,
+    "cannot-save-unloaded": true,
+    "loading-/channels": true,
+    "loading-/": true,
+    "no-unmarked-old-filter-rows": true,
+    "stale-request-cannot-overwrite": true,
+    "read-error-retry": true,
+    "explicit-empty": true,
+    "health-failure-is-unknown": true,
+    "unknown-execution-mode": true,
+    "global-scope-visible": true,
+    "global-request-has-no-filter": true,
+    "typed-0.95": true,
+    "typed-1.02": true,
+    "typed-0.5": true,
+    "invalid-value-no-request": true,
+    "cancel-navigation-keeps-draft": true,
+    "one-strategy-request": true,
+    "saved-keyboard-values": true,
+    "feedback-in-viewport": true,
+    "failure-preserves-draft": true,
+    "template-provenance": true,
+    "restore-inheritance-preserves-settings": true,
+    "full-long-detail": true,
+    "copy-full-detail": true,
+    "detail-focus-restored": true,
+    "invalid-range-visible": true,
+    "historical-unknown-not-rebuilt": true,
+    "buyout-labelled": true,
+    "csv-all-64-orders": true,
+    "filter-url-survives-reload": true,
+    "page-url-restored": true,
+    "browser-history-paging": true,
+    "one-credential-write": true,
+    "clear-secret-and-show-fingerprint": true,
+    "narrow-expanded-form-contained": true,
+    "narrow-nav-can-expand": true,
+    "login-returns-to-filtered-route": true,
+    "primary-contrast-aa": true,
+    "no-page-errors": true,
+    "network-isolated": true
+  },
+  "viewports": [
+    {
+      "route": "/login",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 546,
+          "scroll": 546
+        },
+        {
+          "client": 546,
+          "scroll": 546
+        },
+        {
+          "client": 1148,
+          "scroll": 1148
+        },
+        {
+          "client": 1148,
+          "scroll": 1148
+        }
+      ]
+    },
+    {
+      "route": "/inventory",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1186,
+          "scroll": 1186
+        }
+      ]
+    },
+    {
+      "route": "/listings",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1186,
+          "scroll": 1186
+        }
+      ]
+    },
+    {
+      "route": "/orders",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1186,
+          "scroll": 1186
+        }
+      ]
+    },
+    {
+      "route": "/strategies",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1148,
+          "scroll": 1148
+        },
+        {
+          "client": 0,
+          "scroll": 0
+        }
+      ]
+    },
+    {
+      "route": "/channels",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/audit",
+      "width": 1440,
+      "documentWidth": 1440,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1186,
+          "scroll": 1186
+        }
+      ]
+    },
+    {
+      "route": "/login",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 466,
+          "scroll": 466
+        },
+        {
+          "client": 466,
+          "scroll": 466
+        },
+        {
+          "client": 988,
+          "scroll": 988
+        },
+        {
+          "client": 988,
+          "scroll": 988
+        }
+      ]
+    },
+    {
+      "route": "/inventory",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1026,
+          "scroll": 1026
+        }
+      ]
+    },
+    {
+      "route": "/listings",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1026,
+          "scroll": 1026
+        }
+      ]
+    },
+    {
+      "route": "/orders",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1026,
+          "scroll": 1026
+        }
+      ]
+    },
+    {
+      "route": "/strategies",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 988,
+          "scroll": 988
+        },
+        {
+          "client": 0,
+          "scroll": 0
+        }
+      ]
+    },
+    {
+      "route": "/channels",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/audit",
+      "width": 1280,
+      "documentWidth": 1280,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 1026,
+          "scroll": 1026
+        }
+      ]
+    },
+    {
+      "route": "/login",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 330,
+          "scroll": 330
+        },
+        {
+          "client": 330,
+          "scroll": 330
+        },
+        {
+          "client": 330,
+          "scroll": 330
+        },
+        {
+          "client": 330,
+          "scroll": 347
+        }
+      ]
+    },
+    {
+      "route": "/inventory",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 360,
+          "scroll": 822
+        }
+      ]
+    },
+    {
+      "route": "/listings",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 360,
+          "scroll": 761
+        }
+      ]
+    },
+    {
+      "route": "/orders",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 360,
+          "scroll": 816
+        }
+      ]
+    },
+    {
+      "route": "/strategies",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 330,
+          "scroll": 713
+        },
+        {
+          "client": 0,
+          "scroll": 0
+        }
+      ]
+    },
+    {
+      "route": "/channels",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": []
+    },
+    {
+      "route": "/audit",
+      "width": 390,
+      "documentWidth": 390,
+      "unlabelled": 0,
+      "tableScrolls": [
+        {
+          "client": 360,
+          "scroll": 801
+        }
+      ]
+    }
+  ],
+  "pageErrors": [],
+  "unexpected": [],
+  "browser": "151.0.7922.34",
+  "primaryContrast": 5.494795403256885
+}
