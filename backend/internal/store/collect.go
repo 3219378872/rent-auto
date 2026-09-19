@@ -82,15 +82,20 @@ func refsToArray(set map[string]bool) []string {
 }
 
 type ListingFilter struct {
-	Channel domain.Channel
-	State   string
-	Limit   int
-	Offset  int
+	Channel                   domain.Channel
+	State                     string
+	Limit                     int
+	Offset                    int
+	HashName, AssetID, Search string
+	Mismatch                  bool
 }
 
 // LastDecision is the latest price_action summary attached to a listing row
 // (panel 决策依据 column).
 type LastDecision struct {
+	ID      int64      `json:"id"`
+	DryRun  bool       `json:"dry_run"`
+	Success bool       `json:"success"`
 	Action  string     `json:"action"` // publish|reprice|delist|skip
 	At      *time.Time `json:"at"`     // action timestamp
 	NewRent *float64   `json:"new_rent,omitempty"`
@@ -127,6 +132,19 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]ListingRow
 		args = append(args, f.State)
 		conds = append(conds, fmt.Sprintf("l.actual_state=$%d", len(args)))
 	}
+	for _, v := range []struct{ expression, value string }{{"l.hash_name=$%d", f.HashName}, {"l.asset_id=$%d", f.AssetID}} {
+		if v.value != "" {
+			args = append(args, v.value)
+			conds = append(conds, fmt.Sprintf(v.expression, len(args)))
+		}
+	}
+	if f.Search != "" {
+		args = append(args, "%"+f.Search+"%")
+		conds = append(conds, fmt.Sprintf("(l.hash_name ILIKE $%[1]d OR l.asset_id ILIKE $%[1]d OR l.goods_ref ILIKE $%[1]d)", len(args)))
+	}
+	if f.Mismatch {
+		conds = append(conds, "(l.recon_mismatch_since IS NOT NULL OR (l.desired_state='active' AND l.actual_state NOT IN ('active','leased')) OR (l.desired_state IN ('none','delisted') AND l.actual_state='active'))")
+	}
 	whereClause := "true"
 	if len(conds) > 0 {
 		whereClause = strings.Join(conds, " AND ")
@@ -140,10 +158,10 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]ListingRow
 	             l.desired_state, l.actual_state,
 	             l.rent_price, COALESCE(l.long_rent_price,0), COALESCE(l.max_days,0), COALESCE(l.deposit,0),
 	             l.listed_at, l.last_reprice_at, COALESCE(l.factor,1.0),
-	             pa.action, pa.ts, pa.new_rent, pa.decision::text
+	             pa.action, pa.ts, pa.new_rent, pa.decision::text,pa.id,pa.dry_run,pa.success
 	      FROM listings l
 	      LEFT JOIN LATERAL (
-	        SELECT action, ts, new_rent, decision FROM price_actions
+	        SELECT action, ts, new_rent, decision,id,dry_run,success FROM price_actions
 	        WHERE listing_id = l.id ORDER BY id DESC LIMIT 1
 	      ) pa ON true
 	      WHERE ` + whereClause + fmt.Sprintf(" ORDER BY l.id DESC LIMIT %d OFFSET %d", limit, offset)
@@ -156,19 +174,30 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]ListingRow
 	for rows.Next() {
 		var r ListingRow
 		var (
-			action      *string
-			at          *time.Time
-			newRent     *float64
-			decisionTxt *string
+			action          *string
+			at              *time.Time
+			newRent         *float64
+			decisionTxt     *string
+			id              *int64
+			dryRun, success *bool
 		)
 		if err := rows.Scan(&r.ID, &r.Channel, &r.AssetID, &r.HashName, &r.GoodsRef,
 			&r.DesiredState, &r.ActualState, &r.RentPrice, &r.LongRentPrice,
 			&r.MaxDays, &r.Deposit, &r.ListedAt, &r.LastRepriceAt, &r.Factor,
-			&action, &at, &newRent, &decisionTxt); err != nil {
+			&action, &at, &newRent, &decisionTxt, &id, &dryRun, &success); err != nil {
 			return nil, 0, err
 		}
 		if action != nil {
 			d := &LastDecision{Action: *action, At: at, NewRent: newRent}
+			if id != nil {
+				d.ID = *id
+			}
+			if dryRun != nil {
+				d.DryRun = *dryRun
+			}
+			if success != nil {
+				d.Success = *success
+			}
 			if decisionTxt != nil {
 				var dec struct {
 					Skip string `json:"skip"`

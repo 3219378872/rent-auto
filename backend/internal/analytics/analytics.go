@@ -70,10 +70,17 @@ type Dashboard struct {
 		Today     float64              `json:"today"`
 		ByChannel []store.ChannelTotal `json:"by_channel"`
 	} `json:"income"`
-	LeasedOut     int                   `json:"leased_out"`
-	AnnualizedROI float64               `json:"annualized_roi"`
-	Categories    []store.CategoryYield `json:"categories"`
-	Series30d     []store.DailyPoint    `json:"series_30d"`
+	LeasedOut            int                   `json:"leased_out"`
+	AnnualizedROI        float64               `json:"annualized_roi"`
+	Categories           []store.CategoryYield `json:"categories"`
+	Series30d            []store.DailyPoint    `json:"series_30d"`
+	ROIAvailable         bool                  `json:"roi_available"`
+	ObservationStartedAt *time.Time            `json:"observation_started_at"`
+	ObservationDays      float64               `json:"observation_days"`
+	CostedItems          int                   `json:"costed_items"`
+	InventoryItems       int                   `json:"inventory_items"`
+	CostTotal            float64               `json:"cost_total"`
+	SoldCost             float64               `json:"sold_cost"`
 }
 
 // BuildDashboard assembles all dashboard aggregates.
@@ -134,6 +141,12 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 	// so reporting gross double-counts deployed capital as return.
 	netTotal := NetIncome(total, soldCost)
 	d.Income.Total = netTotal
+	d.CostTotal = Round2(cost)
+	d.SoldCost = Round2(soldCost)
+	d.InventoryItems, d.CostedItems, err = st.CostCoverage(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	today, err := st.TodayIncome(ctx)
 	if err != nil {
@@ -150,6 +163,9 @@ func BuildDashboard(ctx context.Context, st *store.Store, wallets map[domain.Cha
 		return nil, err
 	}
 	if first != nil && cost > 0 {
+		d.ROIAvailable = true
+		d.ObservationStartedAt = first
+		d.ObservationDays = math.Max(1, time.Since(*first).Hours()/24)
 		d.AnnualizedROI = AnnualizedROI(netTotal, cost, *first, time.Now())
 	} // else: no observation window yet — report 0 rather than absurd extrapolation
 

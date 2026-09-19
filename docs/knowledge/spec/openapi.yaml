@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: rent-auto API
-  version: "0.9.0"
+  version: "0.10.0"
   description: |
     UU/ECO 双渠道 Steam 饰品租赁自动化系统 API。
     约定：
@@ -132,7 +132,12 @@ paths:
       parameters:
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
         - { name: status, in: query, schema: { type: string, enum: [in_stock, listed, leased, locked, sold, missing] } }
-        - { name: search, in: query, schema: { type: string }, description: 关键字（市场名模糊匹配） }
+        - { name: search, in: query, schema: { type: string }, description: 名称或资产 ID 模糊匹配 }
+        - { name: category, in: query, schema: { type: string }, description: 品类精确匹配；空品类以未分类表示 }
+        - { name: hash_name, in: query, schema: { type: string }, description: 模板精确匹配 }
+        - { name: asset_id, in: query, schema: { type: string }, description: 资产精确匹配 }
+        - { name: cost_missing, in: query, schema: { type: boolean }, description: true 仅返回未录入正数成本的记录 }
+        - { name: sort, in: query, schema: { type: string, enum: [name, price_desc, price_asc, cost_desc] }, description: 缺省或未知值按入库 ID 升序；排序作用于完整集合 }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -154,6 +159,10 @@ paths:
       parameters:
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
         - { name: state, in: query, schema: { type: string }, description: 实际状态过滤 }
+        - { name: hash_name, in: query, schema: { type: string } }
+        - { name: asset_id, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string }, description: 名称或资产 ID 或货架编号模糊匹配 }
+        - { name: mismatch, in: query, schema: { type: boolean }, description: 仅状态不一致；含持续不一致标记 }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -175,6 +184,14 @@ paths:
       parameters:
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
         - { name: status, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string }, description: 名称或订单号模糊匹配 }
+        - { name: hash_name, in: query, schema: { type: string } }
+        - { name: asset_id, in: query, schema: { type: string } }
+        - { name: order_type, in: query, schema: { type: string, enum: [short, long, buyout] } }
+        - { name: view, in: query, schema: { type: string, enum: [attention, active, history] }, description: attention=待支付/发货/归还/仲裁/违约/未知；active=leasing；history=done/bought_out/cancelled }
+        - { name: sort, in: query, schema: { type: string, enum: [due_asc, started_desc, amount_desc] }, description: 缺省或未知值按 ID 降序；空日期最后 }
+        - { name: since, in: query, schema: { type: string, format: date-time }, description: started_at 含下界 }
+        - { name: until, in: query, schema: { type: string, format: date-time }, description: started_at 不含上界；须晚于 since，非法返回 400 }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -190,6 +207,75 @@ paths:
                       items:
                         type: array
                         items: { $ref: "#/components/schemas/OrderRow" }
+  /inventory/categories:
+    get:
+      summary: 完整库存集合的品类选项（不受当前页或筛选限制）
+      responses:
+        "200":
+          description: 去重排序的品类数组
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+  /templates/catalog:
+    get:
+      summary: 可搜索的分页模板目录
+      parameters:
+        - { name: search, in: query, schema: { type: string }, description: hash_name 或 display_name 模糊匹配 }
+        - { name: blacklisted, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 分页目录与完整匹配数量
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/Template" } }
+        "400": { $ref: "#/components/responses/Err400" }
+  /execution/status:
+    get:
+      summary: 当前执行许可（只读；并不代表任务正在运行）
+      description: 环境 DRY_RUN_DEFAULT、全局总闸及有效模板许可共同决定。缺少环境配置或读取失败时不返回猜测的模式。
+      parameters:
+        - { name: hash_name, in: query, schema: { type: string }, description: 省略时只检查全局；带值时检查模板有效策略 }
+      responses:
+        "200":
+          description: 执行许可与限制原因
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExecutionStatus" }
+        "503": { $ref: "#/components/responses/Err503" }
+  /price-actions:
+    get:
+      summary: 完整历史定价动作（只读，保留实际模拟/结果/空值）
+      description: 不以当前策略重建历史。无策略版本或行情快照的记录不虚构这些元数据。decision 递归脱敏，error 仅公开通用提示。
+      parameters:
+        - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
+        - { name: hash_name, in: query, schema: { type: string } }
+        - { name: asset_id, in: query, schema: { type: string } }
+        - { name: id, in: query, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: listing_id, in: query, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: action, in: query, schema: { type: string, enum: [publish, reprice, delist, skip] } }
+        - { name: mode, in: query, schema: { type: string, enum: [dry_run, real] } }
+        - { name: result, in: query, schema: { type: string, enum: [success, failed, skip] }, description: success 为非跳过且 success=true；failed 为 success=false；skip 为动作跳过 }
+        - { name: since, in: query, schema: { type: string, format: date-time }, description: ts 含下界 }
+        - { name: until, in: query, schema: { type: string, format: date-time }, description: ts 不含上界；须晚于 since }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 按 id 降序的分页记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/PriceAction" } }
+        "400": { $ref: "#/components/responses/Err400" }
   /templates:
     get:
       summary: 模板清单（含锚点/黑名单标记）
@@ -349,7 +435,7 @@ paths:
   /audit:
     get:
       summary: 审计日志（最近 N 条）
-      description: page_size 缺省或 ≤0 使用 50，超过 200 钳至 200；page 偏移按规范化后的每页数量计算
+      description: page_size 缺省或 ≤0 使用 50，超过 200 钳至 200；page 偏移按规范化后的每页数量计算。detail 递归脱敏，不截断可公开的长详情。时间严格按 RFC3339 的 [since,until)；非法或倒置区间返回 400。
       parameters:
         - { name: action, in: query, schema: { type: string }, description: 动作名称精确匹配 }
         - { name: channel, in: query, schema: { type: string, enum: [uu, eco] } }
@@ -381,7 +467,7 @@ paths:
               schema: { $ref: "#/components/schemas/Dashboard" }
   /jobs:
     get:
-      summary: 任务状态列表
+      summary: 最近任务状态列表（不提供逐次运行历史或与某次点击的关联）
       responses:
         "200":
           description: 任务数组
@@ -390,6 +476,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/JobStatus" }
+        "503": { $ref: "#/components/responses/Err503" }
   /jobs/{name}/run:
     post:
       summary: 手动触发一次任务（立即执行，10 分钟预算，停机前会被等待）
@@ -397,7 +484,7 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         "200":
-          description: 已触发
+          description: 已受理，不能视为执行完成；reprice 始终是全局任务，不接受列表筛选
           content:
             application/json:
               schema:
@@ -503,6 +590,7 @@ paths:
                 type: object
                 properties:
                   status: { type: string }
+                  fingerprint: { type: string, description: UU token 尾 8 位 }
         "400":
           description: token 为空或上游校验失败（84101 失效/网络错误）
           content:
@@ -531,6 +619,7 @@ paths:
                 type: object
                 properties:
                   status: { type: string }
+                  fingerprint: { type: string, description: 私钥 SHA-256 前 12 位 }
         "400": { $ref: "#/components/responses/Err400" }
   /channels/steam:
     put:
@@ -556,6 +645,7 @@ paths:
                 type: object
                 properties:
                   status: { type: string }
+                  fingerprint: { type: string, description: Guard shared_secret SHA-256 前 12 位 }
         "400": { $ref: "#/components/responses/Err400" }
 components:
   securitySchemes:
@@ -574,6 +664,11 @@ components:
       schema: { type: integer, default: 50, maximum: 200 }
       description: 缺省或 ≤0 使用 50，超过 200 钳至 200；偏移按规范化后的数量计算
   responses:
+    Err503:
+      description: 状态或服务未初始化；客户端显示未知并允许重试
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Err400:
       description: 参数错误
       content:
@@ -623,6 +718,10 @@ components:
           enum: [in_stock, listed, leased, locked, sold, missing]
           description: missing 表示完整库存快照中未再出现，不等于已售出
         cost_basis: { type: number, format: double, description: "成本价（PUT /inventory/{channel}/{asset_id}/cost 录入）" }
+        category: { type: string }
+        cost_source: { type: string }
+        cost_modified_at: { type: string, format: date-time, nullable: true }
+        last_synced_at: { type: string, format: date-time, nullable: true }
     ListingRow:
       type: object
       properties:
@@ -645,6 +744,9 @@ components:
           nullable: true
           description: 最新 price_action 摘要（面板决策依据列）
           properties:
+            id: { type: integer, format: int64 }
+            dry_run: { type: boolean }
+            success: { type: boolean }
             action: { type: string, enum: [publish, reprice, delist, skip] }
             at: { type: string, format: date-time, nullable: true }
             new_rent: { type: number, format: double, nullable: true }
@@ -655,6 +757,7 @@ components:
         id: { type: integer, format: int64 }
         channel: { $ref: "#/components/schemas/Channel" }
         order_ref: { type: string }
+        asset_id: { type: string }
         hash_name: { type: string }
         order_type: { type: string, enum: [short, long, buyout] }
         status: { type: string }
@@ -696,7 +799,7 @@ components:
         action: { type: string }
         channel: { type: string }
         target: { type: string }
-        detail: { type: object, additionalProperties: true }
+        detail: { type: object, additionalProperties: true, description: 凭证/内部错误/原始载荷递归隐藏；只保留格式校验后的尾号和指纹 }
     Dashboard:
       type: object
       properties:
@@ -724,8 +827,15 @@ components:
                   channel: { $ref: "#/components/schemas/Channel" }
                   income: { type: number, format: double }
                   orders: { type: integer }
-        leased_out: { type: integer }
+        leased_out: { type: integer, description: leasing 状态的订单数 }
         annualized_roi: { type: number, format: double }
+        roi_available: { type: boolean, description: 成本为正且存在观察起点；false 时不应把 0 当作业务收益率 }
+        observation_started_at: { type: string, format: date-time, nullable: true }
+        observation_days: { type: number, format: double, description: 计算使用的观察天数，最少 1 天；不足时为 0 }
+        costed_items: { type: integer, description: physical_inventory 中成本为正的资产数 }
+        inventory_items: { type: integer, description: physical_inventory 全量实物资产数（含历史售出） }
+        cost_total: { type: number, format: double, description: 累计成本基 }
+        sold_cost: { type: number, format: double, description: 已售出成本；累计入账减此值为 income.total }
         categories:
           type: array
           items:
@@ -740,9 +850,9 @@ components:
           items:
             type: object
             properties:
-              date: { type: string, format: date, description: UTC 日（canonical；day 为同义别名） }
-              day: { type: string, format: date, description: date 的同义别名 }
+              date: { type: string, format: date, description: UTC 结算日 }
               income: { type: number, format: double }
+              orders: { type: integer, description: 当日入账订单净数，可能含后续冲销 }
     JobStatus:
       type: object
       properties:
@@ -750,8 +860,42 @@ components:
         next_run: { type: string, format: date-time }
         last_run: { type: string, format: date-time, nullable: true }
         last_ok: { type: boolean }
-        last_error: { type: string }
+        last_error: { type: string, description: 失败时仅返回通用公开提示 }
         running: { type: boolean }
+    ExecutionStatus:
+      type: object
+      required: [dry_run, reasons, environment_dry_run, global_real_enabled, effective_real_enabled, hash_name, channel_route, checked_at]
+      properties:
+        dry_run: { type: boolean }
+        reasons: { type: array, items: { type: string, enum: [environment_dry_run, global_disabled, template_disabled] } }
+        environment_dry_run: { type: boolean }
+        global_real_enabled: { type: boolean }
+        effective_real_enabled: { type: boolean, description: 模板或全局的策略行许可；仍需与环境和全局总闸组合 }
+        hash_name: { type: string }
+        channel_route: { type: string }
+        checked_at: { type: string, format: date-time }
+    PriceAction:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        channel: { $ref: "#/components/schemas/Channel" }
+        hash_name: { type: string }
+        asset_id: { type: string }
+        listing_id: { type: integer, format: int64, nullable: true }
+        action: { type: string, enum: [publish, reprice, delist, skip] }
+        dry_run: { type: boolean }
+        success: { type: boolean }
+        error: { type: string, description: 仅通用公开错误提示 }
+        old_rent: { type: number, format: double, nullable: true }
+        new_rent: { type: number, format: double, nullable: true }
+        old_long: { type: number, format: double, nullable: true }
+        new_long: { type: number, format: double, nullable: true }
+        old_days: { type: integer, nullable: true }
+        new_days: { type: integer, nullable: true }
+        old_deposit: { type: number, format: double, nullable: true }
+        new_deposit: { type: number, format: double, nullable: true }
+        decision: { type: object, additionalProperties: true }
     UUSmsResponse:
       type: object
       properties:

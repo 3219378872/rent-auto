@@ -256,19 +256,15 @@ func (s *Server) handleTemplateStrategyDelete(w http.ResponseWriter, r *http.Req
 func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := pageParams(r)
-	parseTS := func(k string) time.Time {
-		if v := q.Get(k); v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				return t
-			}
-		}
-		return time.Time{}
+	since, until, ok := timeWindow(w, r)
+	if !ok {
+		return
 	}
 	items, total, err := s.Store.ListAudit(r.Context(), store.AuditFilter{
 		Action:  q.Get("action"),
 		Channel: q.Get("channel"),
-		Since:   parseTS("since"),
-		Before:  parseTS("until"),
+		Since:   since,
+		Before:  until,
 		Limit:   limit,
 		Offset:  offset,
 	})
@@ -278,6 +274,11 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 	}
 	if items == nil {
 		items = []domain.AuditEntry{}
+	}
+	for i := range items {
+		if items[i].Detail != nil {
+			items[i].Detail = publicDetail(items[i].Detail).(map[string]any)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }

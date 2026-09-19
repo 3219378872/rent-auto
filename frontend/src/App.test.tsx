@@ -3,20 +3,33 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 
 const state = vi.hoisted(() => ({ token: '' }))
-const { getMock, postMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn() }))
+const { getMock, postMock, putMock } = vi.hoisted(() => ({
+  getMock: vi.fn(),
+  postMock: vi.fn(),
+  putMock: vi.fn(),
+}))
 
 vi.mock('./api/client', () => ({
   AUTH_EVENT: 'ra-auth',
   getToken: () => state.token,
-  setToken: (t: string) => { state.token = t; window.dispatchEvent(new Event('ra-auth')) },
-  clearToken: () => { state.token = ''; window.dispatchEvent(new Event('ra-auth')) },
+  setToken: (t: string) => {
+    state.token = t
+    window.dispatchEvent(new Event('ra-auth'))
+  },
+  clearToken: () => {
+    state.token = ''
+    window.dispatchEvent(new Event('ra-auth'))
+  },
   api: { get: getMock, post: postMock, put: putMock, del: vi.fn() },
 }))
 
 const dashboardPayload = {
   assets: { total: 0, inventory: 0, deposits: {}, wallets: {} },
   income: { total: 0, today: 0, by_channel: [] },
-  leased_out: 0, annualized_roi: 0, categories: [], series_30d: [],
+  leased_out: 0,
+  annualized_roi: 0,
+  categories: [],
+  series_30d: [],
 }
 
 beforeEach(() => {
@@ -31,17 +44,32 @@ beforeEach(() => {
   putMock.mockResolvedValue({ ok: true })
   getMock.mockImplementation((path: string) => {
     if (path === '/dashboard') return Promise.resolve(dashboardPayload)
-    if (path === '/channels') return Promise.resolve({ uu: 'ok', eco: 'ok', steam: 'ok:76561198000000000' })
-    if (path === '/strategies' || path === '/templates') return Promise.resolve([])
+    if (path === '/channels')
+      return Promise.resolve({
+        uu: 'ok',
+        eco: 'ok',
+        steam: 'ok:76561198000000000',
+      })
+    if (path === '/inventory/categories' || path === '/jobs')
+      return Promise.resolve([])
+    if (path === '/execution/status')
+      return Promise.resolve({
+        dry_run: true,
+        reasons: ['environment_dry_run'],
+      })
+    if (path === '/strategies' || path === '/templates')
+      return Promise.resolve([])
     return Promise.resolve({ items: [], total: 0 })
   })
 })
 
 describe('App auth gate', () => {
-  it('redirects to the login form when no token exists', () => {
+  it('redirects to the login form when no token exists', async () => {
     state.token = ''
     render(<App />)
-    expect(screen.getByRole('heading', { name: 'rent-auto 登录' })).toBeDefined()
+    expect(
+      await screen.findByRole('heading', { name: 'rent-auto 登录' }),
+    ).toBeDefined()
   })
 
   it('renders the shell once a token exists and reacts to the auth event', async () => {
@@ -53,7 +81,11 @@ describe('App auth gate', () => {
       state.token = ''
       window.dispatchEvent(new Event('ra-auth'))
     })
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'rent-auto 登录' })).toBeDefined())
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'rent-auto 登录' }),
+      ).toBeDefined(),
+    )
   })
 
   it('logout clears the token and returns to login', async () => {
@@ -61,7 +93,11 @@ describe('App auth gate', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '仪表盘' })
     fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'rent-auto 登录' })).toBeDefined())
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'rent-auto 登录' }),
+      ).toBeDefined(),
+    )
     expect(state.token).toBe('')
   })
 
@@ -78,8 +114,12 @@ describe('App auth gate', () => {
       ['审计日志', '审计日志', '/audit'],
       ['仪表盘', '仪表盘', '/'],
     ]) {
-      await act(async () => { fireEvent.click(screen.getByRole('link', { name: label })) })
-      expect(await screen.findByRole('heading', { name: heading })).toBeDefined()
+      await act(async () => {
+        fireEvent.click(screen.getByRole('link', { name: label }))
+      })
+      expect(
+        await screen.findByRole('heading', { name: heading }),
+      ).toBeDefined()
       expect(window.location.hash).toBe(`#${hash}`)
     }
   })
@@ -88,7 +128,9 @@ describe('App auth gate', () => {
     state.token = ''
     postMock.mockResolvedValue({ token: 'fresh-token' })
     render(<App />)
-    fireEvent.change(screen.getByPlaceholderText('密码'), { target: { value: 'test-password' } })
+    fireEvent.change(screen.getByPlaceholderText('密码'), {
+      target: { value: 'test-password' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '登录' }))
     expect(await screen.findByRole('heading', { name: '仪表盘' })).toBeDefined()
     expect(state.token).toBe('fresh-token')
@@ -100,13 +142,20 @@ describe('App auth gate', () => {
     await screen.findByRole('heading', { name: '仪表盘' })
     fireEvent.click(screen.getByRole('button', { name: '修改密码' }))
     expect(screen.getByRole('dialog', { name: '修改密码' })).toBeDefined()
-    fireEvent.change(screen.getByLabelText('当前密码'), { target: { value: 'current-password' } })
-    fireEvent.change(screen.getByLabelText('新密码'), { target: { value: 'new-password-123' } })
-    fireEvent.change(screen.getByLabelText('确认新密码'), { target: { value: 'new-password-123' } })
+    fireEvent.change(screen.getByLabelText('当前密码'), {
+      target: { value: 'current-password' },
+    })
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: 'new-password-123' },
+    })
+    fireEvent.change(screen.getByLabelText('确认新密码'), {
+      target: { value: 'new-password-123' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
     await screen.findByRole('heading', { name: 'rent-auto 登录' })
     expect(putMock).toHaveBeenCalledWith('/auth/password', {
-      current_password: 'current-password', new_password: 'new-password-123',
+      current_password: 'current-password',
+      new_password: 'new-password-123',
     })
     expect(state.token).toBe('')
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -118,11 +167,19 @@ describe('App auth gate', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '仪表盘' })
     fireEvent.click(screen.getByRole('button', { name: '修改密码' }))
-    fireEvent.change(screen.getByLabelText('当前密码'), { target: { value: 'current-password' } })
-    fireEvent.change(screen.getByLabelText('新密码'), { target: { value: 'new-password-123' } })
-    fireEvent.change(screen.getByLabelText('确认新密码'), { target: { value: 'new-password-123' } })
+    fireEvent.change(screen.getByLabelText('当前密码'), {
+      target: { value: 'current-password' },
+    })
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: 'new-password-123' },
+    })
+    fireEvent.change(screen.getByLabelText('确认新密码'), {
+      target: { value: 'new-password-123' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('password_managed_externally')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'password_managed_externally',
+    )
     expect(state.token).toBe('existing-token')
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -133,12 +190,22 @@ describe('App auth gate', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '仪表盘' })
     fireEvent.click(screen.getByRole('button', { name: '修改密码' }))
-    fireEvent.change(screen.getByLabelText('当前密码'), { target: { value: 'current-password' } })
-    fireEvent.change(screen.getByLabelText('新密码'), { target: { value: 'new-password-123' } })
-    fireEvent.change(screen.getByLabelText('确认新密码'), { target: { value: 'different-password' } })
+    fireEvent.change(screen.getByLabelText('当前密码'), {
+      target: { value: 'current-password' },
+    })
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: 'new-password-123' },
+    })
+    fireEvent.change(screen.getByLabelText('确认新密码'), {
+      target: { value: 'different-password' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('两次输入的新密码不一致')
-    fireEvent.change(screen.getByLabelText('新密码'), { target: { value: '密'.repeat(25) } })
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '两次输入的新密码不一致',
+    )
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: '密'.repeat(25) },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
     expect(screen.getByRole('alert')).toHaveTextContent('12–72 字节')
     expect(putMock).not.toHaveBeenCalled()

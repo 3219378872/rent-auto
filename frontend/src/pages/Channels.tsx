@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { api, type ChannelHealth } from '../api/client'
+import { useAction, useResource } from '../lib/data'
+import { Feedback, LoadState } from '../components/Panel'
+import { time } from '../lib/format'
 import { solveCaptcha, UU_CAPTCHA_APP_ID } from '../lib/tcaptcha'
 
-type Health = Record<string, string>
-
+type SavedCredential = { status: string; fingerprint?: string }
 type SmsResp = {
   session_id: string
   mode: 'down' | 'up' | 'captcha'
@@ -14,253 +17,401 @@ type SmsResp = {
   secs?: number
   login_req_ticket?: string
 }
+const healthLabel = (value?: string) =>
+  !value
+    ? '状态未知'
+    : value === 'ok' || value.startsWith('ok:')
+      ? '连接正常'
+      : value === 'not_configured'
+        ? '尚未配置'
+        : '连接异常'
 
 export default function Channels() {
-  const [health, setHealth] = useState<Health | null>(null)
-  const [err, setErr] = useState('')
-  const [msg, setMsg] = useState('')
+  const health = useResource<ChannelHealth>('/channels', 30000)
+  return (
+    <div>
+      <div className="page-heading">
+        <h2>渠道账号</h2>
+        <button
+          className="ghost"
+          disabled={health.loading}
+          onClick={health.reload}
+        >
+          刷新健康状态
+        </button>
+      </div>
+      <LoadState {...health} />
+      <p className="muted">
+        最近检查：{time(health.updatedAt)} · 展开渠道配置或更新凭证
+      </p>
+      {(['uu', 'eco', 'steam'] as const).map((ch) => (
+        <details className="section channel-card" key={ch}>
+          <summary>
+            <strong>
+              {ch === 'uu'
+                ? '悠悠有品 · UU'
+                : ch === 'eco'
+                  ? 'ECOSteam · ECO'
+                  : 'Steam'}
+            </strong>
+            <span
+              className={`badge ${!health.err && health.data?.[ch]?.startsWith('ok') ? 'ok' : 'warn'}`}
+            >
+              {healthLabel(health.err ? undefined : health.data?.[ch])}
+            </span>
+          </summary>
+          {health.data?.[ch] && !health.err && (
+            <p className="hint">{health.data[ch]}</p>
+          )}
+          {ch === 'uu' ? (
+            <UUForm reload={health.reload} />
+          ) : ch === 'eco' ? (
+            <EcoForm reload={health.reload} />
+          ) : (
+            <SteamForm reload={health.reload} />
+          )}
+        </details>
+      ))}
+      <p className="hint">
+        成功保存后清空敏感输入，失败时保留输入供修正。凭证只提交到当前服务，不存为浏览器草稿。
+      </p>
+      <Link to="/audit">查看凭证变更审计</Link>
+    </div>
+  )
+}
 
-  const [phone, setPhone] = useState('')
-  const [code, setCode] = useState('')
-  const [session, setSession] = useState('')
-  const [sms, setSms] = useState<SmsResp | null>(null)
-  const [loginTicket, setLoginTicket] = useState('')
-  const [cooldown, setCooldown] = useState(0)
-  const [uuToken, setUUToken] = useState('')
-  const [partnerId, setPartnerId] = useState('')
-  const [privateKey, setPrivateKey] = useState('')
-  const [steamId, setSteamId] = useState('')
-  const [steamUser, setSteamUser] = useState('')
-  const [steamPass, setSteamPass] = useState('')
-  const [sharedSecret, setSharedSecret] = useState('')
-  const [identitySecret, setIdentitySecret] = useState('')
-
-  const load = useCallback(() => {
-    api.get<Health>('/channels').then(setHealth).catch((e) => setErr(e.message))
-  }, [])
-  useEffect(load, [load])
-
+function UUForm({ reload }: { reload: () => void }) {
+  const [token, setToken] = useState(''),
+    action = useAction(),
+    [fingerprint, setFingerprint] = useState('')
+  const [phone, setPhone] = useState(''),
+    [code, setCode] = useState(''),
+    [session, setSession] = useState(''),
+    [sms, setSms] = useState<SmsResp | null>(null),
+    [loginTicket, setLoginTicket] = useState(''),
+    [cooldown, setCooldown] = useState(0)
+  const alive = useRef(true)
   useEffect(() => {
-    if (cooldown <= 0) return undefined
-    const t = setTimeout(() => setCooldown((s) => s - 1), 1000)
-    return () => clearTimeout(t)
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = setTimeout(() => setCooldown((c) => c - 1), 1000)
+    return () => clearTimeout(timer)
   }, [cooldown])
-
-  // sessionId must be passed explicitly on the captcha retry: the recursive
-  // call would otherwise read a stale closure over `session` and drop it,
-  // making the backend mint a fresh session whose reqTicket binding fails
-  // upstream risk control — an endless 图形校验 loop.
   const sendSms = async (
     captcha?: { ticket: string; randstr: string; req_ticket: string },
     smsSessionId?: string,
-  ) => {
-    setErr(''); setMsg('')
-    try {
-      const body: Record<string, unknown> = { phone }
-      const sid = smsSessionId ?? session
-      if (sid) body.session_id = sid
-      if (captcha) body.captcha = captcha
-      const r = await api.post<SmsResp>('/channels/uu/sms', body)
-      setSession(r.session_id)
-      if (r.secs && r.secs > 0) setCooldown(r.secs)
-      if (r.mode === 'captcha') {
-        setSms(null)
-        setMsg('平台风控要求图形验证，请在弹窗中手动完成')
-        try {
-          const c = await solveCaptcha(UU_CAPTCHA_APP_ID)
-          // The blocked reply carries a cooldown (HAR: secs:30) before the
-          // next attempt. Retrying the instant the slider clears lands inside
-          // that window and gets re-challenged (2026-08-27 audit: retries at
-          // +5s/+10s) — wait it out, showing the remaining seconds.
-          const wait = r.secs && r.secs > 0 ? r.secs : 0
-          for (let left = wait; left > 0; left--) {
-            setMsg(`图形验证通过，平台冷却中，${left}s 后自动重发…`)
-            await new Promise((res) => setTimeout(res, 1000))
-          }
-          setMsg('图形验证通过，正在重新发送短信…')
-          await sendSms(
-            { ticket: c.ticket, randstr: c.randstr, req_ticket: r.req_ticket || '' },
-            r.session_id,
-          )
-        } catch (e2) {
-          setMsg('')
-          setErr(e2 instanceof Error ? e2.message : String(e2))
-        }
-        return
+  ): Promise<void> => {
+    if (!alive.current) return
+    const body: Record<string, unknown> = { phone }
+    const sid = smsSessionId ?? session
+    if (sid) body.session_id = sid
+    if (captcha) body.captcha = captcha
+    const r = await api.post<SmsResp>('/channels/uu/sms', body)
+    if (!alive.current) return
+    setSession(r.session_id)
+    if (r.secs && r.secs > 0) setCooldown(r.secs)
+    if (r.mode === 'captcha') {
+      setSms(null)
+      action.setMsg('平台风控要求图形验证，请在弹窗中手动完成')
+      const c = await solveCaptcha(UU_CAPTCHA_APP_ID)
+      // Preserve the upstream session and required cooldown across retries.
+      for (let left = r.secs ?? 0; left > 0; left--) {
+        if (!alive.current) return
+        action.setMsg(`图形验证通过，平台冷却中，${left}s 后自动重发…`)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
       }
-      setSms(r)
-      if (r.login_req_ticket) setLoginTicket(r.login_req_ticket)
-      setMsg(r.mode === 'up' ? '' : '验证码已发送，请查收短信')
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      if (alive.current)
+        await sendSms(
+          {
+            ticket: c.ticket,
+            randstr: c.randstr,
+            req_ticket: r.req_ticket || '',
+          },
+          r.session_id,
+        )
+      return
     }
+    setSms(r)
+    if (r.login_req_ticket) setLoginTicket(r.login_req_ticket)
+    action.setMsg(
+      r.mode === 'up' ? '请按下方说明完成短信上行' : '验证码已发送，请查收短信',
+    )
   }
-
-  const verifySms = async () => {
-    setErr(''); setMsg('')
-    try {
-      await api.post('/channels/uu/sms-verify', {
-        phone, code, session_id: session, login_req_ticket: loginTicket || undefined,
-      })
-      setMsg('UU 登录成功，token 已入库')
-      load()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const importUUToken = async () => {
-    setErr(''); setMsg('')
-    try {
-      await api.put('/channels/uu', { token: uuToken.trim() })
-      setUUToken('')
-      setMsg('UU Token 已验证并加密入库')
-      load()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const saveSteam = async () => {
-    setErr(''); setMsg('')
-    try {
-      await api.put('/channels/steam', {
-        username: steamUser, password: steamPass,
-        shared_secret: sharedSecret, identity_secret: identitySecret,
-      })
-      setMsg('Steam 登录成功，会话已加密保存')
-      load()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const saveEco = async () => {
-    setErr(''); setMsg('')
-    try {
-      await api.put('/channels/eco', { partner_id: partnerId, private_key_pem: privateKey, steam_id: steamId })
-      setMsg('ECO 凭证已加密保存并验证')
-      load()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const badge = (s: string) =>
-    s === 'ok' || s.startsWith('ok:') ? 'ok' : s.startsWith('error') ? 'bad' : ''
-
   return (
-    <div>
-      <h2>渠道账号</h2>
-      {err && <div className="error">{err}</div>}
-      {msg && <div className="ok-msg">{msg}</div>}
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>健康状态</h3>
-        {!health && <div className="muted">加载中…</div>}
-        {health && Object.entries(health).map(([ch, st]) => (
-          <p key={ch} style={{ margin: '4px 0' }}>
-            <b>{ch.toUpperCase()}</b>
-            {' '}<span className={`badge ${badge(st)}`}>{st}</span>
-          </p>
-        ))}
-      </div>
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>悠悠有品 · 手动导入 Token（推荐）</h3>
-        <div className="muted" style={{ marginBottom: 8 }}>
-          平台已限制第三方客户端的短信登录（code=5050），但已签发的 token 不受影响。
-          在浏览器登录 youpin898.com 后，F12 → 应用/存储 或网络请求中复制
-          token（JWT，三段式），粘贴到此处导入；导入后系统验证并加密入库
-        </div>
-        <textarea
-          rows={3}
-          placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.…"
-          value={uuToken}
-          onChange={(e) => setUUToken(e.target.value)}
-          style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
-        />
-        <div className="toolbar" style={{ marginTop: 10 }}>
-          <button onClick={importUUToken} disabled={!uuToken.trim()}>验证并保存 Token</button>
-        </div>
-      </div>
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>悠悠有品 · 短信登录（当前被平台风控拦截）</h3>
+    <>
+      <h3>手动导入 Token（推荐）</h3>
+      <p className="hint">
+        在浏览器登录 youpin898.com 后，从开发者工具的应用存储或网络请求中复制
+        JWT Token。导入时会验证并加密保存。
+      </p>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault()
+          await action.run(async () => {
+            const saved = await api.put<SavedCredential>('/channels/uu', {
+              token: token.trim(),
+            })
+            setToken('')
+            setFingerprint(saved.fingerprint || '')
+            reload()
+          }, 'UU Token 已验证并加密入库')
+        }}
+      >
+        <label className="field">
+          UU Token
+          <textarea
+            aria-label="UU Token"
+            rows={3}
+            required
+            autoComplete="off"
+            spellCheck={false}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="粘贴 JWT Token"
+          />
+        </label>
+        <button disabled={action.busy || !token.trim()}>
+          {action.busy ? '验证中…' : '验证并保存 Token'}
+        </button>
+      </form>
+      <Feedback {...action} />
+      {fingerprint && <p className="hint">已保存 Token 尾号：{fingerprint}</p>}
+      <details className="secondary-flow">
+        <summary>短信登录（当前被平台限制）</summary>
+        <p className="hint">
+          平台已限制第三方短信登录。此入口保留用于平台恢复后的验证，可能仍被拒绝。
+        </p>
         <div className="toolbar">
-          <input placeholder="+86 手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <button onClick={() => sendSms()} disabled={!phone || cooldown > 0}>
-            {cooldown > 0 ? `发送验证码(${cooldown}s)` : '发送验证码'}
+          <label className="field">
+            手机号
+            <input
+              placeholder="+86 手机号"
+              type="tel"
+              autoComplete="tel"
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value)
+                setSession('')
+                setLoginTicket('')
+                setSms(null)
+              }}
+              disabled={action.busy}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => action.run(() => sendSms(), '')}
+            disabled={action.busy || !phone || cooldown > 0}
+          >
+            {action.busy
+              ? '请求处理中…'
+              : cooldown > 0
+                ? `发送验证码(${cooldown}s)`
+                : '发送验证码'}
           </button>
-          {session && (
-            <>
-              <input placeholder="6位验证码（留空=短信上行）" value={code} onChange={(e) => setCode(e.target.value)} />
-              <button onClick={verifySms}>登录</button>
-            </>
-          )}
         </div>
-        {sms?.mode === 'captcha' && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            平台风控要求图形验证。若弹窗未出现或加载失败，请到 youpin898.com
-            官网登录页完成一次图形验证后回来重试。
-          </div>
-        )}
         {sms?.mode === 'up' && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            平台未下发验证码，该手机号需短信上行验证：请用本机编辑短信{' '}
-            <b>{sms.sms_up_content || '（获取失败，请重试发送）'}</b> 发送至 <b>{sms.sms_up_number || '?'}</b>
-            ，发送完成后验证码留空，直接点击登录
-          </div>
+          <p>
+            请用本机编辑短信 <b>{sms.sms_up_content || '获取失败，请重试'}</b>{' '}
+            发送至 <b>{sms.sms_up_number || '未提供'}</b>
+            ，完成后验证码留空，点击登录。
+          </p>
         )}
-        {session && <div className="muted">session: {session.slice(0, 8)}…</div>}
-      </div>
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>ECOSteam · 开放平台凭证</h3>
-        <div className="muted" style={{ marginBottom: 8 }}>
-          私钥为 PKCS8 PEM 或裸 base64；保存后以 AES-256-GCM 加密存储，仅显示指纹
-        </div>
+        {session && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault()
+              await action.run(async () => {
+                await api.post('/channels/uu/sms-verify', {
+                  phone,
+                  code,
+                  session_id: session,
+                  login_req_ticket: loginTicket || undefined,
+                })
+                setCode('')
+                setSession('')
+                setLoginTicket('')
+                setSms(null)
+                reload()
+              }, 'UU 登录成功，Token 已加密保存')
+            }}
+          >
+            <label className="field">
+              验证码（短信上行时留空）
+              <input
+                placeholder="6位验证码（留空=短信上行）"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </label>
+            <button disabled={action.busy}>
+              {action.busy ? '登录中…' : '登录'}
+            </button>
+          </form>
+        )}
+      </details>
+    </>
+  )
+}
+function EcoForm({ reload }: { reload: () => void }) {
+  const [partnerId, setPartnerId] = useState(''),
+    [privateKey, setPrivateKey] = useState(''),
+    [steamId, setSteamId] = useState(''),
+    [fingerprint, setFingerprint] = useState(''),
+    action = useAction()
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault()
+        await action.run(async () => {
+          const r = await api.put<SavedCredential>('/channels/eco', {
+            partner_id: partnerId,
+            private_key_pem: privateKey,
+            steam_id: steamId,
+          })
+          setPrivateKey('')
+          setFingerprint(r.fingerprint || '')
+          reload()
+        }, 'ECO 凭证已加密保存并验证')
+      }}
+    >
+      <h3>开放平台凭证</h3>
+      <p className="hint">
+        私钥接受 PKCS8 PEM 或裸 base64。保存成功后仅保留指纹用于核对。
+      </p>
+      <fieldset className="form-body" disabled={action.busy}>
         <div className="toolbar">
-          <input placeholder="PartnerId" value={partnerId} onChange={(e) => setPartnerId(e.target.value)} />
-          <input placeholder="SteamID（可空）" value={steamId} onChange={(e) => setSteamId(e.target.value)} />
+          <label className="field">
+            PartnerId
+            <input
+              placeholder="PartnerId"
+              required
+              value={partnerId}
+              onChange={(e) => setPartnerId(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            SteamID（可空）
+            <input
+              placeholder="SteamID（可空）"
+              value={steamId}
+              onChange={(e) => setSteamId(e.target.value)}
+            />
+          </label>
         </div>
-        <textarea
-          rows={5}
-          placeholder={'-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'}
-          value={privateKey}
-          onChange={(e) => setPrivateKey(e.target.value)}
-          style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
-        />
-        <div className="toolbar" style={{ marginTop: 10 }}>
-          <button onClick={saveEco} disabled={!partnerId || !privateKey}>保存并验证</button>
+        <label className="field">
+          ECO 私钥
+          <textarea
+            rows={5}
+            required
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="-----BEGIN PRIVATE KEY-----"
+            value={privateKey}
+            onChange={(e) => setPrivateKey(e.target.value)}
+          />
+        </label>
+      </fieldset>
+      <Feedback {...action} />
+      {fingerprint && <p className="hint">已保存私钥指纹：{fingerprint}</p>}
+      <button disabled={action.busy || !partnerId || !privateKey}>
+        {action.busy ? '验证中…' : '保存并验证'}
+      </button>
+    </form>
+  )
+}
+function SteamForm({ reload }: { reload: () => void }) {
+  const [username, setUser] = useState(''),
+    [password, setPass] = useState(''),
+    [shared, setShared] = useState(''),
+    [identity, setIdentity] = useState(''),
+    [fingerprint, setFingerprint] = useState(''),
+    action = useAction()
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault()
+        await action.run(async () => {
+          const r = await api.put<SavedCredential>('/channels/steam', {
+            username,
+            password,
+            shared_secret: shared,
+            identity_secret: identity,
+          })
+          setPass('')
+          setShared('')
+          setIdentity('')
+          setFingerprint(r.fingerprint || '')
+          reload()
+        }, 'Steam 登录成功，会话已加密保存')
+      }}
+    >
+      <h3>自动收报价凭证</h3>
+      <p className="hint">
+        从 Steam Guard 工具导出 shared_secret 与
+        identity_secret。系统只自动接受不付出物品的报价，其他报价仅记录。
+      </p>
+      <fieldset className="form-body" disabled={action.busy}>
+        <div className="form-grid">
+          <label className="field">
+            Steam 用户名
+            <input
+              placeholder="Steam 用户名"
+              required
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUser(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Steam 密码
+            <input
+              placeholder="密码"
+              required
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPass(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            shared_secret
+            <input
+              placeholder="shared_secret (base64)"
+              required
+              autoComplete="off"
+              type="password"
+              value={shared}
+              onChange={(e) => setShared(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            identity_secret
+            <input
+              placeholder="identity_secret (base64)"
+              required
+              autoComplete="off"
+              type="password"
+              value={identity}
+              onChange={(e) => setIdentity(e.target.value)}
+            />
+          </label>
         </div>
-      </div>
-
-      <div className="section">
-        <h3 style={{ marginTop: 0 }}>Steam · 自动收报价（礼物 / 租赁归还）</h3>
-        <div className="muted" style={{ marginBottom: 8 }}>
-          需要 Steam Guard 令牌的 shared_secret 与 identity_secret（SDA/ Watt Toolkit 导出）。
-          系统自动接受「我们不付出任何物品」的报价，其余报价仅记录不动。
-        </div>
-        <div className="toolbar">
-          <input placeholder="Steam 用户名" value={steamUser} onChange={(e) => setSteamUser(e.target.value)} />
-          <input placeholder="密码" type="password" value={steamPass} onChange={(e) => setSteamPass(e.target.value)} />
-        </div>
-        <div className="toolbar">
-          <input placeholder="shared_secret (base64)" type="password" autoComplete="off"
-            value={sharedSecret}
-            onChange={(e) => setSharedSecret(e.target.value)} style={{ minWidth: 260 }} />
-          <input placeholder="identity_secret (base64)" type="password" autoComplete="off"
-            value={identitySecret}
-            onChange={(e) => setIdentitySecret(e.target.value)} style={{ minWidth: 260 }} />
-        </div>
-        <div className="toolbar">
-          <button onClick={saveSteam}
-            disabled={!steamUser || !steamPass || !sharedSecret || !identitySecret}>
-            登录 Steam 并保存
-          </button>
-        </div>
-      </div>
-    </div>
+      </fieldset>
+      <Feedback {...action} />
+      {fingerprint && <p className="hint">已保存令牌指纹：{fingerprint}</p>}
+      <button
+        disabled={action.busy || !username || !password || !shared || !identity}
+      >
+        {action.busy ? '登录中…' : '登录 Steam 并保存'}
+      </button>
+    </form>
   )
 }

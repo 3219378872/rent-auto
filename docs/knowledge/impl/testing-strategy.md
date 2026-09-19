@@ -49,4 +49,10 @@ desired×actual 组合表驱动：(active,none)=上架 / (none,active)=下架 /
 
 ## 手动验收脚本
 
+面板 UX 回归使用 `api/panel*_test.go` 验证执行许可组合、历史脱敏、完整集合筛选排序、
+分页、日期半开区间及财务元数据；前端组件测试覆盖草稿、重复提交、失效会话返回地址。
+浏览器脚本位于 `evidence/assets/2026-09-19-ux-remediation/browser.cjs`，运行前在
+127.0.0.1:4179 启动对应前端，设置 `PW_MODULE` 指向 Playwright。脚本拦截全部 API，
+阻断非本地请求，验证键盘输入、详情焦点、导出和三档视口；该证据不能代替真实渠道验收。
+
 发布前 runbook 含：dry-run 全任务跑一轮 → price_actions 抽查决策合理性 → 开真实执行灰度 10 商品。

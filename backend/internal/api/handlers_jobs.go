@@ -30,7 +30,17 @@ type JobController interface {
 }
 
 func (s *Server) handleJobsList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Jobs.StatusList())
+	if s.Jobs == nil {
+		writeErr(w, http.StatusServiceUnavailable, "unavailable", "任务状态暂不可用")
+		return
+	}
+	jobs := append([]JobStatus{}, s.Jobs.StatusList()...)
+	for i := range jobs {
+		if jobs[i].LastError != "" {
+			jobs[i].LastError = "任务失败，请检查渠道状态、审计记录或服务端日志"
+		}
+	}
+	writeJSON(w, http.StatusOK, jobs)
 }
 
 // masterKeyMissingMessage is the single unified client-facing wording for
@@ -73,6 +83,10 @@ func truncateAudit(s string, n int) string {
 }
 
 func (s *Server) handleJobTrigger(w http.ResponseWriter, r *http.Request) {
+	if s.Jobs == nil {
+		writeErr(w, http.StatusServiceUnavailable, "unavailable", "任务调度暂不可用")
+		return
+	}
 	name := r.PathValue("name")
 	if !jobRunBucket.allow(s.clientIP(r)) {
 		s.audit(r, "job.trigger.rate_limited", map[string]any{"job": name})
@@ -181,7 +195,7 @@ func (s *Server) handleSteamCreds(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "channel.steam.creds_update", map[string]any{
 		"username": req.Username, "secret_fp": credFingerprint(req.SharedSecret),
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "fingerprint": credFingerprint(req.SharedSecret)})
 }
 
 func (s *Server) handleUUSms(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +308,7 @@ func (s *Server) handleECOCreds(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "channel.eco.creds_update", map[string]any{
 		"partner_id": req.PartnerID, "key_fp": credFingerprint(req.PrivateKeyPEM),
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "fingerprint": credFingerprint(req.PrivateKeyPEM)})
 }
 
 type uuTokenRequest struct {
@@ -331,7 +345,7 @@ func (s *Server) handleUUToken(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "channel.uu.creds_update", map[string]any{
 		"source": "manual_import", "token_tail": tokenTail(req.Token, 8),
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "fingerprint": tokenTail(req.Token, 8)})
 }
 
 // credFingerprint returns the first 12 hex chars of SHA-256(v) — enough to

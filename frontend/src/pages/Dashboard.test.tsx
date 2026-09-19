@@ -14,17 +14,25 @@ describe('sparkline scaling', () => {
 })
 
 import { channelIssues } from './Dashboard.helpers'
-import { render, screen } from '@testing-library/react'
+import { screen } from '@testing-library/react'
+import { renderPage as render } from '../test-render'
 import Dashboard from './Dashboard'
 import { vi } from 'vitest'
 
 describe('channelIssues', () => {
   it('lists only non-ok channels with their status', () => {
-    expect(channelIssues({ uu: 'ok', eco: 'error: expired token', steam: 'not_configured' }))
-      .toEqual(['ECO：error: expired token', 'STEAM：not_configured'])
+    expect(
+      channelIssues({
+        uu: 'ok',
+        eco: 'error: expired token',
+        steam: 'not_configured',
+      }),
+    ).toEqual(['ECO：error: expired token', 'STEAM：not_configured'])
   })
   it('returns empty when everything is ok', () => {
-    expect(channelIssues({ uu: 'ok', eco: 'ok', steam: 'ok:76561198000000000' })).toEqual([])
+    expect(
+      channelIssues({ uu: 'ok', eco: 'ok', steam: 'ok:76561198000000000' }),
+    ).toEqual([])
   })
 })
 

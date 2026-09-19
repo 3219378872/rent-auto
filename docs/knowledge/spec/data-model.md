@@ -1,5 +1,16 @@
 # 数据模型规格（PostgreSQL）
 
+## 面板读模型补充（2026-09-19，API v0.10.0）
+
+此轮不增加数据表或迁移。`price_actions` 提供完整分页历史，保留 old/new 金额、租期、
+dry_run、success 和 null，未存储的策略版本、行情快照不由当前配置反推。
+`inventory_items` 展示品类、成本来源/修改时间/同步时间；库存列表按渠道记录，
+财务覆盖数量按 `physical_inventory` 全量实物资产去重（包含历史售出）。
+`daily_stats.order_count` 用于 UTC 结算日的入账订单趋势，包含后续冲销影响。
+`leased_out` 现有口径是 leasing 状态的订单数，面板明确展示为“在租订单数”。
+Dashboard 新增 ROI 可用标志、观察起点/天数、全量成本、已售出成本及成本覆盖数量，
+财务计算公式保持原有口径，客户端不将证据不足时的数值 0 展示成已证实的收益率。
+
 > 迁移即真相：`backend/migrations/` 为唯一权威。本文件定义语义与口径。
 > 金额：`numeric(12,2)` 存储；Go 侧 `float64`，写库前必须 `Round2`。
 > 时间：一律 `timestamptz`（UTC）；渠道枚举 `uu|eco`。

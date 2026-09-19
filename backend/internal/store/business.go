@@ -126,11 +126,13 @@ func scanTemplateRows(rows pgx.Rows) (*Template, error) {
 // ---- inventory ----
 
 type InventoryFilter struct {
-	Channel domain.Channel
-	Status  string
-	Search  string
-	Limit   int
-	Offset  int
+	Channel                           domain.Channel
+	Status                            string
+	Search                            string
+	Limit                             int
+	Offset                            int
+	Category, Sort, HashName, AssetID string
+	CostMissing                       bool
 }
 
 func (s *Store) UpsertInventoryItem(ctx context.Context, it domain.InventoryItem, costBasis *float64) error {
@@ -177,19 +179,25 @@ func (s *Store) SetCostBasis(ctx context.Context, channel domain.Channel, assetI
 	return nil
 }
 
-const invCols = `id, channel, asset_id, hash_name, market_hash_name, template_id, mark_price, tradable, status, coalesce(cost_basis,0)`
+const invCols = `i.id, i.channel, i.asset_id, i.hash_name, i.market_hash_name, i.template_id, i.mark_price,
+ i.tradable, i.status, coalesce(i.cost_basis,0), COALESCE(NULLIF(t.category,''),'未分类'),
+ COALESCE(i.cost_source,''), i.cost_modified_at, i.last_synced_at`
 
 type InventoryRow struct {
-	ID         int64          `json:"id"`
-	Channel    domain.Channel `json:"channel"`
-	AssetID    string         `json:"asset_id"`
-	HashName   string         `json:"hash_name"`
-	MarketHash string         `json:"market_hash_name"`
-	TemplateID *int64         `json:"template_id"`
-	MarkPrice  float64        `json:"mark_price"`
-	Tradable   bool           `json:"tradable"`
-	Status     string         `json:"status"`
-	CostBasis  float64        `json:"cost_basis"`
+	ID             int64          `json:"id"`
+	Channel        domain.Channel `json:"channel"`
+	AssetID        string         `json:"asset_id"`
+	HashName       string         `json:"hash_name"`
+	MarketHash     string         `json:"market_hash_name"`
+	TemplateID     *int64         `json:"template_id"`
+	MarkPrice      float64        `json:"mark_price"`
+	Tradable       bool           `json:"tradable"`
+	Status         string         `json:"status"`
+	CostBasis      float64        `json:"cost_basis"`
+	Category       string         `json:"category"`
+	CostSource     string         `json:"cost_source"`
+	CostModifiedAt *time.Time     `json:"cost_modified_at"`
+	LastSyncedAt   *time.Time     `json:"last_synced_at"`
 }
 
 func (s *Store) ListInventory(ctx context.Context, f InventoryFilter) ([]InventoryRow, int, error) {
@@ -198,22 +206,38 @@ func (s *Store) ListInventory(ctx context.Context, f InventoryFilter) ([]Invento
 	args := []any{}
 	if f.Channel.Valid() && f.Channel != "" {
 		args = append(args, string(f.Channel))
-		where += fmt.Sprintf(" AND channel=$%d", len(args))
+		where += fmt.Sprintf(" AND i.channel=$%d", len(args))
 	}
 	if f.Status != "" {
 		args = append(args, f.Status)
-		where += fmt.Sprintf(" AND status=$%d", len(args))
+		where += fmt.Sprintf(" AND i.status=$%d", len(args))
 	}
 	if f.Search != "" {
 		args = append(args, "%"+f.Search+"%")
-		where += fmt.Sprintf(" AND market_hash_name ILIKE $%d", len(args))
+		where += fmt.Sprintf(" AND (i.market_hash_name ILIKE $%[1]d OR i.hash_name ILIKE $%[1]d OR i.asset_id ILIKE $%[1]d)", len(args))
 	}
+	for _, v := range []struct{ expression, value string }{
+		{"i.hash_name=$%d", f.HashName}, {"i.asset_id=$%d", f.AssetID},
+		{"COALESCE(NULLIF(t.category,''),'未分类')=$%d", f.Category},
+	} {
+		if v.value != "" {
+			args = append(args, v.value)
+			where += " AND " + fmt.Sprintf(v.expression, len(args))
+		}
+	}
+	if f.CostMissing {
+		where += " AND COALESCE(i.cost_basis,0)<=0"
+	}
+	from := " FROM inventory_items i LEFT JOIN templates t ON t.hash_name=i.hash_name "
 	var total int
-	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM inventory_items "+where, args...).Scan(&total); err != nil {
+	if err := s.Pool.QueryRow(ctx, "SELECT count(*)"+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	q := "SELECT " + invCols + " FROM inventory_items " + where +
-		fmt.Sprintf(" ORDER BY id LIMIT %d OFFSET %d", limit, offset)
+	order := map[string]string{"name": "i.hash_name,i.id", "price_desc": "i.mark_price DESC,i.id", "price_asc": "i.mark_price,i.id", "cost_desc": "i.cost_basis DESC NULLS LAST,i.id"}[f.Sort]
+	if order == "" {
+		order = "i.id"
+	}
+	q := "SELECT " + invCols + from + where + " ORDER BY " + order + fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
@@ -222,7 +246,7 @@ func (s *Store) ListInventory(ctx context.Context, f InventoryFilter) ([]Invento
 	out := make([]InventoryRow, 0, limit)
 	for rows.Next() {
 		var r InventoryRow
-		if err := rows.Scan(&r.ID, &r.Channel, &r.AssetID, &r.HashName, &r.MarketHash, &r.TemplateID, &r.MarkPrice, &r.Tradable, &r.Status, &r.CostBasis); err != nil {
+		if err := rows.Scan(&r.ID, &r.Channel, &r.AssetID, &r.HashName, &r.MarketHash, &r.TemplateID, &r.MarkPrice, &r.Tradable, &r.Status, &r.CostBasis, &r.Category, &r.CostSource, &r.CostModifiedAt, &r.LastSyncedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)
@@ -339,10 +363,12 @@ func nullTime(t time.Time) any {
 }
 
 type OrderFilter struct {
-	Channel domain.Channel
-	Status  string
-	Limit   int
-	Offset  int
+	Channel                                          domain.Channel
+	Status                                           string
+	Limit                                            int
+	Offset                                           int
+	Search, HashName, AssetID, OrderType, View, Sort string
+	Since, Until                                     time.Time
 }
 
 type OrderRow struct {
@@ -350,6 +376,7 @@ type OrderRow struct {
 	Channel    domain.Channel `json:"channel"`
 	OrderRef   string         `json:"order_ref"`
 	HashName   string         `json:"hash_name"`
+	AssetID    string         `json:"asset_id"`
 	OrderType  string         `json:"order_type"`
 	Status     string         `json:"status"`
 	RentDays   int            `json:"rent_days"`
@@ -373,13 +400,43 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]OrderRow, int,
 		args = append(args, f.Status)
 		where += fmt.Sprintf(" AND status=$%d", len(args))
 	}
+	if f.Search != "" {
+		args = append(args, "%"+f.Search+"%")
+		where += fmt.Sprintf(" AND (hash_name ILIKE $%[1]d OR order_ref ILIKE $%[1]d)", len(args))
+	}
+	for _, v := range []struct{ expression, value string }{{"hash_name=$%d", f.HashName}, {"asset_id=$%d", f.AssetID}, {"order_type=$%d", f.OrderType}} {
+		if v.value != "" {
+			args = append(args, v.value)
+			where += " AND " + fmt.Sprintf(v.expression, len(args))
+		}
+	}
+	switch f.View {
+	case "attention":
+		where += " AND status IN ('pending_payment','delivering','returning','arbitrating','breach','unknown')"
+	case "active":
+		where += " AND status='leasing'"
+	case "history":
+		where += " AND status IN ('done','bought_out','cancelled')"
+	}
+	if !f.Since.IsZero() {
+		args = append(args, f.Since)
+		where += fmt.Sprintf(" AND started_at >= $%d", len(args))
+	}
+	if !f.Until.IsZero() {
+		args = append(args, f.Until)
+		where += fmt.Sprintf(" AND started_at < $%d", len(args))
+	}
 	var total int
 	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM lease_orders "+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	q := `SELECT id, channel, order_ref, hash_name, order_type, status, rent_days,
+	order := map[string]string{"due_asc": "due_at ASC NULLS LAST,id DESC", "started_desc": "started_at DESC NULLS LAST,id DESC", "amount_desc": "order_amount DESC,id DESC"}[f.Sort]
+	if order == "" {
+		order = "id DESC"
+	}
+	q := `SELECT id, channel, order_ref, hash_name, COALESCE(asset_id,''), order_type, status, rent_days,
 	             rent_price, order_amount, deposits, started_at, due_at, finished_at
-	      FROM lease_orders ` + where + fmt.Sprintf(" ORDER BY id DESC LIMIT %d OFFSET %d", limit, offset)
+	      FROM lease_orders ` + where + " ORDER BY " + order + fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
@@ -388,7 +445,7 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]OrderRow, int,
 	out := make([]OrderRow, 0, limit)
 	for rows.Next() {
 		var r OrderRow
-		if err := rows.Scan(&r.ID, &r.Channel, &r.OrderRef, &r.HashName, &r.OrderType,
+		if err := rows.Scan(&r.ID, &r.Channel, &r.OrderRef, &r.HashName, &r.AssetID, &r.OrderType,
 			&r.Status, &r.RentDays, &r.RentPrice, &r.Amount, &r.Deposits,
 			&r.StartedAt, &r.DueAt, &r.FinishedAt); err != nil {
 			return nil, 0, err

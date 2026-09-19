@@ -58,6 +58,7 @@
 | 0009 | adr-0009-recon-observation-state.md | 完整库存观测与持续不一致计时 |
 | 0010 | adr-0010-financial-projection.md | 实物归一与收益冲销账本 |
 | 0011 | adr-0011-instance-lock-loss-shutdown.md | 原持锁连接验证与失锁取消 |
+| 0012 | [adr-0012-panel-observability.md](adr-0012-panel-observability.md) | 面板执行许可、历史定价读模型及原生表单交互 |
 
 (*) 编号异常说明：adr-0001 初稿将三条决策并入一个文件，导致与后续独立文件撞号。
 2026-08-27 round10 审查轮拆分时，为不重写历史证据文档中的既有引用，拆出的两条

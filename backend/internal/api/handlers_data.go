@@ -27,11 +27,12 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := pageParams(r)
 	items, total, err := s.Store.ListInventory(r.Context(), store.InventoryFilter{
-		Channel: domain.Channel(q.Get("channel")),
-		Status:  q.Get("status"),
-		Search:  q.Get("search"),
-		Limit:   limit,
-		Offset:  offset,
+		Channel:  domain.Channel(q.Get("channel")),
+		Status:   q.Get("status"),
+		Search:   q.Get("search"),
+		Category: q.Get("category"), Sort: q.Get("sort"), HashName: q.Get("hash_name"), AssetID: q.Get("asset_id"), CostMissing: q.Get("cost_missing") == "true",
+		Limit:  limit,
+		Offset: offset,
 	})
 	if err != nil {
 		s.internalError(w, err)
@@ -44,10 +45,11 @@ func (s *Server) handleListings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := pageParams(r)
 	items, total, err := s.Store.ListListings(r.Context(), store.ListingFilter{
-		Channel: domain.Channel(q.Get("channel")),
-		State:   q.Get("state"),
-		Limit:   limit,
-		Offset:  offset,
+		Channel:  domain.Channel(q.Get("channel")),
+		State:    q.Get("state"),
+		HashName: q.Get("hash_name"), AssetID: q.Get("asset_id"), Search: q.Get("search"), Mismatch: q.Get("mismatch") == "true",
+		Limit:  limit,
+		Offset: offset,
 	})
 	if err != nil {
 		s.internalError(w, err)
@@ -57,13 +59,18 @@ func (s *Server) handleListings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
+	since, until, ok := timeWindow(w, r)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
 	limit, offset := pageParams(r)
 	items, total, err := s.Store.ListOrders(r.Context(), store.OrderFilter{
 		Channel: domain.Channel(q.Get("channel")),
 		Status:  q.Get("status"),
-		Limit:   limit,
-		Offset:  offset,
+		Search:  q.Get("search"), HashName: q.Get("hash_name"), AssetID: q.Get("asset_id"), OrderType: q.Get("order_type"), View: q.Get("view"), Sort: q.Get("sort"), Since: since, Until: until,
+		Limit:  limit,
+		Offset: offset,
 	})
 	if err != nil {
 		s.internalError(w, err)

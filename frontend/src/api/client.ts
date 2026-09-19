@@ -31,7 +31,12 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 15000
 
-async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   const tok = getToken()
@@ -50,18 +55,27 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
       signal: ctrl.signal,
     })
     if (res.status === 401 && path !== '/auth/login') {
-      const errBody = await res.clone().json().catch(() => ({} as { code?: string }))
+      const errBody = await res
+        .clone()
+        .json()
+        .catch(() => ({}) as { code?: string })
       // Only a panel-auth rejection ends the session; channel-level 401s
       // (upstream platforms) must surface as in-page errors instead.
       if ((errBody as { code?: string }).code === 'unauthorized') {
         clearToken()
-        window.location.hash = '#/login'
+        const current = window.location.hash.slice(1)
+        if (!current.startsWith('/login'))
+          window.location.hash = `#/login?returnTo=${encodeURIComponent(current || '/')}`
       }
     }
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       const e = data as { code?: string; message?: string }
-      throw new ApiError(res.status, e.code ?? 'error', e.message ?? res.statusText)
+      throw new ApiError(
+        res.status,
+        e.code ?? 'error',
+        e.message ?? res.statusText,
+      )
     }
     return data as T
   } catch (e) {
@@ -77,21 +91,39 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
 }
 
 export const api = {
-  get: <T>(p: string, signal?: AbortSignal) => request<T>('GET', p, undefined, signal),
+  get: <T>(p: string, signal?: AbortSignal) =>
+    request<T>('GET', p, undefined, signal),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),
   del: <T>(p: string) => request<T>('DELETE', p),
 }
 
-export interface Paged<T> { items: T[]; total: number }
+export interface Paged<T> {
+  items: T[]
+  total: number
+}
 
 export interface InventoryRow {
-  id: number; channel: string; asset_id: string; hash_name: string
-  market_hash_name: string; template_id: number | null
-  mark_price: number; tradable: boolean; status: string; cost_basis: number
+  id: number
+  channel: string
+  asset_id: string
+  hash_name: string
+  market_hash_name: string
+  template_id: number | null
+  mark_price: number
+  tradable: boolean
+  status: string
+  cost_basis: number
+  category?: string
+  cost_source?: string
+  cost_modified_at?: string | null
+  last_synced_at?: string | null
 }
 
 export interface LastDecision {
+  id?: number
+  dry_run?: boolean
+  success?: boolean
   action: string
   at: string | null
   new_rent?: number
@@ -99,18 +131,30 @@ export interface LastDecision {
 }
 
 export interface ListingRow {
-  id: number; channel: string; asset_id: string; hash_name: string; goods_ref: string
-  desired_state: string; actual_state: string
-  rent_price: number; long_rent_price: number; max_days: number; deposit: number
-  listed_at: string | null; last_reprice_at: string | null
+  id: number
+  channel: string
+  asset_id: string
+  hash_name: string
+  goods_ref: string
+  desired_state: string
+  actual_state: string
+  rent_price: number
+  long_rent_price: number
+  max_days: number
+  deposit: number
+  listed_at: string | null
+  last_reprice_at: string | null
   factor: number
   last_decision?: LastDecision | null
 }
 
 export interface TemplateRow {
-  hash_name: string; display_name: string; category: string
+  hash_name: string
+  display_name: string
+  category: string
   uu_template_id: number | null
-  uu_mark_price: number | null; eco_ref_price: number | null
+  uu_mark_price: number | null
+  eco_ref_price: number | null
   value_anchor: number | null
   blacklisted: boolean
   anchor_updated_at?: string | null
@@ -120,28 +164,110 @@ export interface TemplateRow {
 export type ChannelHealth = Record<string, string>
 
 export interface OrderRow {
-  id: number; channel: string; order_ref: string; hash_name: string
-  order_type: string; status: string; rent_days: number
-  rent_price: number; order_amount: number; deposits: number
-  started_at: string | null; due_at: string | null; finished_at: string | null
+  id: number
+  channel: string
+  order_ref: string
+  hash_name: string
+  order_type: string
+  status: string
+  rent_days: number
+  rent_price: number
+  order_amount: number
+  deposits: number
+  started_at: string | null
+  due_at: string | null
+  finished_at: string | null
+  asset_id?: string
 }
 
 export interface DashboardData {
-  assets: { total: number; inventory: number; deposits: Record<string, number>; wallets: Record<string, number> }
-  income: { total: number; today: number; by_channel: { channel: string; income: number; orders: number }[] }
+  assets: {
+    total: number
+    inventory: number
+    deposits: Record<string, number>
+    wallets: Record<string, number>
+  }
+  income: {
+    total: number
+    today: number
+    by_channel: { channel: string; income: number; orders: number }[]
+  }
   leased_out: number
   annualized_roi: number
-  categories: { category: string; cost: number; income: number; yield: number }[]
-  series_30d: { date: string; income: number }[]
+  categories: {
+    category: string
+    cost: number
+    income: number
+    yield: number
+  }[]
+  series_30d: { date: string; income: number; orders?: number }[]
+  roi_available?: boolean
+  observation_started_at?: string | null
+  observation_days?: number
+  costed_items?: number
+  inventory_items?: number
+  cost_total?: number
+  sold_cost?: number
 }
 
 export interface StrategyRow {
-  id: number; name: string; scope: string; channel_route: string
-  params: Record<string, unknown>; real_execution_enabled: boolean
-  priority: number; updated_at: string
+  id: number
+  name: string
+  scope: string
+  channel_route: string
+  params: Record<string, unknown>
+  real_execution_enabled: boolean
+  priority: number
+  updated_at: string
 }
 
 export interface AuditRow {
-  ts: string; actor: string; action: string; channel?: string; target?: string
+  ts: string
+  actor: string
+  action: string
+  channel?: string
+  target?: string
   detail?: Record<string, unknown>
+}
+
+export interface ExecutionStatus {
+  dry_run: boolean
+  reasons: string[]
+  environment_dry_run: boolean
+  global_real_enabled: boolean
+  effective_real_enabled: boolean
+  hash_name: string
+  channel_route: string
+  checked_at: string
+}
+
+export interface JobStatus {
+  name: string
+  next_run: string
+  last_run?: string | null
+  last_ok: boolean
+  last_error?: string
+  running: boolean
+}
+
+export interface PriceActionRow {
+  id: number
+  ts: string
+  channel: string
+  hash_name: string
+  asset_id: string
+  listing_id: number | null
+  action: string
+  dry_run: boolean
+  success: boolean
+  error?: string
+  old_rent: number | null
+  new_rent: number | null
+  old_long: number | null
+  new_long: number | null
+  old_days: number | null
+  new_days: number | null
+  old_deposit: number | null
+  new_deposit: number | null
+  decision: Record<string, unknown>
 }

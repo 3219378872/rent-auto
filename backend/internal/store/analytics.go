@@ -319,12 +319,13 @@ func (s *Store) FirstCostDate(ctx context.Context) (*time.Time, error) {
 type DailyPoint struct {
 	Date   string  `json:"date"`
 	Income float64 `json:"income"`
+	Orders int     `json:"orders"`
 }
 
 // IncomeSeries returns the last N days of income (UTC day boundary).
 func (s *Store) IncomeSeries(ctx context.Context, days int) ([]DailyPoint, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT stat_date::text, SUM(income) FROM daily_stats
+		`SELECT stat_date::text, SUM(income),SUM(order_count) FROM daily_stats
 		 WHERE stat_date > (now() AT TIME ZONE 'utc')::date - $1::int
 		 GROUP BY stat_date ORDER BY stat_date`, days)
 	if err != nil {
@@ -335,7 +336,7 @@ func (s *Store) IncomeSeries(ctx context.Context, days int) ([]DailyPoint, error
 	for rows.Next() {
 		var p DailyPoint
 		var f *float64
-		if err := rows.Scan(&p.Date, &f); err != nil {
+		if err := rows.Scan(&p.Date, &f, &p.Orders); err != nil {
 			return nil, err
 		}
 		if f != nil {

@@ -19,16 +19,17 @@ import (
 const timeRFC3339Milli = "2006-01-02T15:04:05.000Z07:00"
 
 type Server struct {
-	Store     *store.Store
-	JWT       *auth.JWT
-	TTL       time.Duration
-	AdminUser string
-	Version   string
-	Log       *slog.Logger
-	Jobs      JobController   // nil-safe: endpoints degrade when nil
-	Channels  ChannelsService // nil-safe
-	Wallets   WalletProvider  // nil-safe
-	Steam     SteamService    // nil-safe
+	Store             *store.Store
+	JWT               *auth.JWT
+	TTL               time.Duration
+	AdminUser         string
+	Version           string
+	Log               *slog.Logger
+	Jobs              JobController   // nil-safe: endpoints degrade when nil
+	Channels          ChannelsService // nil-safe
+	Wallets           WalletProvider  // nil-safe
+	Steam             SteamService    // nil-safe
+	EnvironmentDryRun *bool           // nil means execution mode is not configured/unknown
 	// PasswordHash resolves the current admin bcrypt hash (env- or DB-backed).
 	PasswordHash   func(ctx context.Context) (string, error)
 	PasswordChange func(ctx context.Context, expectedHash, newHash string) error
@@ -92,9 +93,11 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	protected.HandleFunc("PUT /api/v1/auth/password", s.handlePasswordChange)
 	protected.HandleFunc("GET /api/v1/inventory", s.handleInventory)
+	protected.HandleFunc("GET /api/v1/inventory/categories", s.handleInventoryCategories)
 	protected.HandleFunc("GET /api/v1/listings", s.handleListings)
 	protected.HandleFunc("GET /api/v1/orders", s.handleOrders)
 	protected.HandleFunc("GET /api/v1/templates", s.handleTemplates)
+	protected.HandleFunc("GET /api/v1/templates/catalog", s.handleTemplateCatalog)
 	protected.HandleFunc("PUT /api/v1/templates/blacklist", s.handleTemplateBlacklist)
 	protected.HandleFunc("PUT /api/v1/inventory/{channel}/{asset_id}/cost", s.handleSetCost)
 	protected.HandleFunc("GET /api/v1/strategies", s.handleStrategiesList)
@@ -102,6 +105,8 @@ func (s *Server) Routes() http.Handler {
 	protected.HandleFunc("POST /api/v1/strategies/template", s.handleTemplateStrategyUpsert)
 	protected.HandleFunc("DELETE /api/v1/strategies/template/{id}", s.handleTemplateStrategyDelete)
 	protected.HandleFunc("GET /api/v1/audit", s.handleAuditList)
+	protected.HandleFunc("GET /api/v1/price-actions", s.handlePriceActions)
+	protected.HandleFunc("GET /api/v1/execution/status", s.handleExecutionStatus)
 	protected.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 	protected.HandleFunc("GET /api/v1/jobs", s.handleJobsList)
 	protected.HandleFunc("POST /api/v1/jobs/{name}/run", s.handleJobTrigger)

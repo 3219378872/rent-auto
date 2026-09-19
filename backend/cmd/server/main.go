@@ -318,6 +318,7 @@ func run() error {
 	}
 
 	srv := api.NewServerWithTTL(st, auth.NewJWT(cfg.JWTSecret), cfg.AdminUser, version, cfg.JWTTTL, log)
+	srv.EnvironmentDryRun = &cfg.DryRunDefault
 	srv.SetTrustProxies(cfg.TrustProxies)
 	if cfg.AdminPassHash != "" {
 		srv.PasswordHash = func(context.Context) (string, error) { return hash, nil }

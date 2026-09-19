@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { renderPage as render } from '../test-render'
 import Orders from './Orders'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
@@ -13,10 +14,19 @@ function orderPage(items: unknown[], total = items.length) {
 }
 
 const oneOrder = {
-  id: 1, channel: 'uu', order_ref: 'UU-1', hash_name: 'AK-47 | Redline (FT)',
-  order_type: 'short', status: 'leasing', rent_days: 7, rent_price: 1.2,
-  order_amount: 8.4, deposits: 120, started_at: '2026-08-01T00:00:00Z',
-  due_at: '2026-08-08T00:00:00Z', finished_at: null,
+  id: 1,
+  channel: 'uu',
+  order_ref: 'UU-1',
+  hash_name: 'AK-47 | Redline (FT)',
+  order_type: 'short',
+  status: 'leasing',
+  rent_days: 7,
+  rent_price: 1.2,
+  order_amount: 8.4,
+  deposits: 120,
+  started_at: '2026-08-01T00:00:00Z',
+  due_at: '2026-08-08T00:00:00Z',
+  finished_at: null,
 }
 
 beforeEach(() => {
@@ -33,21 +43,25 @@ describe('Orders page', () => {
     getMock.mockResolvedValue(orderPage([oneOrder], 1))
     render(<Orders />)
     expect(await screen.findByText('UU-1')).toBeDefined()
-    expect(screen.getByText('共 1 单')).toBeDefined()
-    expect(screen.getByText('leasing')).toBeDefined()
+    expect(screen.getByText(/共 1 单/)).toBeDefined()
+    expect(screen.getByText('租赁中', { selector: 'span.badge' })).toBeDefined()
   })
 
   it('disables paging on a single page and advances on multi-page results', async () => {
     getMock.mockResolvedValue(orderPage([oneOrder], 120))
     render(<Orders />)
     await screen.findByText('UU-1')
-    const next = screen.getByRole('button', { name: '下一页' }) as HTMLButtonElement
-    const prev = screen.getByRole('button', { name: '上一页' }) as HTMLButtonElement
+    const next = screen.getByRole('button', {
+      name: '下一页',
+    }) as HTMLButtonElement
+    const prev = screen.getByRole('button', {
+      name: '上一页',
+    }) as HTMLButtonElement
     expect(prev.disabled).toBe(true)
     expect(next.disabled).toBe(false)
     fireEvent.click(next)
     expect(await screen.findByText('第 2 页')).toBeDefined()
-    expect(prev.disabled).toBe(false)
+    await waitFor(() => expect(prev.disabled).toBe(false))
     // page state moved: the hook re-requests with page=2
     const last = getMock.mock.calls.at(-1)?.[0] as string
     expect(last).toContain('page=2')
@@ -57,20 +71,33 @@ describe('Orders page', () => {
     getMock.mockResolvedValue(orderPage([oneOrder], 50))
     render(<Orders />)
     await screen.findByText('UU-1')
-    expect((screen.getByRole('button', { name: '下一页' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: '下一页' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
   })
 
-  it('exports every matching order while a changed filter is still loading', async () => {
+  it('blocks export during loading, then exports all pages using the current filters', async () => {
     let filteredCalls = 0
-    const rows = (start: number, count: number) => Array.from({ length: count }, (_, i) => ({
-      ...oneOrder, channel: 'eco', order_ref: `ECO-${start + i}`,
-    }))
+    let resolveFiltered!: (v: unknown) => void
+    const rows = (start: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        ...oneOrder,
+        channel: 'eco',
+        order_ref: `ECO-${start + i}`,
+      }))
     getMock.mockImplementation((path: string) => {
-      if (!path.includes('channel=eco')) return Promise.resolve(orderPage([oneOrder], 1))
+      if (!path.includes('channel=eco'))
+        return Promise.resolve(orderPage([oneOrder], 1))
       const page = Number(new URLSearchParams(path.split('?')[1]).get('page'))
       filteredCalls++
-      if (filteredCalls === 1) return new Promise(() => undefined)
-      return Promise.resolve(orderPage(rows((page - 1) * 50, page < 3 ? 50 : 20), 120))
+      if (filteredCalls === 1)
+        return new Promise((resolve) => {
+          resolveFiltered = resolve
+        })
+      return Promise.resolve(
+        orderPage(rows((page - 1) * 50, page < 3 ? 50 : 20), 120),
+      )
     })
     const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:orders')
     class ExportURL extends URL {
@@ -78,15 +105,28 @@ describe('Orders page', () => {
       static revokeObjectURL = vi.fn()
     }
     vi.stubGlobal('URL', ExportURL)
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
+      () => undefined,
+    )
 
     render(<Orders />)
-    await screen.findByText('共 1 单')
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'eco' } })
+    await screen.findByText(/共 1 单/)
+    fireEvent.change(screen.getAllByRole('combobox')[0], {
+      target: { value: 'eco' },
+    })
     await waitFor(() => expect(filteredCalls).toBe(1))
+    expect(screen.getByRole('button', { name: '导出 CSV' })).toBeDisabled()
+    resolveFiltered(orderPage(rows(0, 50), 120))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '导出 CSV' }),
+      ).not.toBeDisabled(),
+    )
     fireEvent.click(screen.getByRole('button', { name: '导出 CSV' }))
     await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
-    expect(getMock.mock.calls.some(([path]) => path.includes('page=3'))).toBe(true)
+    expect(getMock.mock.calls.some(([path]) => path.includes('page=3'))).toBe(
+      true,
+    )
 
     const csv = await new Promise<string>((resolve) => {
       const reader = new FileReader()

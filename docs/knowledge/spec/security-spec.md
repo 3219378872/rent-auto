@@ -54,6 +54,13 @@
   order.accepted/factor_reset/strategy.update/channel.credential.update/job.trigger/login.*
 - price_actions 表本身即定价域的细粒度审计（含决策 jsonb）
 - handler 500 响应一律脱敏为通用文案，内部错误细节只进服务端日志
+- 面板完整详情读接口对历史 audit_log.detail / price_actions.decision 递归脱敏：
+  凭证、票据、原始载荷和内部错误字段隐藏，文本中的 JWT/Bearer/PEM 私钥隐藏；
+  持久化原始审计不被改写。格式校验后的 key_fp/secret_fp（12 位 SHA-256 前缀）
+  与 token_tail（8 位）允许核对。任务列表与定价动作 error 仅返回通用错误提示。
+- 渠道保存成功响应可附 fingerprint：UU 为既有尾 8 位，ECO/Steam 为既有审计
+  SHA-256 前 12 位。Steam 账号和 Guard 密钥本体仍不可见。前端成功后清空敏感输入，
+  不在 localStorage/sessionStorage 存储凭证草稿；指纹不是新的登录凭据。
 
 ## 供应链
 
