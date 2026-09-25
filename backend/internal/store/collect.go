@@ -14,23 +14,29 @@ import (
 
 // ---- listings ----
 
+// UpsertListingFromShelf applies a trusted current row. Network snapshots must
+// use ApplyShelfSnapshot with the boundary captured before fetching.
 func (s *Store) UpsertListingFromShelf(ctx context.Context, l domain.ShelfListing) error {
+	return upsertListingFromShelf(ctx, s.Pool, l, nil)
+}
+
+func upsertListingFromShelf(ctx context.Context, db execQuerier, l domain.ShelfListing, observedAt *time.Time) error {
 	l.RentPrice = round2Money(l.RentPrice)
 	l.LongRentPrice = round2Money(l.LongRentPrice)
 	l.Deposit = round2Money(l.Deposit)
 	// ensure template exists (shelf rows carry display names)
-	if err := s.UpsertTemplate(ctx, Template{
+	if err := upsertTemplate(ctx, db, Template{
 		HashName: l.HashName, DisplayName: l.DisplayName,
 		UUTemplateID: nilIfZero(l.TemplateID),
 	}); err != nil {
 		return err
 	}
-	_, err := s.Pool.Exec(ctx,
+	_, err := db.Exec(ctx,
 		`INSERT INTO listings(channel, asset_id, hash_name, goods_ref, desired_state, actual_state,
 		                      rent_price, long_rent_price, max_days, deposit, listed_at, actual_synced_at)
 		 VALUES($1,$2,$3,$4,'active',
 		        CASE WHEN $9 THEN 'leased' ELSE 'active' END,
-		        $5,$6,$7,$8,$10,now())
+		        $5,$6,$7,$8,$10,COALESCE($11::timestamptz,clock_timestamp()))
 		 ON CONFLICT(channel, goods_ref) DO UPDATE SET
 		   asset_id=EXCLUDED.asset_id, hash_name=EXCLUDED.hash_name,
 		   actual_state=CASE WHEN $9 THEN 'leased' ELSE 'active' END,
@@ -39,9 +45,13 @@ func (s *Store) UpsertListingFromShelf(ctx context.Context, l domain.ShelfListin
 		   listed_at=COALESCE(listings.listed_at, EXCLUDED.listed_at),
 		   recon_mismatch_since=CASE WHEN listings.actual_state=EXCLUDED.actual_state THEN listings.recon_mismatch_since END,
 		   recon_mismatch_reason=CASE WHEN listings.actual_state=EXCLUDED.actual_state THEN listings.recon_mismatch_reason END,
-		   actual_synced_at=now()`,
+		   retired_at=NULL,
+		   actual_synced_at=COALESCE($11::timestamptz,clock_timestamp())
+		 WHERE $11::timestamptz IS NULL OR
+		   GREATEST(listings.actual_synced_at, listings.last_reprice_at) <= $11 OR
+		   (listings.actual_synced_at IS NULL AND listings.last_reprice_at IS NULL)`,
 		l.Channel, l.AssetID, l.HashName, l.GoodsRef,
-		l.RentPrice, l.LongRentPrice, l.MaxDays, l.Deposit, l.Leased, nullTime(l.ListedAt))
+		l.RentPrice, l.LongRentPrice, l.MaxDays, l.Deposit, l.Leased, nullTime(l.ListedAt), observedAt)
 	if err != nil {
 		return fmt.Errorf("upsert listing %s/%s: %w", l.Channel, l.GoodsRef, err)
 	}
@@ -59,11 +69,19 @@ func nilIfZero(v int64) *int64 {
 // Leased rows are never touched: the shelf feed excludes rented items, so
 // flipping them would fabricate disappearances and trigger duplicate publishes.
 func (s *Store) MarkMissingListings(ctx context.Context, channel domain.Channel, seenRefs map[string]bool) (int64, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE listings SET actual_state='none',recon_mismatch_since=NULL,recon_mismatch_reason=NULL
+	return markMissingListings(ctx, s.Pool, channel, seenRefs, nil)
+}
+
+func markMissingListings(ctx context.Context, db execQuerier, channel domain.Channel, seenRefs map[string]bool, observedAt *time.Time) (int64, error) {
+	tag, err := db.Exec(ctx,
+		`UPDATE listings SET actual_state='none',recon_mismatch_since=NULL,recon_mismatch_reason=NULL,
+		   retired_at=COALESCE($3::timestamptz,clock_timestamp()),
+		   actual_synced_at=COALESCE($3::timestamptz,clock_timestamp())
 		 WHERE channel=$1 AND actual_state IN ('active')
-		   AND NOT (goods_ref = ANY($2))`,
-		channel, refsToArray(seenRefs))
+		   AND NOT (goods_ref = ANY($2))
+		   AND ($3::timestamptz IS NULL OR GREATEST(actual_synced_at,last_reprice_at) <= $3
+		     OR (actual_synced_at IS NULL AND last_reprice_at IS NULL))`,
+		channel, refsToArray(seenRefs), observedAt)
 	if err != nil {
 		return 0, fmt.Errorf("mark missing listings: %w", err)
 	}

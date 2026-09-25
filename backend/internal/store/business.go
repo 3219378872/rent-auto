@@ -26,11 +26,15 @@ type Template struct {
 }
 
 func (s *Store) UpsertTemplate(ctx context.Context, t Template) error {
+	return upsertTemplate(ctx, s.Pool, t)
+}
+
+func upsertTemplate(ctx context.Context, db execQuerier, t Template) error {
 	// Channel mark prices are money legs: normalize before persistence
 	// (AGENTS.md 硬规则). Nil-ness is preserved — absent stays absent.
 	round2MoneyPtr(t.UUMarkPrice)
 	round2MoneyPtr(t.EcoRefPrice)
-	_, err := s.Pool.Exec(ctx,
+	_, err := db.Exec(ctx,
 		`INSERT INTO templates(hash_name, display_name, category, uu_template_id, uu_mark_price, eco_ref_price)
 		 VALUES($1,$2,$3,$4,$5,$6)
 		 ON CONFLICT(hash_name) DO UPDATE SET
@@ -270,7 +274,13 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 	o.RentPrice = round2Money(o.RentPrice)
 	o.Amount = round2Money(o.Amount)
 	o.Deposits = round2Money(o.Deposits)
-	_, err := s.Pool.Exec(ctx,
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var id int64
+	err = tx.QueryRow(ctx,
 		`INSERT INTO lease_orders(channel, order_ref, asset_id, hash_name, order_type, status, rent_days, rent_price, order_amount, deposits, started_at, due_at, finished_at, income_recorded, raw, updated_at)
 		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
 		        CASE WHEN $16 THEN COALESCE($13::timestamptz,now()) END,$14,$15,now())
@@ -283,15 +293,24 @@ func (s *Store) UpsertLeaseOrder(ctx context.Context, o domain.LeaseOrder) error
 		   started_at=COALESCE(EXCLUDED.started_at, lease_orders.started_at),
 		   due_at=COALESCE(EXCLUDED.due_at, lease_orders.due_at),
 		   finished_at=CASE WHEN $16 THEN COALESCE($13::timestamptz,lease_orders.finished_at,now()) END,
-		   raw=COALESCE(EXCLUDED.raw, lease_orders.raw), updated_at=now()`,
+		   factor_listing_id=CASE WHEN NOT lease_orders.factor_applied AND (
+		     COALESCE(NULLIF(EXCLUDED.asset_id,''),lease_orders.asset_id) IS DISTINCT FROM lease_orders.asset_id OR
+		     COALESCE(NULLIF(EXCLUDED.hash_name,''),lease_orders.hash_name) IS DISTINCT FROM lease_orders.hash_name OR
+		     COALESCE(EXCLUDED.started_at,lease_orders.started_at) IS DISTINCT FROM lease_orders.started_at)
+		     THEN NULL ELSE lease_orders.factor_listing_id END,
+		   raw=COALESCE(EXCLUDED.raw, lease_orders.raw), updated_at=now()
+		 RETURNING id`,
 		o.Channel, o.OrderRef, o.AssetID, o.HashName, o.OrderType, o.Status,
 		o.RentDays, o.RentPrice, o.Amount, o.Deposits,
 		nullTime(o.StartedAt), nullTime(o.DueAt), nullTimePtr(o.FinishedAt),
-		false, o.Raw, isTerminal(o.Status))
+		false, o.Raw, isTerminal(o.Status)).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("upsert order %s/%s: %w", o.Channel, o.OrderRef, err)
 	}
-	return nil
+	if _, err := tx.Exec(ctx, bindFactorOrdersSQL, id, nil); err != nil {
+		return fmt.Errorf("bind order %s/%s: %w", o.Channel, o.OrderRef, err)
+	}
+	return tx.Commit(ctx)
 }
 
 // SetTemplateBlacklist toggles the blacklist flag; blacklisted templates drop

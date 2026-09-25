@@ -9,10 +9,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3219378872/rent-auto/backend/internal/domain"
 )
+
+type execQuerier interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
 
 // Store wraps the pool with typed queries. Handlers depend on this interface only.
 type Store struct {

@@ -211,8 +211,18 @@ func TestIncomeProjectionCorrectionsConcurrencyAndReversal(t *testing.T) {
 func TestFinancialMigrationRepairsLegacyProjection(t *testing.T) {
 	st := openReviewStore(t)
 	ctx := context.Background()
-	if _, err := MigrateDown(ctx, st.Pool, 1); err != nil {
-		t.Fatal(err)
+	// Roll back through the migration under test, not merely the newest one.
+	for {
+		rolled, err := MigrateDown(ctx, st.Pool, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rolled) == 0 {
+			t.Fatal("financial migration not found")
+		}
+		if rolled[0] == "0010_financial_projection" {
+			break
+		}
 	}
 	t.Cleanup(func() {
 		if _, err := MigrateUp(ctx, st.Pool); err != nil {

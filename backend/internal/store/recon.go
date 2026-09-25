@@ -128,11 +128,11 @@ func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, 
 		`INSERT INTO listings(channel, asset_id, hash_name, goods_ref, desired_state, actual_state,
 		                      rent_price, long_rent_price, max_days, deposit, listed_at, actual_synced_at,
 		                      sublet_applied)
-		 VALUES($1,$2,$3,$4,'active','active',$5,NULLIF($6,0),$7,$8,now(),now(),$1='eco')
+		 VALUES($1,$2,$3,$4,'active','active',$5,NULLIF($6,0),$7,$8,clock_timestamp(),clock_timestamp(),$1='eco')
 		 ON CONFLICT(channel, goods_ref) DO UPDATE SET
 		   desired_state='active', actual_state='active',
 		   rent_price=EXCLUDED.rent_price, long_rent_price=EXCLUDED.long_rent_price,
-		   max_days=EXCLUDED.max_days, deposit=EXCLUDED.deposit, actual_synced_at=now(),
+		   max_days=EXCLUDED.max_days, deposit=EXCLUDED.deposit, actual_synced_at=clock_timestamp(),retired_at=NULL,
 		   recon_mismatch_since=NULL,recon_mismatch_reason=NULL,
 		   sublet_applied=$1='eco'`,
 		channel, channelID, hashName, goodsRef, rent, long, days, deposit)
@@ -142,7 +142,7 @@ func (s *Store) RecordPublishedListing(ctx context.Context, channel, channelID, 
 // MarkListingDelisted flips a row to delisted after successful removal.
 func (s *Store) MarkListingDelisted(ctx context.Context, channel, goodsRef string) error {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE listings SET desired_state='delisted', actual_state='none', actual_synced_at=now(),
+		`UPDATE listings SET desired_state='delisted', actual_state='none', actual_synced_at=clock_timestamp(),retired_at=clock_timestamp(),
 		 recon_mismatch_since=NULL,recon_mismatch_reason=NULL
 		 WHERE channel=$1 AND goods_ref=$2`, channel, goodsRef)
 	if err != nil {

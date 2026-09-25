@@ -61,7 +61,12 @@ async function request<T>(
         .catch(() => ({}) as { code?: string })
       // Only a panel-auth rejection ends the session; channel-level 401s
       // (upstream platforms) must surface as in-page errors instead.
-      if ((errBody as { code?: string }).code === 'unauthorized') {
+      // Recheck after reading the body: a newer login may have completed while
+      // either the request or its response body was still pending.
+      if (
+        (errBody as { code?: string }).code === 'unauthorized' &&
+        getToken() === tok
+      ) {
         clearToken()
         const current = window.location.hash.slice(1)
         if (!current.startsWith('/login'))

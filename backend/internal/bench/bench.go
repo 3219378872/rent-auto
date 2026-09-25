@@ -53,39 +53,30 @@ func SyncShelf(ctx context.Context, ad platform.Adapter, st *store.Store, log *s
 	if len(opts) > 0 {
 		o = opts[0]
 	}
+	at, err := st.ShelfObservationTime(ctx)
+	if err != nil {
+		return 0, err
+	}
 	shelf, err := ad.LeaseShelf(ctx)
 	if err != nil {
 		return 0, err
 	}
-	seen := make(map[string]bool, len(shelf))
-	for _, l := range shelf {
-		if l.HashName == "" {
-			l.HashName = l.DisplayName
-		}
-		if err := st.UpsertListingFromShelf(ctx, l); err != nil {
-			return len(seen), err
-		}
-		seen[l.GoodsRef] = true
-	}
-	if len(seen) == 0 {
-		if active, cerr := st.CountActiveListings(ctx, ad.Channel()); cerr == nil && active > 0 {
-			log.Warn("empty shelf ignored by breaker",
-				"channel", string(ad.Channel()), "active_listings", active)
-			if o.Audit != nil {
-				o.Audit("空货架熔断：平台返回零在架但本地仍有活跃 listing，本周期跳过消失标记",
-					map[string]any{"channel": string(ad.Channel()), "active_listings": active})
-			}
-			return 0, nil
-		}
-	}
-	missing, err := st.MarkMissingListings(ctx, ad.Channel(), seen)
+	missing, emptyActive, err := st.ApplyShelfSnapshot(ctx, ad.Channel(), shelf, at)
 	if err != nil {
-		return len(seen), err
+		return 0, err
+	}
+	if emptyActive > 0 {
+		log.Warn("empty shelf ignored by breaker", "channel", string(ad.Channel()), "active_listings", emptyActive)
+		if o.Audit != nil {
+			o.Audit("空货架熔断：平台返回零在架但本地仍有活跃 listing，本周期跳过消失标记",
+				map[string]any{"channel": string(ad.Channel()), "active_listings": emptyActive})
+		}
+		return 0, nil
 	}
 	if missing > 0 {
 		log.Info("shelf sync marked missing listings", "channel", string(ad.Channel()), "missing", missing)
 	}
-	return len(seen), nil
+	return len(shelf), nil
 }
 
 // SyncOrders pulls recent rental orders into lease_orders.

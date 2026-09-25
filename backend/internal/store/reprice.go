@@ -64,13 +64,12 @@ func (s *Store) UpdateListingDecision(ctx context.Context, listingID int64, d st
 	Rent, Long, Deposit float64
 	Days                int
 }) error {
-	// NOTE: actual_synced_at is deliberately NOT refreshed here. It anchors
-	// the orphan/surplus grace window in recon (AllActiveListings.SyncedAt);
-	// a reprice is not an actual-state sync, and refreshing it would stretch
-	// the grace period on every price move and delay legitimate delists.
+	// A reprice is not a shelf observation. Snapshot application checks both
+	// actual_synced_at and last_reprice_at; use database wall time for the latter
+	// so a response captured before this write cannot overwrite its terms.
 	_, err := s.Pool.Exec(ctx,
 		`UPDATE listings SET rent_price=$2, long_rent_price=$3, deposit=$4, max_days=$5,
-		        last_reprice_at=now() WHERE id=$1`,
+		        last_reprice_at=clock_timestamp() WHERE id=$1`,
 		listingID, round2Money(d.Rent), nullIf(round2Money(d.Long)), round2Money(d.Deposit), d.Days)
 	return err
 }

@@ -48,9 +48,17 @@ func (d *Deps) RunFactorEvents(ctx context.Context) error {
 // order would make every order see the same base value and only the last
 // fold would survive the write.
 func (d *Deps) foldOrderEvents(ctx context.Context) error {
-	orders, err := d.Store.UnhandledFactorOrders(ctx, time.Now().Add(-factorOrderWindow), factorOrderBatch)
+	since := time.Now().Add(-factorOrderWindow)
+	orders, err := d.Store.UnhandledFactorOrders(ctx, since, factorOrderBatch)
 	if err != nil {
 		return err
+	}
+	unresolved, err := d.Store.UnresolvedFactorOrders(ctx, since)
+	if err != nil {
+		return err
+	}
+	if unresolved > 0 {
+		d.Log.Warn("factor orders awaiting unique listing identity", "orders", unresolved)
 	}
 	// Order-time terms for event classification (one batched lookup, no N+1).
 	terms, err := d.orderTerms(ctx, orderIDsOf(orders))
@@ -64,7 +72,7 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 	paramsCache := map[string]*pricing.Params{}
 	foldIdx := map[int64]int{} // listingID → index into folds
 	var folds []store.FactorFold
-	var orderIDs []int64
+	var handledOrders []store.FactorOrder
 	for _, o := range orders {
 		p, ok := paramsCache[o.HashName]
 		if !ok {
@@ -103,9 +111,9 @@ func (d *Deps) foldOrderEvents(ctx context.Context) error {
 				"event", string(ev), "from", f.Factor, "to", next)
 			f.Factor = next
 		}
-		orderIDs = append(orderIDs, o.OrderID)
+		handledOrders = append(handledOrders, o)
 	}
-	return d.Store.ApplyFactorFolds(ctx, folds, orderIDs)
+	return d.Store.ApplyFactorFolds(ctx, folds, handledOrders)
 }
 
 // orderTerm carries the order-time classification inputs for one lease order.

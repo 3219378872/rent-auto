@@ -60,9 +60,15 @@ sublet_applied bool DEFAULT false -- ECO 转租策略已被平台接受（0008�
                                   -- 接受后置位（上架成功即置位；仅 ECO 语义）
 strategy_id bigint               -- 逻辑引用（无 FK 约束，见 0002 DDL）
 listed_at, last_reprice_at, actual_synced_at
+retired_at                      -- 已确认不在架的观测边界；恢复在架时清空（0011）
 recon_mismatch_since/reason     -- 首次持续对账偏差，不由正常货架心跳刷新
 UNIQUE(channel, goods_ref)
 ```
+
+### shelf_observations — 渠道货架观测水位（0011）
+
+`channel` 主键，`observed_at` 为最近成功应用快照的请求前数据库时间。
+更早或重复的快照整体忽略，防止倒序响应补回新版快照中已不存在的行。
 
 ### lease_orders — 出租订单流水
 ```
@@ -74,9 +80,13 @@ rent_days int; rent_price; order_amount; deposits numeric
 started_at, due_at, finished_at, updated_at; raw jsonb
 income_recorded bool            -- 终态且已计入收益
 factor_applied bool             -- 是否已折算进 listing 因子（0005，防重复折算）
+factor_listing_id FK→listings   -- 唯一反馈归属，可空；歧义/未发现时等待补全（0011）
+factor_observed_at timestamptz  -- 首次本地订单观测时间，重复同步不刷新（0011）
 ```
 
 finished_at 优先使用明确的实际完成事实；未获此字段时记首次终态观测时间，后续同步保持稳定。
+0011 对旧订单以既有 updated_at 初始化 factor_observed_at，不宣称恢复真实首次观测；
+不猜测历史退架时间，绑定只在候选唯一时进行，历史 factor_applied=true 不重放。
 due_at 是约定到期日，不再作为实际完成日替代。现有 UU/ECO 适配器尚无已校订的 finished_at 映射，
 历史既有数据不宣称已恢复真实完成事实。
 

@@ -58,6 +58,7 @@
 | 0009 | adr-0009-recon-observation-state.md | 完整库存观测与持续不一致计时 |
 | 0010 | adr-0010-financial-projection.md | 实物归一与收益冲销账本 |
 | 0011 | adr-0011-instance-lock-loss-shutdown.md | 原持锁连接验证与失锁取消 |
+| 0013 | [adr-0013-shelf-observation-and-factor-binding.md](adr-0013-shelf-observation-and-factor-binding.md) | 货架观测边界、原子快照与唯一订单反馈归属 |
 | 0012 | [adr-0012-panel-observability.md](adr-0012-panel-observability.md) | 面板执行许可、历史定价读模型及原生表单交互 |
 
 (*) 编号异常说明：adr-0001 初稿将三条决策并入一个文件，导致与后续独立文件撞号。
@@ -69,10 +70,13 @@
 1. **改价链**：market_snapshot → bench.V → pricing.Decision(+factor) → guardrails → price_actions(dry_run?) → adapter.Reprice → listings.actual 更新
 2. **对账链**：strategies.desired × adapters.actual → diff → actions[] → scheduler 执行 → 复核
 3. **收益链**：lease_orders 当前终态/修正 → 锁定订单并重读 → order_income_ledger 旧投影冲销/新投影应用 → daily_stats → dashboard API
-4. **因子链**（spec §3 已接线）：orders 终态(done/bought_out) + stale 扫描 → listings.factor 折算 → 次轮 reprice 生效；f_min 无转化回归 1.00 并审计告警
+4. **因子链**（spec §3 已接线）：orders 终态(done/bought_out) → 唯一 factor_listing_id → 校验订单版本并折算 listings.factor → 次轮 reprice 生效；未绑定事件保留并告警，stale 扫描与 f_min 回归保留。
 5. **发货链**：UU orderTodo / ECO 待发货单 → 发报价 → Steam 会话接受(零成本全自动) → 审计
 
 ## 可靠性设计
+
+- 货架请求前取得数据库观测边界，原子应用完整响应；行级时间保护后续上下架/改价写回，
+  渠道水位丢弃倒序响应。单独事务不能替代观测边界，详见 ADR-0013。
 
 - 单实例运行：保留原 Postgres advisory-lock 连接，任务入口检查且每秒监控；
   失锁取消根 context、停止调度和手动触发并退出。已经交付给上游的请求不具有跨系统 fencing 保证。

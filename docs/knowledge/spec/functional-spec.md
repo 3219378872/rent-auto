@@ -54,6 +54,7 @@
 | zero_cd | 每日 23:30 | UU 可转租列表→开启0CD |
 
 ### AC-T1 dry-run
+
 - 新策略首次执行必须 dry_run=true：完整走决策链但只写 `price_actions(dry_run=true)` 不调平台
 - 面板策略页可切换 enable_real_execution
 - （2026-08-24 起）reconcile 与 reprice 同受 `DRY_RUN_DEFAULT || !real_execution_enabled` 双层门禁；门禁查询失败强制 dry-run
@@ -68,6 +69,12 @@
 - 同一商品两次改价间隔 ≥ cooldown_minutes(默认30)
 - ECO：解得三元组后派生押金 > deposit_cap_ratio×V 时拒绝该动作并告警
 - UU：押金 < deposit_floor_ratio×V 时抬升至下限
+
+### AC-T3 货架观测一致性
+
+货架同步一致性（CQ-01）：请求发出前取得数据库观测边界；整个快照原子应用。
+在观测边界之后完成的上架、下架、改价或更新观测，不得被旧快照的 upsert 或 missing
+标记覆盖。空货架熔断与 leased 保护仍适用；后续新快照可正常收敛。
 
 ## 4. 渠道路由规格
 

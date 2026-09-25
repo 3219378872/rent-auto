@@ -57,10 +57,13 @@ desired×actual 组合表驱动：(active,none)=上架 / (none,active)=下架 /
 
 发布前 runbook 含：dry-run 全任务跑一轮 → price_actions 抽查决策合理性 → 开真实执行灰度 10 商品。
 
-## 当前已知回归缺口（2026-09-25）
+## 跨任务一致性回归（2026-09-25）
 
-[代码质量审查](../evidence/2026-09-25-code-quality-review.md) 在完整 gate 通过后，
-以四个定向用例复现三类未修复问题：旧货架快照与 publish/reprice 写回交错、
-终态订单向替代挂单错误归因、旧请求 401 清除新会话。
-复现用例及失败日志保存于证据层，未加入默认测试套件；修复时应将必要行为断言转入
-正式回归。现有 race/覆盖率门控不能替代这些受控交错和生命周期测试。
+[代码质量审查](../evidence/2026-09-25-code-quality-review.md) 的四个失败用例已转为正式
+回归并扩展：`scheduler/quality_regression_integration_test.go` 验证快照与上下架/改价
+写回交错、旧订单不污染替代挂单；`store/shelf_snapshot_integration_test.go` 验证
+倒序响应、事务回滚、正常新观测、leased 与空货架熔断；`store/factor_binding_integration_test.go`
+验证时间归属、歧义不阻塞批次、延迟货架补全、订单并发校订、存量迁移不重放。
+`frontend/src/api/session_race.test.ts` 覆盖同页/跨标签页重登录、匿名旧请求和延迟 401 响应体。
+迁移测试应按目标版本回退，不能假定目标总是最新迁移。
+原审查证据保留失败基线；修复验收见 [修复证据](../evidence/2026-09-25-code-quality-remediation.md)。
