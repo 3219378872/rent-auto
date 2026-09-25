@@ -1,0 +1,28 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { ApiError, api, getToken, setToken } from './client'
+
+// Copy into frontend/src/api. Intentionally fails on reviewed HEAD 1158513.
+afterEach(() => {
+  localStorage.clear()
+  vi.unstubAllGlobals()
+})
+
+it('a rejected old request must preserve a newer login', async () => {
+  localStorage.clear()
+  window.location.hash = '#/dashboard'
+  setToken('old-token')
+  let finish!: (response: Response) => void
+  const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve }))
+  vi.stubGlobal('fetch', fetchMock)
+  const pending = expect(api.get('/dashboard')).rejects.toBeInstanceOf(ApiError)
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard', expect.objectContaining({
+    headers: { Authorization: 'Bearer old-token' },
+  }))
+  setToken('new-token')
+  finish(new Response(JSON.stringify({ code: 'unauthorized' }), {
+    status: 401, headers: { 'Content-Type': 'application/json' },
+  }))
+  await pending
+  expect(getToken()).toBe('new-token')
+  expect(window.location.hash).toBe('#/dashboard')
+})
