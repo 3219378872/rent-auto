@@ -1,0 +1,17 @@
+=== RUN   TestQualityShelfSnapshotMustNotEraseLaterPublish
+time=2026-09-25T11:54:00.363Z level=INFO msg="shelf sync marked missing listings" channel=uu missing=1
+    quality_probe_test.go:50: listing published after snapshot: actual_state=none; want active
+--- FAIL: TestQualityShelfSnapshotMustNotEraseLaterPublish (0.09s)
+=== RUN   TestQualityShelfSnapshotMustNotOverwriteLaterReprice
+    quality_probe_test.go:78: reprice completed after snapshot: rent=2.00; want 2.30
+--- FAIL: TestQualityShelfSnapshotMustNotOverwriteLaterReprice (0.07s)
+=== RUN   TestQualityOldOrderMustNotFoldIntoReplacementListing
+    quality_probe_test.go:102: one terminal order produced 2 listing matches
+time=2026-09-25T11:54:00.520Z level=INFO msg="factor event planned" listing=7 event=rent_success from=1 to=1.03
+time=2026-09-25T11:54:00.521Z level=INFO msg="factor event planned" listing=6 event=rent_success from=1 to=1.03
+    quality_probe_test.go:107: old factor=1.03, replacement factor=1.03
+    quality_probe_test.go:109: replacement listing inherited a pre-publish order event: factor=1.03; want 1.00
+--- FAIL: TestQualityOldOrderMustNotFoldIntoReplacementListing (0.09s)
+FAIL
+FAIL	github.com/3219378872/rent-auto/backend/internal/scheduler	0.256s
+FAIL

@@ -1,0 +1,92 @@
+cd backend && golangci-lint run ./...
+0 issues.
+cd backend && go vet ./...
+cd backend && go build ./...
+cd backend && if [ -n "$TEST_DATABASE_URL" ] || (echo > /dev/tcp/localhost/35432) 2>/dev/null; then \
+	echo ">> unit + integration tests"; \
+	TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://rentauto:rentauto@localhost:35432/rentauto_test?sslmode=disable} \
+		go test -tags=integration -p 1 ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
+else \
+	echo ">> unit tests only (no database detected)"; \
+	go test ./... -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/...; \
+fi
+>> unit + integration tests
+?   	github.com/3219378872/rent-auto/backend/cmd/migrate	[no test files]
+ok  	github.com/3219378872/rent-auto/backend/cmd/server	4.514s	coverage: 2.7% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/analytics	1.538s	coverage: 5.7% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/api	61.027s	coverage: 22.4% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/auth	2.947s	coverage: 1.0% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/bench	1.235s	coverage: 5.4% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/channels	1.499s	coverage: 13.0% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/config	1.048s	coverage: 1.2% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/domain	1.046s	coverage: 0.1% of statements in ./internal/...
+	github.com/3219378872/rent-auto/backend/internal/logging		coverage: 0.0% of statements
+ok  	github.com/3219378872/rent-auto/backend/internal/platform	1.032s	coverage: 0.0% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/platform/eco	5.812s	coverage: 7.6% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/platform/steam	1.501s	coverage: 8.3% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/platform/uu	1.542s	coverage: 10.5% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/pricing	1.034s	coverage: 2.9% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/ratelimit	1.052s	coverage: 0.3% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/recon	1.268s	coverage: 9.2% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/scheduler	2.112s	coverage: 15.6% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/secrets	1.031s	coverage: 0.4% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/store	2.485s	coverage: 7.7% of statements in ./internal/...
+ok  	github.com/3219378872/rent-auto/backend/internal/testutil	1.031s	coverage: 0.2% of statements in ./internal/...
+?   	github.com/3219378872/rent-auto/backend/migrations	[no test files]
+cd backend && go tool cover -func=coverage.out | tail -1
+total:											(statements)			77.4%
+ok   internal/pricing 93%
+ok   internal/platform 100%
+ok   internal/platform/uu 81%
+ok   internal/platform/eco 83%
+ok   internal/platform/steam 83%
+ok   internal/recon 91%
+ok   internal/analytics 82%
+ok   internal/auth 93%
+ok   internal/secrets 79%
+ok   internal/config 87%
+=== RUN   TestMigrationsUpDown
+--- PASS: TestMigrationsUpDown (0.16s)
+PASS
+ok  	github.com/3219378872/rent-auto/backend/internal/store	0.159s
+make[1]: Entering directory '/home/dev/projects/rent-auto-wt/quality-review-20260925'
+cd frontend && pnpm exec tsc --noEmit
+cd frontend && pnpm exec eslint . --max-warnings=0
+cd frontend && pnpm exec vitest run
+
+ RUN  v3.2.7 /home/dev/projects/rent-auto-wt/quality-review-20260925/frontend
+
+ ✓ src/lib/ui.test.ts (3 tests) 6ms
+ ✓ src/api/client.test.ts (5 tests) 19ms
+ ✓ src/pages/Login.test.tsx (1 test) 193ms
+ ✓ src/pages/Dashboard.test.tsx (5 tests) 231ms
+ ✓ src/pages/Audit.test.tsx (3 tests) 243ms
+ ✓ src/pages/Inventory.test.tsx (3 tests) 518ms
+   ✓ Inventory page > labels and filters inventory missing from a complete snapshot without marking it sold  301ms
+ ✓ src/pages/Orders.test.tsx (4 tests) 890ms
+   ✓ Orders page > blocks export during loading, then exports all pages using the current filters  401ms
+ ✓ src/App.test.tsx (8 tests) 1020ms
+ ✓ src/pages/Channels.test.tsx (4 tests) 1579ms
+   ✓ Channels page UU 短信登录 > 图形校验后重发必须复用首次响应的 session_id  350ms
+   ✓ Channels page UU 短信登录 > 图形校验通过后遵守 secs 冷却才自动重发  1062ms
+ ✓ src/pages/Strategies.test.tsx (15 tests) 3152ms
+   ✓ global strategy drafts > normalizes legacy flat fields and renders native route controls  476ms
+   ✓ global strategy drafts > saves nested values and reads back the saved form  311ms
+
+ Test Files  10 passed (10)
+      Tests  51 passed (51)
+   Start at  11:52:49
+   Duration  5.47s (transform 1.28s, setup 3.65s, collect 3.12s, tests 7.85s, environment 12.19s, prepare 1.28s)
+
+cd frontend && pnpm exec vite build
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 60 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.41 kB │ gzip:   0.30 kB
+dist/assets/index-C5pmwOJk.css   10.99 kB │ gzip:   3.15 kB
+dist/assets/index-Cqk81OaX.js   318.35 kB │ gzip: 102.51 kB
+✓ built in 864ms
+make[1]: Leaving directory '/home/dev/projects/rent-auto-wt/quality-review-20260925'
+=== GATE PASSED ===
